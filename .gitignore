@@ -1,0 +1,56 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+# Built application files
+*.apk
+*.aab
+
+# Files for the ART/Dalvik VM running on an emulator or device
+*.dex
+*.hprof
+
+# Gradle files
+.gradle/
+build/
+
+# IDE files
+.idea/
+.idea/workspace.xml
+.idea/libraries/
+.idea/modules.xml
+.idea/vcs.xml
+.idea/gradle.xml
+.idea/jarRepositories.xml
+local.properties
+
+# Android Studio-specific files
+.DS_Store
+*.iml
+*.iws
+*.ipr
+.settings/
+.project
+.classpath
+
+# Keystore files
+*.jks
+*.keystore
+
+# Local C++ libraries
+/app/src/main/jniLibs/
+/app/src/main/c++/obj/
+
+# Other
+/captures/
