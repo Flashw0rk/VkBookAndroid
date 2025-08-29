@@ -6,23 +6,14 @@
     android:orientation="vertical">
 
     <!-- Поисковая строка -->
-    <com.google.android.material.textfield.TextInputLayout
-        android:id="@+id/searchLayout"
+    <androidx.appcompat.widget.SearchView
+        android:id="@+id/search_view"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        app:startIconDrawable="@drawable/ic_search"
-        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/searchEditText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Поиск по документации..."
-            android:inputType="text"
-            android:maxLines="1" />
-
-    </com.google.android.material.textfield.TextInputLayout>
+        android:background="@drawable/search_background"
+        app:iconifiedByDefault="false"
+        app:queryHint="Поиск по документации..." />
 
     <!-- Вкладки -->
     <com.google.android.material.tabs.TabLayout
