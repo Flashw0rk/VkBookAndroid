@@ -29,16 +29,6 @@
                 android:layout_gravity="end"
                 android:orientation="horizontal">
 
-                <!-- Кнопка для выбора файла, аналогичная кнопке в макете -->
-                <Button
-                    android:id="@+id/select_file_button"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Выбрать файл"
-                    android:backgroundTint="#0d47a1"
-                    android:textColor="@android:color/white"
-                    android:layout_marginEnd="16dp" />
-
                 <Button
                     android:id="@+id/toggle_resize_mode_button"
                     android:layout_width="wrap_content"

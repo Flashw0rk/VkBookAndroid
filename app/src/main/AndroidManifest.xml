@@ -24,7 +24,8 @@
         <activity
             android:name=".PdfViewerActivity"
             android:exported="false"
-            android:theme="@style/Theme.VkBookAndroid" />
+            android:theme="@style/Theme.VkBookAndroid"
+            android:screenOrientation="unspecified" />
     </application>
 
 </manifest>
