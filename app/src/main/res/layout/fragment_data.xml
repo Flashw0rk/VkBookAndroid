@@ -60,17 +60,11 @@
             android:layout_margin="8dp"
             android:background="@drawable/search_background"
             app:iconifiedByDefault="false"
-            app:queryHint="Поиск" />
+            app:queryHint="Поиск"
+            app:searchHintIcon="@drawable/ic_search_24"
+            app:searchIcon="@drawable/ic_search_24" />
 
-        <!-- Вкладки для навигации -->
-        <com.google.android.material.tabs.TabLayout
-            android:id="@+id/tab_layout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="?attr/colorPrimary"
-            app:tabIndicatorColor="@android:color/white"
-            app:tabSelectedTextColor="@android:color/white"
-            app:tabTextColor="#c5cae9" />
+        
 
     </com.google.android.material.appbar.AppBarLayout>
 

@@ -5,15 +5,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- Поисковая строка -->
-    <androidx.appcompat.widget.SearchView
-        android:id="@+id/search_view"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:background="@drawable/search_background"
-        app:iconifiedByDefault="false"
-        app:queryHint="Поиск по документации..." />
+    <!-- Удалено дублирующее поле поиска. Поиск реализован во фрагменте. -->
 
     <!-- Вкладки -->
     <com.google.android.material.tabs.TabLayout

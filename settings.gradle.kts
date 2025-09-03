@@ -1,24 +1,28 @@
 // settings.gradle.kts — корень проекта
 
 pluginManagement {
-    repositories {
-        // Репозитории для самих Gradle-плагинов (AGP, Kotlin и т.д.)
-        gradlePluginPortal()
-        google()
-        mavenCentral()
-    }
+	repositories {
+		// Репозитории для самих Gradle-плагинов (AGP, Kotlin и т.д.)
+		gradlePluginPortal()
+		google()
+		mavenCentral()
+	}
+}
+
+plugins {
+	id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
 }
 
 dependencyResolutionManagement {
-    // Жёстко запрещаем задавать репозитории в модулях — всё централизовано здесь
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        // Репозитории для библиотек проекта
-        google()
-        mavenCentral()
-        // Для зависимостей из GitHub (например, AndroidPdfViewer и пр.)
-        maven("https://jitpack.io")
-    }
+	// Жёстко запрещаем задавать репозитории в модулях — всё централизовано здесь
+	repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+	repositories {
+		// Репозитории для библиотек проекта
+		google()
+		mavenCentral()
+		// Для зависимостей из GitHub (например, AndroidPdfViewer и пр.)
+		maven("https://jitpack.io")
+	}
 }
 
 // (Опционально, но удобно) типобезопасные ссылки на проекты: projects.app, projects.core и т.п.
