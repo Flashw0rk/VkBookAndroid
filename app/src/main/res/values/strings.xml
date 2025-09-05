@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">VkBookAndroid</string>
+    <string name="remote_base_url"></string>
 </resources>

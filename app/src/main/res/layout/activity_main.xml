@@ -5,6 +5,12 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
+    <!-- Узкая верхняя полоса интерфейса ~2 мм -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="7dp"
+        android:background="#673AB7" />
+
     <!-- Удалено дублирующее поле поиска. Поиск реализован во фрагменте. -->
 
     <!-- Вкладки -->
