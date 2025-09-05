@@ -13,11 +13,16 @@
 
     <!-- Удалено дублирующее поле поиска. Поиск реализован во фрагменте. -->
 
+    
+
     <!-- Вкладки -->
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/tabLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:paddingTop="8dp"
+        android:minHeight="56dp"
+        android:soundEffectsEnabled="false"
         app:tabMode="fixed"
         app:tabGravity="fill">
 

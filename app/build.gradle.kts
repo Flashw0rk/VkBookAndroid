@@ -33,6 +33,28 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
+    // Исключаем временные lock-файлы Excel (~$*.xlsx) из assets, чтобы не ломать mergeDebugAssets
+    // Подменяем источник ассетов на отфильтрованную копию, чтобы исключить временные Excel lock-файлы
+    sourceSets {
+        getByName("main") {
+            assets.setSrcDirs(listOf("build/filteredAssets/assets"))
+        }
+    }
+}
+
+// Копируем ассеты с исключением временных файлов Excel (~$*.xlsx) в build/filteredAssets
+val filterAssets by tasks.register<Copy>("filterAssets") {
+    from("src/main/assets") {
+        exclude("**/~$*")
+        exclude("**/~$*.xlsx")
+    }
+    into(File(buildDir, "filteredAssets/assets"))
+}
+
+// Обеспечиваем, что фильтрация выполнится перед любым merge*Assets
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(filterAssets)
 }
 
 dependencies {
