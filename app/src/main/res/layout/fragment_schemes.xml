@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:soundEffectsEnabled="false">
+
+    <Button
+        android:id="@+id/button_pick_pdf"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Открыть схему"
+        android:soundEffectsEnabled="false" />
+
+    <TextView
+        android:id="@+id/text_selected_path"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text=""
+        android:textSize="12sp"
+        android:soundEffectsEnabled="false" />
+
+    <FrameLayout
+        android:id="@+id/pdf_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:soundEffectsEnabled="false" />
+
+</LinearLayout>
