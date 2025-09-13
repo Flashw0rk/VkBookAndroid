@@ -31,6 +31,7 @@ class SignalsAdapter(
     private var armatureColIndex: Int = -1
     private var pdfSchemeColIndex: Int = -1
     private val hiddenHeaderNames: Set<String> = setOf("PDF_Схема_и_ID_арматуры")
+    private var clickableArmatures: Set<String> = emptySet() // Арматуры с координатами в JSON
 
     private fun isHidden(headerName: String): Boolean {
         return hidePdfSchemeColumn && hiddenHeaderNames.any { it.equals(headerName, ignoreCase = true) }
@@ -262,8 +263,9 @@ class SignalsAdapter(
                     textSize = 12f
                     isSoundEffectsEnabled = false
                 }
-                // Клик и подсветка только для "Арматура" если в строке указан PDF в колонке PDF_Схема_и_ID_арматуры
+                // Клик и подсветка для "Арматура" если есть PDF в колонке PDF_Схема_и_ID_арматуры
                 if (!isResizingMode && adapter.armatureColIndex >= 0 && i == adapter.armatureColIndex) {
+                    val armatureId = textView.text?.toString()?.trim()
                     val hasPdf = try {
                         val idxPdf = adapter.pdfSchemeColIndex
                         if (idxPdf >= 0 && idxPdf < values.size) {
@@ -271,10 +273,14 @@ class SignalsAdapter(
                             raw != null && raw.isNotBlank() && raw.contains(".pdf", ignoreCase = true)
                         } else false
                     } catch (_: Throwable) { false }
+                    
                     if (hasPdf) {
                         try { textView.setTextColor(android.graphics.Color.parseColor("#1565C0")) } catch (_: Throwable) {}
                         textView.isClickable = true
                         textView.setOnClickListener { adapter.onArmatureCellClick?.invoke(rowData) }
+                        Log.d("SignalsAdapter", "Armature $armatureId is clickable (has PDF: ${values[adapter.pdfSchemeColIndex]})")
+                    } else {
+                        Log.d("SignalsAdapter", "Armature $armatureId is not clickable (no PDF in column)")
                     }
                 }
                 textView.measure(View.MeasureSpec.makeMeasureSpec(colWidth, View.MeasureSpec.EXACTLY),
@@ -517,6 +523,14 @@ class SignalsAdapter(
     }
 
     fun getOriginalData(): List<RowDataDynamic> = _originalData
+    
+    /**
+     * Установить список кликабельных арматур (с координатами в JSON)
+     */
+    fun setClickableArmatures(armatures: Set<String>) {
+        clickableArmatures = armatures
+        notifyDataSetChanged()
+    }
 
     private fun calculateTotalRowWidth(headers: List<String>, columnWidths: Map<String, Int>, context: Context, updatedColumnIndex: Int = -1, updatedColumnWidth: Int = -1): Int {
         var totalWidth = 0

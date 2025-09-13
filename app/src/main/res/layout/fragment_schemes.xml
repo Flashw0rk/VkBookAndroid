@@ -14,10 +14,23 @@
         android:soundEffectsEnabled="false" />
 
     <TextView
-        android:id="@+id/text_selected_path"
+        android:id="@+id/text_scheme_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
+        android:text="Выберите схему для просмотра"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:background="#E3F2FD"
+        android:padding="8dp"
+        android:soundEffectsEnabled="false" />
+
+    <TextView
+        android:id="@+id/text_selected_path"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
         android:text=""
         android:textSize="12sp"
         android:soundEffectsEnabled="false" />

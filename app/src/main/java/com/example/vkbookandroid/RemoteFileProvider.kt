@@ -14,23 +14,110 @@ import java.net.URL
 class RemoteFileProvider(
     private val context: Context,
     private val baseUrl: String
-) {
+) : IFileProvider {
+    
+    private val fileHashManager = FileHashManager(context)
     private val cacheDir: File by lazy {
-        File(context.cacheDir, "remote_cache").apply { mkdirs() }
+        File(context.filesDir, "remote_cache").apply { mkdirs() }
     }
 
-    fun open(relativePath: String, preferRemote: Boolean = true): InputStream {
-        val normalized = relativePath.trimStart('/')
-        if (!preferRemote) return context.assets.open(normalized)
+    override fun open(relativePath: String): InputStream {
+        // Безопасная нормализация пути
+        val normalized = sanitizePath(relativePath.trimStart('/'))
+        
+        if (normalized.isEmpty()) {
+            throw SecurityException("Invalid file path: $relativePath")
+        }
 
         return try {
+            // 1. Сначала проверяем filesDir/data/ (приоритет после синхронизации)
+            val dataFile = getDataFile(normalized)
+            Log.d("RemoteFileProvider", "=== REMOTE FILE PROVIDER DIAGNOSTICS ===")
+            Log.d("RemoteFileProvider", "Requested file: '$normalized'")
+            Log.d("RemoteFileProvider", "Data file path: ${dataFile.absolutePath}")
+            Log.d("RemoteFileProvider", "Data file exists: ${dataFile.exists()}")
+            Log.d("RemoteFileProvider", "Data file size: ${dataFile.length()} bytes")
+            
+            if (dataFile.exists() && dataFile.length() > 0) {
+                Log.d("RemoteFileProvider", "Using data file: ${dataFile.absolutePath} (${dataFile.length()} bytes)")
+                return dataFile.inputStream()
+            }
+            
+            // 2. Затем проверяем remote_cache
             val cached = File(cacheDir, normalized.replace('/', '_'))
-            downloadToFile(baseUrl.ensureTrailingSlash() + normalized, cached)
-            cached.inputStream()
+            
+            // Проверяем, что файл находится в разрешенной директории
+            if (!cached.canonicalPath.startsWith(cacheDir.canonicalPath)) {
+                throw SecurityException("Path traversal attempt detected: $relativePath")
+            }
+            
+            // Проверяем, есть ли уже загруженный файл в кэше
+            if (cached.exists() && cached.length() > 0) {
+                // Проверяем размер файла
+                if (!FileSizeValidator.validateFileSize(cached.name, cached.length())) {
+                    Log.w("RemoteFileProvider", "Cached file too large, removing: ${cached.name}")
+                    cached.delete()
+                } else {
+                    // Проверяем целостность файла по хешу
+                    if (fileHashManager.verifyFileIntegrity(cached)) {
+                        Log.d("RemoteFileProvider", "Using verified cached file: ${cached.name} (${cached.length()} bytes)")
+                        return cached.inputStream()
+                    } else {
+                        Log.w("RemoteFileProvider", "Cached file integrity check failed, removing: ${cached.name}")
+                        cached.delete()
+                    }
+                }
+            }
+            
+            // 3. Проверяем общий размер кэша
+            FileSizeValidator.cleanupCacheIfNeeded(cacheDir)
+            
+            // 4. В последнюю очередь пробуем assets
+            Log.d("RemoteFileProvider", "File not found in data/ or cache, falling back to assets: $normalized")
+            context.assets.open(normalized)
         } catch (e: Exception) {
             Log.w("RemoteFileProvider", "Fallback to assets for $relativePath", e)
             context.assets.open(normalized)
         }
+    }
+    
+    /**
+     * Получить путь к файлу в filesDir/data/ (аналогично FileProvider)
+     */
+    private fun getDataFile(relativePath: String): File {
+        return when {
+            relativePath.startsWith("Databases/") -> {
+                // Excel файлы в filesDir/data/
+                val filename = relativePath.substringAfter("Databases/")
+                File(context.filesDir, "data/$filename")
+            }
+            relativePath.startsWith("Schemes/") -> {
+                // PDF файлы в filesDir/data/
+                val filename = relativePath.substringAfter("Schemes/")
+                File(context.filesDir, "data/$filename")
+            }
+            relativePath == "armature_coords.json" -> {
+                // JSON файл в filesDir/data/
+                File(context.filesDir, "data/armature_coords.json")
+            }
+            else -> {
+                // Общий случай - ищем в data/
+                File(context.filesDir, "data/$relativePath")
+            }
+        }
+    }
+    
+    /**
+     * Безопасная санитизация пути к файлу
+     */
+    private fun sanitizePath(path: String): String {
+        // Удаляем опасные символы и последовательности
+        return path
+            .replace("..", "") // Удаляем path traversal
+            .replace("//", "/") // Удаляем двойные слеши
+            .replace("\\", "/") // Заменяем обратные слеши
+            .filter { it.isLetterOrDigit() || it in listOf('/', '-', '_', '.') } // Только безопасные символы
+            .trim()
     }
 
     private fun downloadToFile(urlString: String, target: File) {

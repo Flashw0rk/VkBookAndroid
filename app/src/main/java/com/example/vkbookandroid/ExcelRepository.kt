@@ -5,30 +5,30 @@ import java.io.InputStream
 
 class ExcelRepository(
     private val context: Context,
-    private val remote: RemoteFileProvider?
+    private val fileProvider: IFileProvider
 ) {
     private val cache by lazy { ExcelCacheManager(context) }
 
-    private val PATH_BSCHU = "Databases/Oborudovanie_BSCHU.xlsx"
+    private val PATH_BSCHU = "Oborudovanie_BSCHU.xlsx"
     private val SHEET_BSCHU = "Сигналы БЩУ"
-    private val PATH_ARMATURES = "Databases/Armatures.xlsx"
+    private val PATH_ARMATURES = "Armatures.xlsx"
     private val SHEET_ARMATURES = "Арматура"
 
     fun openBschu(): InputStream {
-        return remote?.open(PATH_BSCHU, preferRemote = true) ?: context.assets.open(PATH_BSCHU)
+        return fileProvider.open(PATH_BSCHU)
     }
 
     fun openArmatures(): InputStream {
-        return remote?.open(PATH_ARMATURES, preferRemote = true) ?: context.assets.open(PATH_ARMATURES)
+        return fileProvider.open(PATH_ARMATURES)
     }
 
     fun openPagingSessionBschu(): ExcelPagingSession {
-        val input = remote?.open(PATH_BSCHU, preferRemote = true) ?: context.assets.open(PATH_BSCHU)
+        val input = fileProvider.open(PATH_BSCHU)
         return ExcelPagingSession.fromInputStream(input, SHEET_BSCHU)
     }
 
     fun openPagingSessionArmatures(): ExcelPagingSession {
-        val input = remote?.open(PATH_ARMATURES, preferRemote = true) ?: context.assets.open(PATH_ARMATURES)
+        val input = fileProvider.open(PATH_ARMATURES)
         return ExcelPagingSession.fromInputStream(input, SHEET_ARMATURES)
     }
 
@@ -44,7 +44,7 @@ class ExcelRepository(
             relativePath = PATH_BSCHU,
             sheetName = SHEET_BSCHU,
             pageSize = pageSize,
-            openInputStream = { remote?.open(PATH_BSCHU, preferRemote = true) ?: context.assets.open(PATH_BSCHU) },
+            openInputStream = { fileProvider.open(PATH_BSCHU) },
             onUpdated = onUpdated
         )
     }
@@ -54,7 +54,7 @@ class ExcelRepository(
             relativePath = PATH_ARMATURES,
             sheetName = SHEET_ARMATURES,
             pageSize = pageSize,
-            openInputStream = { remote?.open(PATH_ARMATURES, preferRemote = true) ?: context.assets.open(PATH_ARMATURES) },
+            openInputStream = { fileProvider.open(PATH_ARMATURES) },
             onUpdated = onUpdated
         )
     }
@@ -64,7 +64,7 @@ class ExcelRepository(
             relativePath = PATH_BSCHU,
             sheetName = SHEET_BSCHU,
             pageSize = pageSize,
-            openInputStream = { remote?.open(PATH_BSCHU, preferRemote = true) ?: context.assets.open(PATH_BSCHU) },
+            openInputStream = { fileProvider.open(PATH_BSCHU) },
             onUpdated = onUpdated
         )
     }
@@ -74,7 +74,7 @@ class ExcelRepository(
             relativePath = PATH_ARMATURES,
             sheetName = SHEET_ARMATURES,
             pageSize = pageSize,
-            openInputStream = { remote?.open(PATH_ARMATURES, preferRemote = true) ?: context.assets.open(PATH_ARMATURES) },
+            openInputStream = { fileProvider.open(PATH_ARMATURES) },
             onUpdated = onUpdated
         )
     }

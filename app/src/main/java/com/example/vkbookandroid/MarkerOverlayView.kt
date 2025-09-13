@@ -36,8 +36,10 @@ class MarkerOverlayView @JvmOverloads constructor(
 
     // Доп. данные для комментария
     private var labelText: String? = null
+    private var commentText: String? = null
     private var commentColor: Int = Color.RED
-    private var layoutCache: StaticLayout? = null
+    private var labelLayoutCache: StaticLayout? = null
+    private var commentLayoutCache: StaticLayout? = null
     private var maxCommentWidthPx: Int = mmToPx(40f) // ограничение ширины ~40 мм
 
     // Параметры «умного» позиционирования
@@ -59,7 +61,8 @@ class MarkerOverlayView @JvmOverloads constructor(
         pdfToBmpScale: Float,
         currentImageMatrix: Matrix,
         label: String? = null,
-        color: Int? = null
+        color: Int? = null,
+        comment: String? = null
     ) {
         // Пересчитываем в координаты битмапа
         pdfToBitmapScale = pdfToBmpScale
@@ -73,8 +76,10 @@ class MarkerOverlayView @JvmOverloads constructor(
         hasMarker = true
         useViewportMapping = false
         labelText = label
+        commentText = comment
         color?.let { applyColor(it) }
-        layoutCache = null
+        labelLayoutCache = null
+        commentLayoutCache = null
         visibility = VISIBLE
         invalidate()
     }
@@ -91,7 +96,8 @@ class MarkerOverlayView @JvmOverloads constructor(
         scaleY: Float,
         currentImageMatrix: Matrix,
         label: String? = null,
-        color: Int? = null
+        color: Int? = null,
+        comment: String? = null
     ) {
         // Преобразуем координаты из страниц в пиксели текущего тайла (битмапа)
         val leftBmp = (pageX - leftPage) * scaleX
@@ -107,8 +113,10 @@ class MarkerOverlayView @JvmOverloads constructor(
         vpScaleX = scaleX
         vpScaleY = scaleY
         labelText = label
+        commentText = comment
         color?.let { applyColor(it) }
-        layoutCache = null
+        labelLayoutCache = null
+        commentLayoutCache = null
         visibility = VISIBLE
         invalidate()
     }
@@ -139,30 +147,117 @@ class MarkerOverlayView @JvmOverloads constructor(
         val bottom = pts[3]
         canvas.drawRect(left, top, right, bottom, paint)
 
-        // Рисуем комментарий/лейбл, если задан
-        val text = labelText ?: return
-        textPaint.color = commentColor
-
-        // Готовим StaticLayout с ограничением по ширине
-        val availableWidth = maxCommentWidthPx.coerceAtMost(width)
-        val layout = layoutCache ?: buildStaticLayout(text, availableWidth).also { layoutCache = it }
-
-        // Фиксированное размещение: строго НАД областью, по центру
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val centerX = (left + right) * 0.5f
-        var tx = centerX - layout.width / 2f
-        var ty = top - gapPx - layout.height
-
-        // Без клампа: подпись остаётся жёстко привязанной к области
-
-        canvas.save()
-        canvas.translate(tx, ty)
-        layout.draw(canvas)
-        canvas.restore()
+        // Рисуем название арматуры над маркером
+        if (!labelText.isNullOrBlank()) {
+            textPaint.color = commentColor
+            textPaint.textSize = 16f * resources.displayMetrics.scaledDensity // Больший размер для названия
+            
+            val availableWidth = maxCommentWidthPx.coerceAtMost(width)
+            val labelLayout = labelLayoutCache ?: buildStaticLayout(labelText!!, availableWidth).also { labelLayoutCache = it }
+            
+            // Позиционируем название над маркером
+            val centerX = (left + right) * 0.5f
+            val labelX = centerX - labelLayout.width / 2f
+            val labelY = top - labelLayout.height - gapPx
+            
+            canvas.save()
+            canvas.translate(labelX, labelY)
+            labelLayout.draw(canvas)
+            canvas.restore()
+        }
+        
+        // Рисуем комментарий под маркером
+        if (!commentText.isNullOrBlank()) {
+            textPaint.color = commentColor
+            textPaint.textSize = 14f * resources.displayMetrics.scaledDensity // Обычный размер для комментария
+            
+            val availableWidth = maxCommentWidthPx.coerceAtMost(width)
+            val commentLayout = commentLayoutCache ?: buildStaticLayout(commentText!!, availableWidth).also { commentLayoutCache = it }
+            
+            // Позиционируем комментарий под маркером
+            val centerX = (left + right) * 0.5f
+            val commentX = centerX - commentLayout.width / 2f
+            val commentY = bottom + gapPx
+            
+            canvas.save()
+            canvas.translate(commentX, commentY)
+            commentLayout.draw(canvas)
+            canvas.restore()
+        }
     }
 
     private enum class Side { TOP, BOTTOM, LEFT, RIGHT }
+    
+    /**
+     * Смарт-позиционирование комментария с учетом близости к краям
+     * Порог близости: 1.5 см, зазор: 2 мм
+     */
+    private fun calculateSmartPosition(
+        centerX: Float, centerY: Float, 
+        layoutWidth: Int, layoutHeight: Int,
+        viewWidth: Float, viewHeight: Float
+    ): Pair<Float, Float> {
+        
+        // Базовое позиционирование снизу по центру
+        var tx = centerX - layoutWidth / 2f
+        var ty = centerY + gapPx
+        
+        // Проверяем близость к краям
+        val isNearLeft = centerX < edgeProximityPx
+        val isNearRight = centerX > viewWidth - edgeProximityPx
+        val isNearTop = centerY < edgeProximityPx
+        val isNearBottom = centerY > viewHeight - edgeProximityPx
+        
+        // Смарт-позиционирование
+        when {
+            isNearLeft && isNearTop -> {
+                // Левый верхний угол - размещаем справа снизу
+                tx = centerX + gapPx
+                ty = centerY + gapPx
+            }
+            isNearRight && isNearTop -> {
+                // Правый верхний угол - размещаем слева снизу
+                tx = centerX - layoutWidth - gapPx
+                ty = centerY + gapPx
+            }
+            isNearLeft && isNearBottom -> {
+                // Левый нижний угол - размещаем справа сверху
+                tx = centerX + gapPx
+                ty = centerY - layoutHeight - gapPx
+            }
+            isNearRight && isNearBottom -> {
+                // Правый нижний угол - размещаем слева сверху
+                tx = centerX - layoutWidth - gapPx
+                ty = centerY - layoutHeight - gapPx
+            }
+            isNearLeft -> {
+                // Близко к левому краю - размещаем справа
+                tx = centerX + gapPx
+                ty = centerY - layoutHeight / 2f
+            }
+            isNearRight -> {
+                // Близко к правому краю - размещаем слева
+                tx = centerX - layoutWidth - gapPx
+                ty = centerY - layoutHeight / 2f
+            }
+            isNearTop -> {
+                // Близко к верхнему краю - размещаем снизу
+                tx = centerX - layoutWidth / 2f
+                ty = centerY + gapPx
+            }
+            isNearBottom -> {
+                // Близко к нижнему краю - размещаем сверху
+                tx = centerX - layoutWidth / 2f
+                ty = centerY - layoutHeight - gapPx
+            }
+        }
+        
+        // Ограничиваем в пределах view
+        tx = tx.coerceIn(0f, viewWidth - layoutWidth)
+        ty = ty.coerceIn(0f, viewHeight - layoutHeight)
+        
+        return Pair(tx, ty)
+    }
 
     private fun buildStaticLayout(text: String, maxWidthPx: Int): StaticLayout {
         @Suppress("DEPRECATION")

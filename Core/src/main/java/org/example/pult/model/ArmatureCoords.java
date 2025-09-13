@@ -12,13 +12,14 @@ public class ArmatureCoords {
     public double height;   // Высота области арматуры в PDF-единицах
     public double zoom;     // Желаемый коэффициент масштабирования при переходе к этой арматуре
     public String label;    // Текст для отображения в качестве наложения/метки
+    public String comment;  // Комментарий к арматуре
     public String marker_type; // Тип маркера (для разных иконок/стилей, опционально)
 
     // Пустой конструктор необходим для Jackson (или других JSON-библиотек)
     public ArmatureCoords() {}
 
     // Конструктор со всеми полями (опционально, но полезно для инициализации)
-    public ArmatureCoords(int page, double x, double y, double width, double height, double zoom, String label, String marker_type) {
+    public ArmatureCoords(int page, double x, double y, double width, double height, double zoom, String label, String comment, String marker_type) {
         this.page = page;
         this.x = x;
         this.y = y;
@@ -26,6 +27,7 @@ public class ArmatureCoords {
         this.height = height;
         this.zoom = zoom;
         this.label = label;
+        this.comment = comment;
         this.marker_type = marker_type;
     }
 
@@ -53,6 +55,9 @@ public class ArmatureCoords {
     public String getLabel() { return label; }
     public void setLabel(String label) { this.label = label; }
 
+    public String getComment() { return comment; }
+    public void setComment(String comment) { this.comment = comment; }
+
     public String getMarker_type() { return marker_type; }
     public void setMarker_type(String marker_type) { this.marker_type = marker_type; }
 
@@ -66,6 +71,7 @@ public class ArmatureCoords {
                 ", height=" + height +
                 ", zoom=" + zoom +
                 ", label='" + label + '\'' +
+                ", comment='" + comment + '\'' +
                 ", marker_type='" + marker_type + '\'' +
                 '}';
     }

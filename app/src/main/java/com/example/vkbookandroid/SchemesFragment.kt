@@ -10,10 +10,12 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
+import java.io.File
 
-class SchemesFragment : Fragment() {
+class SchemesFragment : Fragment(), RefreshableFragment {
 
     private lateinit var buttonPickPdf: Button
+    private lateinit var textSchemeTitle: TextView
     private lateinit var textSelectedPath: TextView
     private lateinit var pdfContainer: FrameLayout
 
@@ -29,6 +31,7 @@ class SchemesFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         buttonPickPdf = view.findViewById(R.id.button_pick_pdf)
+        textSchemeTitle = view.findViewById(R.id.text_scheme_title)
         textSelectedPath = view.findViewById(R.id.text_selected_path)
         pdfContainer = view.findViewById(R.id.pdf_container)
 
@@ -38,32 +41,80 @@ class SchemesFragment : Fragment() {
     }
 
     private fun openAssetSchemePicker() {
-        val assets = requireContext().assets
-        val files = (assets.list("Schemes") ?: emptyArray())
-            .filter { it.endsWith(".pdf", ignoreCase = true) || it.endsWith(".txt", ignoreCase = true) }
-            .sorted()
+        // Ищем файлы в filesDir/data/
+        val dataDir = File(requireContext().filesDir, "data")
+        val files = if (dataDir.exists()) {
+            dataDir.listFiles()?.filter { 
+                it.name.endsWith(".pdf", ignoreCase = true) || it.name.endsWith(".txt", ignoreCase = true) 
+            }?.map { it.name }?.sorted() ?: emptyList()
+        } else {
+            emptyList()
+        }
 
         if (files.isEmpty()) {
-            textSelectedPath.text = "В папке assets/Schemes нет файлов"
+            textSelectedPath.text = "В папке filesDir/data нет файлов"
             return
         }
 
         AlertDialog.Builder(requireContext())
-            .setTitle("Выберите схему из assets/Schemes")
+            .setTitle("Выберите схему из filesDir/data")
             .setItems(files.toTypedArray()) { _, which ->
                 val fileName = files[which]
-                val assetPath = "assets/Schemes/$fileName"
-                textSelectedPath.text = assetPath
-                openAssetPath(assetPath)
+                val filePath = "filesDir/data/$fileName"
+                textSelectedPath.text = filePath
+                textSchemeTitle.text = fileName
+                openFileScheme(fileName)
             }
             .setNegativeButton("Отмена", null)
             .show()
     }
 
+    private fun openFileScheme(fileName: String) {
+        val intent = Intent(requireContext(), PdfViewerActivity::class.java).apply {
+            putExtra("pdf_path", "Schemes/$fileName")
+        }
+        startActivity(intent)
+    }
+    
     private fun openAssetPath(assetPath: String) {
         val intent = Intent(requireContext(), PdfViewerActivity::class.java).apply {
             putExtra("pdf_path", assetPath)
         }
         startActivity(intent)
+    }
+    
+    // Реализация интерфейса RefreshableFragment
+    override fun refreshData() {
+        // Для SchemesFragment просто обновляем список файлов
+        // В будущем можно добавить загрузку PDF с сервера
+        android.util.Log.d("SchemesFragment", "Refreshing schemes data after sync...")
+    }
+    
+    override fun isDataLoaded(): Boolean {
+        // Для SchemesFragment данные всегда "загружены", так как они читаются по требованию
+        return true
+    }
+    
+    override fun getWatchedFilePath(): String? {
+        return try {
+            val dataDir = requireContext().filesDir.resolve("data")
+            // Отслеживаем всю папку data для PDF и TXT файлов
+            if (dataDir.exists()) {
+                dataDir.absolutePath
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SchemesFragment", "Error getting watched file path", e)
+            null
+        }
+    }
+    
+    /**
+     * Обеспечить загрузку данных (совместимость с MainActivity)
+     */
+    fun ensureDataLoaded() {
+        // Для SchemesFragment данные загружаются по требованию при выборе файла
+        android.util.Log.d("SchemesFragment", "Ensuring schemes data is loaded...")
     }
 }

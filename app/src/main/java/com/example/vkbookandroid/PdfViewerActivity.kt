@@ -9,6 +9,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import android.graphics.Matrix
 import android.opengl.GLES10
+import android.util.Log
 import com.google.gson.Gson
 import android.os.SystemClock
 import com.google.gson.reflect.TypeToken
@@ -24,14 +25,20 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.vkbookandroid.model.ArmatureMarker
+import com.example.vkbookandroid.model.ArmatureCoordsData
+import com.example.vkbookandroid.repository.ArmatureRepository
+import com.example.vkbookandroid.network.NetworkModule
 
 class PdfViewerActivity : AppCompatActivity() {
     
     private lateinit var imageView: ImageView
     private var renderedBitmap: android.graphics.Bitmap? = null
     private var markers: Map<String, Map<String, ArmatureCoords>> = emptyMap()
+    private var newFormatMarkers: List<ArmatureMarker> = emptyList()
     private val gson = Gson()
     private var currentPdfName: String? = null
+    private lateinit var armatureRepository: ArmatureRepository
     private var pdfToBitmapScale: Float = 1f
     private var cachePdfFile: java.io.File? = null
     private var lastPageIndex: Int = 0
@@ -52,8 +59,13 @@ class PdfViewerActivity : AppCompatActivity() {
         // Отключаем звуковые эффекты кликов в активити
         findViewById<android.view.View>(android.R.id.content)?.isSoundEffectsEnabled = false
         
+        // Инициализируем репозиторий
+        armatureRepository = ArmatureRepository(this, NetworkModule.getArmatureApiService())
+        
         imageView = findViewById(R.id.pdfImageView)
         findViewById<android.widget.ImageButton>(R.id.closeButton)?.setOnClickListener { finish() }
+        
+        
         maxQualityButton = findViewById(R.id.buttonMaxQuality)
         maxQualityButton?.setOnClickListener { renderAtMaxQuality() }
         maxQualityButton?.visibility = android.view.View.GONE
@@ -110,16 +122,31 @@ class PdfViewerActivity : AppCompatActivity() {
     }
     
     private fun loadMarkers() {
-        try {
-            val inputStream: InputStream = assets.open("armature_coords.json")
-            val jsonString = inputStream.bufferedReader().use { it.readText() }
-            
-            val type = object : TypeToken<Map<String, Map<String, ArmatureCoords>>>() {}.type
-            markers = gson.fromJson(jsonString, type)
-        } catch (e: Exception) {
-            e.printStackTrace()
+        uiScope.launch {
+            try {
+                Log.d("PdfViewerActivity", "=== LOADING MARKERS ===")
+                // Загружаем только из filesDir (без автоматической синхронизации с сервером)
+                markers = armatureRepository.loadMarkersFromFilesDir()
+                Log.d("PdfViewerActivity", "Loaded markers from filesDir: ${markers.size} PDF files")
+                markers.forEach { (pdfName, pdfMarkers) ->
+                    Log.d("PdfViewerActivity", "  PDF: $pdfName, markers: ${pdfMarkers.size}")
+                    pdfMarkers.forEach { (markerId, coords) ->
+                        Log.d("PdfViewerActivity", "    Marker: $markerId at (${coords.x}, ${coords.y})")
+                    }
+                }
+                newFormatMarkers = armatureRepository.convertOldFormatToNew(markers)
+                Log.d("PdfViewerActivity", "Converted to new format: ${newFormatMarkers.size} markers")
+                
+                Log.d("PdfViewerActivity", "Markers loaded from local files only (no server sync)")
+            } catch (e: Exception) {
+                Log.e("PdfViewerActivity", "Error loading markers from filesDir", e)
+                // Если даже filesDir не работает - пустые маркеры
+                markers = emptyMap()
+                newFormatMarkers = emptyList()
+            }
         }
     }
+    
     
     private fun loadSchemeFromAssets(pdfPath: String, designation: String?) {
         uiScope.launch {
@@ -127,11 +154,14 @@ class PdfViewerActivity : AppCompatActivity() {
                 val fileName = pdfPath.substringAfterLast('/')
                 currentPdfName = fileName
                 val inputStream: InputStream = withContext(Dispatchers.IO) {
-                    assets.open(pdfPath.removePrefix("assets/"))
+                    // Используем FileProvider для доступа к файлам
+                    val fileProvider = com.example.vkbookandroid.FileProvider(this@PdfViewerActivity)
+                    fileProvider.open(pdfPath)
                 }
                 renderFirstPageToImage(inputStream, designation)
             } catch (e: Exception) {
                 e.printStackTrace()
+                Toast.makeText(this@PdfViewerActivity, "Ошибка загрузки схемы: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -178,9 +208,9 @@ class PdfViewerActivity : AppCompatActivity() {
                         pageW = page.width
                         pageH = page.height
                         val dm = resources.displayMetrics
-                        val sideCap = 12288
+                        val sideCap = 8192
                         val isSmallPage = pageW <= dm.widthPixels && pageH <= dm.heightPixels
-                        val screenMultiplier = if (isSmallPage) 2 else 6
+                        val screenMultiplier = if (isSmallPage) 2 else 3
                         val maxW = kotlin.math.min(dm.widthPixels * screenMultiplier, sideCap)
                         val maxH = kotlin.math.min(dm.heightPixels * screenMultiplier, sideCap)
                         var scale = kotlin.math.min(maxW / pageW.toFloat(), maxH / pageH.toFloat())
@@ -230,22 +260,51 @@ class PdfViewerActivity : AppCompatActivity() {
             val ivZoom = imageView as? ZoomableImageView
             if (designation != null && ivZoom != null) {
                 val pdfName = currentPdfName
-                val coords = if (pdfName != null) markers[pdfName]?.get(designation) else null
-                if (coords != null) {
-                    focusOn(coords)
+                Log.d("PdfViewerActivity", "Looking for marker: designation='$designation', pdfName='$pdfName'")
+                Log.d("PdfViewerActivity", "Available new format markers: ${newFormatMarkers.map { "id='${it.id}', pdf='${it.pdf}', label='${it.label}'" }}")
+                Log.d("PdfViewerActivity", "Available old format markers: ${markers.keys}")
+                
+                // Пытаемся найти маркер в новом формате
+                val newMarker = newFormatMarkers.find { it.id == designation && it.pdf == pdfName }
+                if (newMarker != null) {
+                    Log.d("PdfViewerActivity", "Found new format marker: $newMarker")
+                    // Используем новый формат с цветами и комментариями
+                    focusOnNewMarker(newMarker)
                     val overlay = findViewById<MarkerOverlayView>(R.id.markerOverlay)
                     overlay?.setMarkerInPdfUnits(
-                        coords.x.toFloat(),
-                        coords.y.toFloat(),
-                        coords.width.toFloat(),
-                        coords.height.toFloat(),
+                        newMarker.x.toFloat(),
+                        newMarker.y.toFloat(),
+                        newMarker.size.toFloat(),
+                        newMarker.size.toFloat(),
                         pdfToBitmapScale,
                         ivZoom.getImageMatrixCopy(),
-                        label = coords.label ?: designation,
-                        color = parseMarkerColor(coords)
+                        label = newMarker.label,
+                        color = newMarker.getColorInt(),
+                        comment = newMarker.comment
                     )
                 } else {
-                    findViewById<MarkerOverlayView>(R.id.markerOverlay)?.clearMarker()
+                    // Fallback: используем старый формат
+                    Log.d("PdfViewerActivity", "Trying old format: pdfName=$pdfName, designation=$designation")
+                    Log.d("PdfViewerActivity", "Available old markers: ${markers.keys}")
+                    val coords = if (pdfName != null) markers[pdfName]?.get(designation) else null
+                    if (coords != null) {
+                        Log.d("PdfViewerActivity", "Found old format marker: $coords")
+                        focusOn(coords)
+                        val overlay = findViewById<MarkerOverlayView>(R.id.markerOverlay)
+                        overlay?.setMarkerInPdfUnits(
+                            coords.x.toFloat(),
+                            coords.y.toFloat(),
+                            coords.width.toFloat(),
+                            coords.height.toFloat(),
+                            pdfToBitmapScale,
+                            ivZoom.getImageMatrixCopy(),
+                            label = designation,
+                            color = parseMarkerColor(coords),
+                            comment = coords.label
+                        )
+                    } else {
+                        findViewById<MarkerOverlayView>(R.id.markerOverlay)?.clearMarker()
+                    }
                 }
             } else {
                 findViewById<MarkerOverlayView>(R.id.markerOverlay)?.clearMarker()
@@ -301,7 +360,7 @@ class PdfViewerActivity : AppCompatActivity() {
 
     // Теоретический максимум по стороне без учёта памяти (для принятия решения о видимости кнопки)
     private fun computeTheoreticalMaxDims(pageW: Int, pageH: Int): Pair<Int, Int> {
-        val capSide = 16384
+        val capSide = 8192
         var targetW = capSide
         var targetH = (pageH * (targetW / pageW.toFloat())).toInt()
         if (targetH > capSide) {
@@ -318,7 +377,7 @@ class PdfViewerActivity : AppCompatActivity() {
 
         // 1) Ограничение по максимальной стороне (GL_MAX_TEXTURE_SIZE и общий здравый предел)
         val glMax = getMaxTextureSize().coerceAtLeast(8192)
-        val sideCap = 16384.coerceAtMost(glMax)
+        val sideCap = 8192.coerceAtMost(glMax)
         val scaleSide = kotlin.math.min(1.0, kotlin.math.min(sideCap / targetW.toDouble(), sideCap / targetH.toDouble()))
         if (scaleSide < 1.0) {
             targetW = kotlin.math.max(1, (targetW * scaleSide).toInt())
@@ -327,7 +386,7 @@ class PdfViewerActivity : AppCompatActivity() {
 
         // 2) Ограничение по байтам: берём минимум из доступной памяти процесса и безопасной планки Canvas
         val allowedMemBytes = computeMemoryBudgetBytes()
-        val canvasSafeCapBytes = 96.0 * 1024 * 1024 // ~96MB, чтобы не падать с "Canvas: too large bitmap"
+        val canvasSafeCapBytes = 32.0 * 1024 * 1024 // ~32MB, чтобы не падать с "Canvas: too large bitmap"
         val allowedBytes = kotlin.math.min(allowedMemBytes, canvasSafeCapBytes)
         val maxPixels = allowedBytes / 4.0
         val curPixels = targetW.toDouble() * targetH.toDouble()
@@ -376,10 +435,10 @@ class PdfViewerActivity : AppCompatActivity() {
         val rt = Runtime.getRuntime()
         val used = rt.totalMemory() - rt.freeMemory()
         val available = rt.maxMemory() - used
-        // Берём до 60% доступного сейчас, с жёсткими границами
-        val cap = 256.0 * 1024 * 1024 // 256MB
-        val floor = 48.0 * 1024 * 1024 // не меньше 48MB
-        val proposed = available.toDouble() * 0.6
+        // Берём до 40% доступного сейчас, с жёсткими границами
+        val cap = 128.0 * 1024 * 1024 // 128MB
+        val floor = 24.0 * 1024 * 1024 // не меньше 24MB
+        val proposed = available.toDouble() * 0.4
         return kotlin.math.max(floor, kotlin.math.min(cap, proposed))
     }
 
@@ -492,8 +551,9 @@ class PdfViewerActivity : AppCompatActivity() {
                         coords.height.toFloat(),
                         pdfToBitmapScale,
                         ivZoom.getImageMatrixCopy(),
-                        label = coords.label ?: designation,
-                        color = parseMarkerColor(coords)
+                        label = designation,
+                        color = parseMarkerColor(coords),
+                        comment = coords.label
                     )
                 }
             }
@@ -763,8 +823,9 @@ class PdfViewerActivity : AppCompatActivity() {
                         scaleX = scaleX,
                         scaleY = scaleY,
                         currentImageMatrix = ivZoom.getImageMatrixCopy(),
-                        label = coords.label ?: designation,
-                        color = parseMarkerColor(coords)
+                        label = designation,
+                        color = parseMarkerColor(coords),
+                        comment = coords.label
                     )
                 }
             }
@@ -785,9 +846,9 @@ class PdfViewerActivity : AppCompatActivity() {
             val pageW = page.width
             val pageH = page.height
             val dm = resources.displayMetrics
-            val sideCap = 12288
+            val sideCap = 8192
             val isSmallPage = pageW <= dm.widthPixels && pageH <= dm.heightPixels
-            val screenMultiplier = if (isSmallPage) 2 else 6
+            val screenMultiplier = if (isSmallPage) 2 else 3
             val maxW = kotlin.math.min(dm.widthPixels * screenMultiplier, sideCap)
             val maxH = kotlin.math.min(dm.heightPixels * screenMultiplier, sideCap)
             var scale = kotlin.math.min(maxW / pageW.toFloat(), maxH / pageH.toFloat())
@@ -829,8 +890,9 @@ class PdfViewerActivity : AppCompatActivity() {
                         coords.height.toFloat(),
                         pdfToBitmapScale,
                         ivZoom.getImageMatrixCopy(),
-                        label = coords.label ?: designation,
-                        color = parseMarkerColor(coords)
+                        label = designation,
+                        color = parseMarkerColor(coords),
+                        comment = coords.label
                     )
                 } else {
                     findViewById<MarkerOverlayView>(R.id.markerOverlay)?.clearMarker()
@@ -844,7 +906,7 @@ class PdfViewerActivity : AppCompatActivity() {
         }
     }
 
-    // Центрирование и масштабирование по ArmatureCoords
+    // Центрирование и масштабирование по ArmatureCoords (старый формат)
     private fun focusOn(coords: ArmatureCoords) {
         val iv = imageView as? ZoomableImageView ?: return
         val bmp = renderedBitmap ?: return
@@ -852,6 +914,17 @@ class PdfViewerActivity : AppCompatActivity() {
         val scale = coords.zoom.toFloat().coerceIn(0.2f, 20f)
         val centerXbmp = ((coords.x + coords.width / 2.0) * pdfToBitmapScale).toFloat()
         val centerYbmp = ((coords.y + coords.height / 2.0) * pdfToBitmapScale).toFloat()
+        iv.setScaleAndCenter(scale, centerXbmp, centerYbmp)
+    }
+    
+    // Центрирование и масштабирование по ArmatureMarker (новый формат)
+    private fun focusOnNewMarker(marker: ArmatureMarker) {
+        val iv = imageView as? ZoomableImageView ?: return
+        val bmp = renderedBitmap ?: return
+        // Масштаб строго из JSON (с ограничением)
+        val scale = marker.zoom.toFloat().coerceIn(0.2f, 20f)
+        val centerXbmp = ((marker.x + marker.size / 2.0) * pdfToBitmapScale).toFloat()
+        val centerYbmp = ((marker.y + marker.size / 2.0) * pdfToBitmapScale).toFloat()
         iv.setScaleAndCenter(scale, centerXbmp, centerYbmp)
     }
 

@@ -181,9 +181,33 @@ class ExcelCacheManager(private val context: Context) {
         try {
             openInputStream().use { input ->
                 val wb = XSSFWorkbook(input)
+                
+                // Диагностика: проверяем доступные листы
+                Log.d("ExcelCacheManager", "=== EXCEL FILE DIAGNOSTICS ===")
+                Log.d("ExcelCacheManager", "Looking for sheet: '$sheetName'")
+                Log.d("ExcelCacheManager", "Available sheets:")
+                for (i in 0 until wb.numberOfSheets) {
+                    val sheet = wb.getSheetAt(i)
+                    Log.d("ExcelCacheManager", "  Sheet $i: '${sheet.sheetName}' (rows: ${sheet.lastRowNum + 1})")
+                }
+                
                 val sheet = wb.getSheet(sheetName)
+                if (sheet == null) {
+                    Log.e("ExcelCacheManager", "Sheet '$sheetName' not found! Available sheets: ${(0 until wb.numberOfSheets).map { wb.getSheetAt(it).sheetName }}")
+                    throw IllegalArgumentException("Sheet '$sheetName' not found in Excel file")
+                }
+                
+                Log.d("ExcelCacheManager", "Found sheet '$sheetName' with ${sheet.lastRowNum + 1} rows")
+                Log.d("ExcelCacheManager", "Physical number of rows: ${sheet.physicalNumberOfRows}")
+                Log.d("ExcelCacheManager", "First row num: ${sheet.firstRowNum}")
+                Log.d("ExcelCacheManager", "Last row num: ${sheet.lastRowNum}")
+                
                 val headers = mutableListOf<String>()
                 val headerRow = sheet.getRow(0)
+                if (headerRow == null) {
+                    Log.e("ExcelCacheManager", "Header row (row 0) is null in sheet '$sheetName'")
+                    throw IllegalArgumentException("Header row is null in sheet '$sheetName'")
+                }
                 if (headerRow != null) {
                     for (cell in headerRow) headers.add(ExcelPagingSession.Companion.getCellValueAsString(cell, wb))
                 }
@@ -205,13 +229,15 @@ class ExcelCacheManager(private val context: Context) {
                 val evaluator = wb.creationHelper.createFormulaEvaluator()
                 val formatter = org.apache.poi.ss.usermodel.DataFormatter()
                 val totalRows = sheet.lastRowNum
+                Log.d("ExcelCacheManager", "Processing data rows from 1 to $totalRows (total: ${totalRows - 1 + 1} data rows)")
                 var start = 1
                 var pageIndex = 0
                 while (start <= totalRows) {
                     val rows = ArrayList<Map<String, String>>()
                     var taken = 0
                     while (taken < pageSize && start + taken <= totalRows) {
-                        val row = sheet.getRow(start + taken)
+                        val rowIndex = start + taken
+                        val row = sheet.getRow(rowIndex)
                         if (row != null) {
                             val rowMap = LinkedHashMap<String, String>()
                             for (i in headers.indices) {
@@ -220,6 +246,9 @@ class ExcelCacheManager(private val context: Context) {
                                 rowMap[headers[i]] = value
                             }
                             rows.add(rowMap)
+                            Log.d("ExcelCacheManager", "Processed row $rowIndex: $rowMap")
+                        } else {
+                            Log.w("ExcelCacheManager", "Row $rowIndex is null, skipping")
                         }
                         taken++
                     }

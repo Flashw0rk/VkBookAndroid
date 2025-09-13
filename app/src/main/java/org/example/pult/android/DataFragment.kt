@@ -22,13 +22,14 @@ import kotlinx.coroutines.withContext
 import android.widget.Button
 import android.view.MotionEvent
 import android.widget.LinearLayout
+import android.widget.Toast
 
 // Extension function to convert dp to pixels
 fun Context.dpToPx(dp: Int): Int {
     return (dp * resources.displayMetrics.density).toInt()
 }
 
-class DataFragment : Fragment() {
+class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: SignalsAdapter
@@ -83,8 +84,12 @@ class DataFragment : Fragment() {
         recyclerView.adapter = adapter
         excelDataManager = AppExcelDataManager(requireContext().applicationContext)
         val baseUrl = getString(com.example.vkbookandroid.R.string.remote_base_url)
-        val remote = if (baseUrl.isNotEmpty()) com.example.vkbookandroid.RemoteFileProvider(requireContext(), baseUrl) else null
-        excelRepository = com.example.vkbookandroid.ExcelRepository(requireContext(), remote)
+        val fileProvider: com.example.vkbookandroid.IFileProvider = if (baseUrl.isNotEmpty()) {
+            com.example.vkbookandroid.RemoteFileProvider(requireContext(), baseUrl)
+        } else {
+            com.example.vkbookandroid.FileProvider(requireContext())
+        }
+        excelRepository = com.example.vkbookandroid.ExcelRepository(requireContext(), fileProvider)
         searchView = view.findViewById(R.id.search_view)
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
 
@@ -146,6 +151,15 @@ class DataFragment : Fragment() {
             }
         })
 
+        // Настройка кнопки очистки
+        searchView.setOnCloseListener {
+            // Очищаем поиск при нажатии на крестик
+            searchView.setQuery("", false)
+            filterData("")
+            (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged("")
+            true // Возвращаем true, чтобы SearchView не закрывался
+        }
+
         // Настройка текста/подсказки (используем AppCompat id, а не android:id)
         val searchAutoComplete = searchView.findViewById<androidx.appcompat.widget.SearchView.SearchAutoComplete>(
             androidx.appcompat.R.id.search_src_text
@@ -164,6 +178,7 @@ class DataFragment : Fragment() {
 
     fun setSearchQueryExternal(query: String) {
         if (!isAdded) return
+        if (!::searchView.isInitialized) return
         if (searchView.query?.toString() == query) return
         searchView.setQuery(query, false)
         filterData(query)
@@ -194,14 +209,25 @@ class DataFragment : Fragment() {
     }
 
     private fun loadSignalsData() {
+        Log.d("DataFragment", "=== STARTING BSCHU DATA LOADING ===")
+        Log.d("DataFragment", "Fragment state: isAdded=${isAdded}, isVisible=${isVisible}, isResumed=${isResumed}")
+        Log.d("DataFragment", "Context available: ${::excelRepository.isInitialized}")
+        
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                Log.d("DataFragment", "Starting data loading in IO thread")
+                
                 // Открываем одну сессию и используем её для widths/headers/данных без повторного чтения файла
                 // 1) Быстрый старт из кэша, если он есть
+                Log.d("DataFragment", "Attempting to open cached session...")
                 cachedSession = excelRepository.openCachedSessionBschu(pageSize)
+                Log.d("DataFragment", "Cached session result: ${cachedSession != null}")
+                
                 val sessionForInitial = cachedSession ?: run {
+                    Log.d("DataFragment", "No cached session, opening paging session...")
                     // Если кэша нет — временно откроем Excel для получения метаданных
                     pagingSession = excelRepository.openPagingSessionBschu()
+                    Log.d("DataFragment", "Paging session opened: ${pagingSession != null}")
                     pagingSession as com.example.vkbookandroid.PagingSession
                 }
 
@@ -229,18 +255,33 @@ class DataFragment : Fragment() {
 
                 // Load headers
                 val headers = sessionForInitial.getHeaders()
+                Log.d("DataFragment", "=== BSCHU DATA DIAGNOSTICS ===")
                 Log.d("DataFragment", "Loaded headers: $headers")
+                Log.d("DataFragment", "Headers count: ${headers.size}")
 
                 // Load first page
                 val firstPage = sessionForInitial.readRange(0, pageSize)
                 nextStartRow = firstPage.size
                 Log.d("DataFragment", "Loaded first page count: ${firstPage.size}")
+                Log.d("DataFragment", "First page data: $firstPage")
+                Log.d("DataFragment", "=== END BSCHU DATA DIAGNOSTICS ===")
 
                 withContext(Dispatchers.Main) {
+                    Log.d("DataFragment", "Updating UI with data: headers=${headers.size}, firstPage=${firstPage.size}")
+                    Log.d("DataFragment", "Fragment still valid: isAdded=${isAdded}, isVisible=${isVisible}")
+                    
+                    if (!isAdded) {
+                        Log.w("DataFragment", "Fragment no longer added, skipping UI update")
+                        return@withContext
+                    }
+                    
                     lastHeaders = headers
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
                     isDataLoaded = true
                     attachPaging()
+                    
+                    Log.d("DataFragment", "UI updated successfully. Adapter item count: ${adapter.itemCount}")
+                    Log.d("DataFragment", "RecyclerView visibility: ${recyclerView.visibility}")
                 }
 
                 // 2) Тихая пересборка кэша в фоне и обновление по готовности
@@ -263,7 +304,15 @@ class DataFragment : Fragment() {
                 }
             } catch (e: Exception) {
                 Log.e("DataFragment", "Error loading signals data", e)
-                // Ошибка загрузки — можно показать Toast/лог
+                Log.e("DataFragment", "Exception details: ${e.javaClass.simpleName}: ${e.message}")
+                e.printStackTrace()
+                
+                // Показываем ошибку пользователю
+                withContext(Dispatchers.Main) {
+                    if (isAdded) {
+                        Toast.makeText(requireContext(), "Ошибка загрузки данных БЩУ: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         }
     }
@@ -348,8 +397,40 @@ class DataFragment : Fragment() {
     }
 
     fun ensureDataLoaded() {
+        Log.d("DataFragment", "ensureDataLoaded called: isDataLoaded=$isDataLoaded, isAdded=$isAdded, isVisible=$isVisible")
         if (!isDataLoaded) {
+            Log.d("DataFragment", "Data not loaded, starting loadSignalsData()")
             loadSignalsData()
+        } else {
+            Log.d("DataFragment", "Data already loaded, skipping")
+        }
+    }
+    
+    // Реализация интерфейса RefreshableFragment
+    override fun refreshData() {
+        Log.d("DataFragment", "refreshData() called - forcing data reload")
+        isDataLoaded = false
+        loadSignalsData()
+    }
+    
+    override fun isDataLoaded(): Boolean {
+        return isDataLoaded
+    }
+    
+    override fun getWatchedFilePath(): String? {
+        return try {
+            val baseUrl = getString(com.example.vkbookandroid.R.string.remote_base_url)
+            if (baseUrl.isNotEmpty()) {
+                // Для удаленного режима - путь к файлу в data директории
+                val dataDir = requireContext().filesDir.resolve("data")
+                dataDir.resolve("Oborudovanie_BSCHU.xlsx").absolutePath
+            } else {
+                // Для локального режима - путь к файлу в assets
+                null // Assets файлы не отслеживаются
+            }
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error getting watched file path", e)
+            null
         }
     }
 }

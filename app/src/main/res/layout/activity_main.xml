@@ -11,9 +11,50 @@
         android:layout_height="7dp"
         android:background="#673AB7" />
 
-    <!-- Удалено дублирующее поле поиска. Поиск реализован во фрагменте. -->
+    <!-- Панель синхронизации -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#F5F5F5"
+        android:gravity="center_vertical"
+        android:minHeight="48dp">
 
-    
+        <Button
+            android:id="@+id/btnSync"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="Обновить базы"
+            android:textSize="14sp"
+            android:padding="8dp"
+            android:backgroundTint="#4CAF50"
+            android:textColor="@android:color/white"
+            android:soundEffectsEnabled="false" />
+
+        <Button
+            android:id="@+id/btnSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="⚙️"
+            android:textSize="16sp"
+            android:padding="8dp"
+            android:layout_marginStart="8dp"
+            android:backgroundTint="#2196F3"
+            android:textColor="@android:color/white"
+            android:soundEffectsEnabled="false" />
+
+        <TextView
+            android:id="@+id/tvSyncStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:text="Готов к обновлению"
+            android:textSize="12sp"
+            android:textColor="#666666" />
+
+    </LinearLayout>
 
     <!-- Вкладки -->
     <com.google.android.material.tabs.TabLayout

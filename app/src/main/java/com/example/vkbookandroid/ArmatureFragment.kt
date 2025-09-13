@@ -8,6 +8,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.Toast
 import androidx.appcompat.widget.SearchView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
@@ -18,8 +19,9 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
-class ArmatureFragment : Fragment() {
+class ArmatureFragment : Fragment(), RefreshableFragment {
     
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: SignalsAdapter
@@ -36,6 +38,8 @@ class ArmatureFragment : Fragment() {
     private var pagingSession: ExcelPagingSession? = null
     private var cachedSession: PagingSession? = null
     private var lastMeasuredListWidth: Int = 0
+    private var lastHeaders: List<String> = emptyList()
+    private var armatureRepository: com.example.vkbookandroid.repository.ArmatureRepository? = null
     
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -50,7 +54,7 @@ class ArmatureFragment : Fragment() {
         
         recyclerView = view.findViewById(R.id.recyclerView)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
-        recyclerView.setHasFixedSize(true)
+        // setHasFixedSize(true) убран, так как RecyclerView использует wrap_content в layout
         recyclerView.setItemViewCacheSize(20)
         adapter = SignalsAdapter(emptyList(), isResizingMode, { columnIndex, newWidth, action ->
             val headerName = adapter.headers.getOrNull(columnIndex)
@@ -83,7 +87,7 @@ class ArmatureFragment : Fragment() {
 
             if (!pdfName.isNullOrBlank() && !designation.isNullOrBlank()) {
                 val intent = android.content.Intent(requireContext(), PdfViewerActivity::class.java).apply {
-                    putExtra("pdf_path", "assets/Schemes/$pdfName")
+                    putExtra("pdf_path", "Schemes/$pdfName")
                     putExtra("designation", designation)
                 }
                 startActivity(intent)
@@ -105,7 +109,7 @@ class ArmatureFragment : Fragment() {
             val designation: String? = if (!parsedId.isNullOrBlank()) parsedId else armId
             if (pdfName.isNullOrBlank() || designation.isNullOrBlank()) return@SignalsAdapter
             val intent = android.content.Intent(requireContext(), PdfViewerActivity::class.java).apply {
-                putExtra("pdf_path", "assets/Schemes/$pdfName")
+                putExtra("pdf_path", "Schemes/$pdfName")
                 putExtra("designation", designation)
             }
             startActivity(intent)
@@ -115,14 +119,24 @@ class ArmatureFragment : Fragment() {
         view.post {
             recyclerView.adapter?.notifyDataSetChanged()
             recyclerView.requestLayout()
+            val original = adapter.getOriginalData()
+            if (adapter.itemCount <= 1 && original.isNotEmpty() && lastHeaders.isNotEmpty()) {
+                adapter.updateData(original, lastHeaders, currentColumnWidths, isResizingMode, updateOriginal = false)
+            }
+            recyclerView.visibility = View.VISIBLE
         }
         // Отключаем звуки кликов у всего дерева фрагмента
         view.isSoundEffectsEnabled = false
         
         excelDataManager = AppExcelDataManager(requireContext().applicationContext)
         val baseUrl = getString(R.string.remote_base_url)
-        val remote = if (baseUrl.isNotEmpty()) RemoteFileProvider(requireContext(), baseUrl) else null
-        excelRepository = ExcelRepository(requireContext(), remote)
+        val fileProvider: IFileProvider = if (baseUrl.isNotEmpty()) {
+            RemoteFileProvider(requireContext(), baseUrl)
+        } else {
+            FileProvider(requireContext())
+        }
+        excelRepository = ExcelRepository(requireContext(), fileProvider)
+        armatureRepository = com.example.vkbookandroid.repository.ArmatureRepository(requireContext())
         searchView = view.findViewById(R.id.search_view)
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
 
@@ -138,17 +152,32 @@ class ArmatureFragment : Fragment() {
         recyclerView.post {
             recyclerView.adapter?.notifyDataSetChanged()
             recyclerView.requestLayout()
+            val original = adapter.getOriginalData()
+            if (adapter.itemCount <= 1 && original.isNotEmpty() && lastHeaders.isNotEmpty()) {
+                adapter.updateData(original, lastHeaders, currentColumnWidths, isResizingMode, updateOriginal = false)
+            }
+            recyclerView.visibility = View.VISIBLE
         }
     }
     
     private fun loadArmatureData() {
+        Log.d("ArmatureFragment", "=== STARTING ARMATURE DATA LOADING ===")
+        Log.d("ArmatureFragment", "Fragment state: isAdded=${isAdded}, isVisible=${isVisible}, isResumed=${isResumed}")
+        Log.d("ArmatureFragment", "Context available: ${::excelRepository.isInitialized}")
+        
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                Log.d("ArmatureFragment", "Starting data loading in IO thread")
                 val ctx = requireContext()
                 // 1) быстрый старт из кэша, если он есть
+                Log.d("ArmatureFragment", "Attempting to open cached session...")
                 cachedSession = excelRepository.openCachedSessionArmatures(pageSize)
+                Log.d("ArmatureFragment", "Cached session result: ${cachedSession != null}")
+                
                 val sessionForInitial = cachedSession ?: run {
+                    Log.d("ArmatureFragment", "No cached session, opening paging session...")
                     pagingSession = excelRepository.openPagingSessionArmatures()
+                    Log.d("ArmatureFragment", "Paging session opened: ${pagingSession != null}")
                     pagingSession as PagingSession
                 }
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
@@ -167,15 +196,38 @@ class ArmatureFragment : Fragment() {
                     currentColumnWidths = mutableMapOf()
                 }
 
+                // Load headers
                 val headers = sessionForInitial.getHeaders()
+                Log.d("ArmatureFragment", "=== ARMATURE DATA DIAGNOSTICS ===")
+                Log.d("ArmatureFragment", "Loaded headers: $headers")
+                Log.d("ArmatureFragment", "Headers count: ${headers.size}")
 
+                // Load first page
                 val firstPage = sessionForInitial.readRange(0, pageSize)
                 nextStartRow = firstPage.size
+                Log.d("ArmatureFragment", "Loaded first page count: ${firstPage.size}")
+                Log.d("ArmatureFragment", "First page data: $firstPage")
+                Log.d("ArmatureFragment", "=== END ARMATURE DATA DIAGNOSTICS ===")
 
                 withContext(Dispatchers.Main) {
+                    Log.d("ArmatureFragment", "Updating UI with data: headers=${headers.size}, firstPage=${firstPage.size}")
+                    Log.d("ArmatureFragment", "Fragment still valid: isAdded=${isAdded}, isVisible=${isVisible}")
+                    
+                    if (!isAdded) {
+                        Log.w("ArmatureFragment", "Fragment no longer added, skipping UI update")
+                        return@withContext
+                    }
+                    
+                    lastHeaders = headers
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
                     isDataLoaded = true
                     attachPaging()
+                    
+                    Log.d("ArmatureFragment", "UI updated successfully. Adapter item count: ${adapter.itemCount}")
+                    Log.d("ArmatureFragment", "RecyclerView visibility: ${recyclerView.visibility}")
+                    
+                    // JSON координаты загружаются только при синхронизации
+                    // loadArmatureCoordinates() - удалено для единообразного поведения
                 }
 
                 // 2) фоновая пересборка кэша и бесшовное обновление
@@ -187,6 +239,7 @@ class ArmatureFragment : Fragment() {
                             val newFirstPage = newCached.readRange(0, pageSize)
                             nextStartRow = newFirstPage.size
                             withContext(Dispatchers.Main) {
+                                lastHeaders = newHeaders
                                 adapter.updateData(newFirstPage, newHeaders, currentColumnWidths, isResizingMode, updateOriginal = true)
                             }
                             cachedSession = newCached
@@ -197,6 +250,15 @@ class ArmatureFragment : Fragment() {
                 }
             } catch (e: Exception) {
                 Log.e("ArmatureFragment", "Error loading armature data", e)
+                Log.e("ArmatureFragment", "Exception details: ${e.javaClass.simpleName}: ${e.message}")
+                e.printStackTrace()
+                
+                // Показываем ошибку пользователю
+                withContext(Dispatchers.Main) {
+                    if (isAdded) {
+                        Toast.makeText(requireContext(), "Ошибка загрузки данных арматуры: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         }
     }
@@ -290,6 +352,15 @@ class ArmatureFragment : Fragment() {
             }
         })
 
+        // Настройка кнопки очистки
+        searchView.setOnCloseListener {
+            // Очищаем поиск при нажатии на крестик
+            searchView.setQuery("", false)
+            filterData("")
+            (activity as? MainActivity)?.onFragmentSearchQueryChanged("")
+            true // Возвращаем true, чтобы SearchView не закрывался
+        }
+
         val searchAutoComplete = searchView.findViewById<androidx.appcompat.widget.SearchView.SearchAutoComplete>(
             androidx.appcompat.R.id.search_src_text
         )
@@ -316,14 +387,147 @@ class ArmatureFragment : Fragment() {
 
     fun setSearchQueryExternal(query: String) {
         if (!isAdded) return
+        if (!::searchView.isInitialized) return
         if (searchView.query?.toString() == query) return
         searchView.setQuery(query, false)
         filterData(query)
     }
 
     fun ensureDataLoaded() {
+        Log.d("ArmatureFragment", "ensureDataLoaded called: isDataLoaded=$isDataLoaded, isAdded=$isAdded, isVisible=$isVisible")
         if (!isDataLoaded) {
+            Log.d("ArmatureFragment", "Data not loaded, starting loadArmatureData()")
             loadArmatureData()
+        } else {
+            Log.d("ArmatureFragment", "Data already loaded, skipping")
+        }
+    }
+    
+    // Реализация интерфейса RefreshableFragment
+    override fun refreshData() {
+        Log.d("ArmatureFragment", "refreshData() called - forcing data reload")
+        isDataLoaded = false
+        loadArmatureData()
+        
+        // Загружаем JSON координаты после обновления данных
+        loadArmatureCoordinates()
+    }
+    
+    override fun isDataLoaded(): Boolean {
+        return isDataLoaded
+    }
+    
+    override fun getWatchedFilePath(): String? {
+        return try {
+            val baseUrl = getString(R.string.remote_base_url)
+            if (baseUrl.isNotEmpty()) {
+                // Для удаленного режима - путь к файлу в data директории
+                val dataDir = requireContext().filesDir.resolve("data")
+                dataDir.resolve("Armatures.xlsx").absolutePath
+            } else {
+                // Для локального режима - путь к файлу в assets
+                null // Assets файлы не отслеживаются
+            }
+        } catch (e: Exception) {
+            Log.e("ArmatureFragment", "Error getting watched file path", e)
+            null
+        }
+    }
+    
+    /**
+     * Загрузить координаты арматур из JSON для определения кликабельности
+     */
+    private fun loadArmatureCoordinates() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                Log.d("ArmatureFragment", "Loading armature coordinates for clickability...")
+                val coordinates = armatureRepository?.loadMarkersFromFilesDir()
+                if (coordinates != null && coordinates.isNotEmpty()) {
+                    Log.d("ArmatureFragment", "Loaded coordinates for ${coordinates.size} PDF files")
+                    
+                    // Создаем список всех арматур, которые имеют координаты
+                    val clickableArmatures = mutableSetOf<String>()
+                    coordinates.forEach { (pdfName, markers) ->
+                        markers.forEach { (armatureId, _) ->
+                            clickableArmatures.add(armatureId)
+                        }
+                    }
+                    
+                    Log.d("ArmatureFragment", "Clickable armatures: $clickableArmatures")
+                    
+                    withContext(Dispatchers.Main) {
+                        // Обновляем адаптер с информацией о кликабельности
+                        adapter.setClickableArmatures(clickableArmatures)
+                        adapter.notifyDataSetChanged()
+                    }
+                } else {
+                    Log.w("ArmatureFragment", "No coordinates found")
+                }
+            } catch (e: Exception) {
+                Log.e("ArmatureFragment", "Error loading armature coordinates", e)
+            }
+        }
+    }
+    
+    /**
+     * Обновить данные после синхронизации
+     */
+    fun refreshDataAfterSync() {
+        Log.d("ArmatureFragment", "Refreshing data after sync...")
+        isDataLoaded = false
+        pagingSession = null
+        cachedSession = null
+        nextStartRow = 0
+        
+        // Очищаем кэш Excel файлов, чтобы загрузить новые данные
+        clearExcelCache()
+        
+        loadArmatureData()
+        
+        // Также загружаем координаты из JSON для обновления кликабельности
+        loadArmatureCoordinates()
+    }
+    
+    /**
+     * Очистить кэш Excel файлов для принудительного обновления
+     * НЕ очищаем remote_cache - там хранятся синхронизированные файлы!
+     */
+    private fun clearExcelCache() {
+        try {
+            val cacheDir = File(requireContext().cacheDir, "excel_cache")
+            if (cacheDir.exists()) {
+                cacheDir.deleteRecursively()
+                Log.d("ArmatureFragment", "Excel parsing cache cleared (keeping remote_cache)")
+            }
+        } catch (e: Exception) {
+            Log.e("ArmatureFragment", "Error clearing Excel cache", e)
+        }
+    }
+    
+    /**
+     * Загрузить маркеры из armature_coords.json (новые данные с сервера)
+     */
+    private fun loadMarkersFromJson() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val armatureRepository = com.example.vkbookandroid.repository.ArmatureRepository(
+                    requireContext(), 
+                    com.example.vkbookandroid.network.NetworkModule.getArmatureApiService()
+                )
+                
+                val serverData = armatureRepository.loadArmatureCoordsFromServer()
+                if (serverData != null && serverData.isNotEmpty()) {
+                    val allMarkers = armatureRepository.convertServerFormatToList(serverData)
+                    
+                    withContext(Dispatchers.Main) {
+                        // Показываем Toast с информацией о загруженных маркерах
+                        Toast.makeText(requireContext(), "Загружено ${allMarkers.size} маркеров с сервера", Toast.LENGTH_SHORT).show()
+                        Log.d("ArmatureFragment", "Loaded ${allMarkers.size} markers from server")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ArmatureFragment", "Error loading markers from JSON", e)
+            }
         }
     }
 } 

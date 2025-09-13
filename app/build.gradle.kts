@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.example.vkbookandroid"
-    compileSdk = 36
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.example.vkbookandroid"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
@@ -33,29 +33,17 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
-
-    // Исключаем временные lock-файлы Excel (~$*.xlsx) из assets, чтобы не ломать mergeDebugAssets
-    // Подменяем источник ассетов на отфильтрованную копию, чтобы исключить временные Excel lock-файлы
-    sourceSets {
-        getByName("main") {
-            assets.setSrcDirs(listOf("build/filteredAssets/assets"))
+    
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
         }
     }
+
 }
 
-// Копируем ассеты с исключением временных файлов Excel (~$*.xlsx) в build/filteredAssets
-val filterAssets by tasks.register<Copy>("filterAssets") {
-    from("src/main/assets") {
-        exclude("**/~$*")
-        exclude("**/~$*.xlsx")
-    }
-    into(File(buildDir, "filteredAssets/assets"))
-}
-
-// Обеспечиваем, что фильтрация выполнится перед любым merge*Assets
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
-    dependsOn(filterAssets)
-}
+// Assets больше не используются, все файлы создаются программно
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -86,6 +74,12 @@ dependencies {
     
     // Gson для JSON
     implementation("com.google.code.gson:gson:2.10.1")
+    
+    // Сетевые зависимости для API
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     // PDF Viewer (пока не используется)
     // implementation("com.github.barteksc:android-pdf-viewer:3.2.0-beta.1")
