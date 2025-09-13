@@ -109,6 +109,14 @@ class PdfViewerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Освобождаем память от bitmap'ов
+        renderedBitmap?.recycle()
+        renderedBitmap = null
+        
+        // Очищаем кэш PDF файла
+        cachePdfFile?.delete()
+        cachePdfFile = null
+        
         super.onDestroy()
         activityJob.cancel()
     }
@@ -254,6 +262,9 @@ class PdfViewerActivity : AppCompatActivity() {
             lastPageW = pageW
             lastPageH = pageH
             pdfToBitmapScale = bmp!!.width / pageW.toFloat()
+            
+            // Освобождаем старый bitmap перед назначением нового
+            renderedBitmap?.recycle()
             renderedBitmap = bmp
             imageView.setImageBitmap(bmp)
             // Сначала центрируемся и рисуем маркер синхронно, затем UI-пересчёты

@@ -32,14 +32,12 @@ class RemoteFileProvider(
         return try {
             // 1. Сначала проверяем filesDir/data/ (приоритет после синхронизации)
             val dataFile = getDataFile(normalized)
-            Log.d("RemoteFileProvider", "=== REMOTE FILE PROVIDER DIAGNOSTICS ===")
             Log.d("RemoteFileProvider", "Requested file: '$normalized'")
-            Log.d("RemoteFileProvider", "Data file path: ${dataFile.absolutePath}")
             Log.d("RemoteFileProvider", "Data file exists: ${dataFile.exists()}")
-            Log.d("RemoteFileProvider", "Data file size: ${dataFile.length()} bytes")
+            // Убрали логирование полных путей для безопасности
             
             if (dataFile.exists() && dataFile.length() > 0) {
-                Log.d("RemoteFileProvider", "Using data file: ${dataFile.absolutePath} (${dataFile.length()} bytes)")
+                Log.d("RemoteFileProvider", "Using data file: $normalized")
                 return dataFile.inputStream()
             }
             

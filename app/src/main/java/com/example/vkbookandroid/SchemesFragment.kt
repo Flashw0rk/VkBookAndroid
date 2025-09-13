@@ -45,7 +45,9 @@ class SchemesFragment : Fragment(), RefreshableFragment {
         val dataDir = File(requireContext().filesDir, "data")
         val files = if (dataDir.exists()) {
             dataDir.listFiles()?.filter { 
-                it.name.endsWith(".pdf", ignoreCase = true) || it.name.endsWith(".txt", ignoreCase = true) 
+                it.isFile && it.canRead() && 
+                (it.name.endsWith(".pdf", ignoreCase = true) || it.name.endsWith(".txt", ignoreCase = true)) &&
+                it.length() > 0 // Проверяем что файл не пустой
             }?.map { it.name }?.sorted() ?: emptyList()
         } else {
             emptyList()
