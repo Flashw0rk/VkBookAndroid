@@ -44,19 +44,19 @@ interface ArmatureApiService {
      * Получить список PDF файлов
      */
     @GET("api/files/pdf")
-    suspend fun getPdfFiles(): Response<List<String>>
+    suspend fun getPdfFiles(): Response<List<FileInfo>>
     
     /**
      * Получить список JSON файлов
      */
     @GET("api/files/json")
-    suspend fun getJsonFiles(): Response<List<String>>
+    suspend fun getJsonFiles(): Response<List<FileInfo>>
     
     /**
      * Получить список Excel файлов
      */
     @GET("api/files/excel")
-    suspend fun getExcelFiles(): Response<List<String>>
+    suspend fun getExcelFiles(): Response<List<FileInfo>>
     
     // ========== ARMATURE COORDS ENDPOINTS ==========
     
@@ -65,7 +65,7 @@ interface ArmatureApiService {
      * Возвращает прямой формат Map<String, Map<String, ArmatureMarker>>
      * который соответствует пользовательскому эталонному формату
      */
-    @GET("api/files/json/armature_coords.json")
+    @GET("api/files/armature-coords")
     suspend fun getArmatureCoords(): Response<Map<String, Map<String, ArmatureMarker>>>
     
     /**

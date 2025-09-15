@@ -16,9 +16,7 @@ import com.google.gson.reflect.TypeToken
 import org.example.pult.model.ArmatureCoords
 import java.io.InputStream
 import android.net.Uri
-import android.provider.DocumentsContract
-import java.io.BufferedReader
-import java.io.InputStreamReader
+// Удалены неиспользуемые импорты: DocumentsContract, BufferedReader, InputStreamReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -161,15 +159,23 @@ class PdfViewerActivity : AppCompatActivity() {
             try {
                 val fileName = pdfPath.substringAfterLast('/')
                 currentPdfName = fileName
+                Log.d("PdfViewerActivity", "=== LOADING SCHEME ===")
+                Log.d("PdfViewerActivity", "Requested path: '$pdfPath'")
+                Log.d("PdfViewerActivity", "Extracted filename: '$fileName'")
+                Log.d("PdfViewerActivity", "Designation: '$designation'")
+                
                 val inputStream: InputStream = withContext(Dispatchers.IO) {
                     // Используем FileProvider для доступа к файлам
                     val fileProvider = com.example.vkbookandroid.FileProvider(this@PdfViewerActivity)
+                    Log.d("PdfViewerActivity", "FileProvider created, attempting to open: '$pdfPath'")
                     fileProvider.open(pdfPath)
                 }
+                Log.d("PdfViewerActivity", "File opened successfully, rendering...")
                 renderFirstPageToImage(inputStream, designation)
             } catch (e: Exception) {
+                Log.e("PdfViewerActivity", "Error loading scheme: '$pdfPath'", e)
                 e.printStackTrace()
-                Toast.makeText(this@PdfViewerActivity, "Ошибка загрузки схемы: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@PdfViewerActivity, "Ошибка загрузки схемы: ${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }

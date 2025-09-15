@@ -51,12 +51,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Включаем StrictMode только в debug для раннего обнаружения медленных операций на UI-потоке
+        // НО отключаем detectNetwork(), так как это может блокировать сетевые запросы
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             StrictMode.setThreadPolicy(
                 StrictMode.ThreadPolicy.Builder()
                     .detectDiskReads()
                     .detectDiskWrites()
-                    .detectNetwork()
+                    // .detectNetwork() // Отключаем, чтобы не блокировать сетевые запросы
                     .penaltyLog()
                     .build()
             )
@@ -79,16 +80,20 @@ class MainActivity : AppCompatActivity() {
         btnSync = findViewById(R.id.btnSync)
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
+        
+        // Загружаем настройки сервера ПЕРЕД созданием SyncService
+        loadServerSettings()
         syncService = SyncService(this)
         
         setupSyncButton()
         setupSettingsButton()
         setupHashInfoButton()
-        loadServerSettings()
-        checkConnectionOnStartup()
         
-        // Инициализация файлов и проверка обновлений при запуске
-        // ViewPager2 будет инициализирован после завершения setup
+        // Инициализируем ViewPager2 сразу для быстрого отображения UI
+        initializeViewPager()
+        
+        // Проверка соединения и обновления в фоне
+        checkConnectionOnStartup()
         initializeAndCheckUpdates()
 
     }
@@ -191,8 +196,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun loadServerSettings() {
-        val serverSettings = ServerSettingsActivity()
-        val currentUrl = serverSettings.getCurrentServerUrl(this)
+        val currentUrl = ServerSettingsActivity.getCurrentServerUrl(this)
         NetworkModule.updateBaseUrl(currentUrl)
     }
     
@@ -338,8 +342,8 @@ class MainActivity : AppCompatActivity() {
                     updateSyncStatus("Сервер недоступен")
                 }
                 
-                // Инициализируем ViewPager2 только после завершения setup
-                initializeViewPager()
+                // Настройка отслеживания файлов для автоматического обновления
+                setupFileWatching()
                 
             } catch (e: Exception) {
                 updateSyncStatus("Ошибка инициализации")
@@ -392,9 +396,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
         
-        // Настройка отслеживания файлов для автоматического обновления
-        setupFileWatching()
-        
         Log.d("MainActivity", "ViewPager2 initialization completed")
     }
     
@@ -405,8 +406,8 @@ class MainActivity : AppCompatActivity() {
         Log.d("MainActivity", "Setting up file watching for automatic data refresh")
         
         // Отслеживаем файлы только в удаленном режиме
-        val baseUrl = getString(R.string.remote_base_url)
-        if (baseUrl.isEmpty()) {
+        val baseUrl = ServerSettingsActivity.getCurrentServerUrl(this)
+        if (baseUrl == "http://10.0.2.2:8082/") {
             Log.d("MainActivity", "Local mode - file watching disabled")
             return
         }

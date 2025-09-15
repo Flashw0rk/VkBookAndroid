@@ -21,17 +21,22 @@ class FileProvider(private val context: Context) : IFileProvider {
         
         // Ищем в filesDir/data/
         val dataFile = getDataFile(normalized)
+        Log.d(tag, "=== FILE PROVIDER OPEN ===")
         Log.d(tag, "Requested file: '$normalized'")
+        Log.d(tag, "Resolved data file path: '${dataFile.absolutePath}'")
         Log.d(tag, "Data file exists: ${dataFile.exists()}")
-        // Убрали логирование полных путей и размеров для безопасности
+        if (dataFile.exists()) {
+            Log.d(tag, "Data file size: ${dataFile.length()} bytes")
+        }
         
         if (dataFile.exists() && dataFile.length() > 0) {
-            Log.d(tag, "Using data file: $normalized")
+            Log.d(tag, "Using data file: $normalized (${dataFile.length()} bytes)")
             return dataFile.inputStream()
         }
         
         // Если файла нет, выбрасываем исключение
         Log.e(tag, "File not found in data/: $normalized")
+        Log.e(tag, "Checked path: ${dataFile.absolutePath}")
         throw java.io.FileNotFoundException("File not found in data/: $normalized")
     }
     

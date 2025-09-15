@@ -72,8 +72,13 @@ class SchemesFragment : Fragment(), RefreshableFragment {
     }
 
     private fun openFileScheme(fileName: String) {
+        val pdfPath = "Schemes/$fileName"
+        android.util.Log.d("SchemesFragment", "=== OPENING SCHEME FROM SCHEMES TAB ===")
+        android.util.Log.d("SchemesFragment", "Selected file: '$fileName'")
+        android.util.Log.d("SchemesFragment", "Final PDF path: '$pdfPath'")
+        
         val intent = Intent(requireContext(), PdfViewerActivity::class.java).apply {
-            putExtra("pdf_path", "Schemes/$fileName")
+            putExtra("pdf_path", pdfPath)
         }
         startActivity(intent)
     }

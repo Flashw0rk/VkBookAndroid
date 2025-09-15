@@ -16,9 +16,20 @@ import java.io.InputStream
  */
 class SyncService(private val context: Context) {
     
-    private val armatureRepository = ArmatureRepository(context, NetworkModule.getArmatureApiService())
     private val fileHashManager = FileHashManager(context)
     private val tag = "SyncService"
+    
+    init {
+        Log.d(tag, "SyncService initialized. Current NetworkModule base URL: ${NetworkModule.baseUrl}")
+    }
+    
+    /**
+     * Получить актуальный ArmatureRepository с обновленным ApiService
+     */
+    private fun getArmatureRepository(): ArmatureRepository {
+        Log.d(tag, "Getting ArmatureRepository with current base URL: ${NetworkModule.getCurrentBaseUrl()}")
+        return ArmatureRepository(context, NetworkModule.getArmatureApiService())
+    }
     
     /**
      * Проверить доступность сервера
@@ -26,12 +37,38 @@ class SyncService(private val context: Context) {
     suspend fun checkServerConnection(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                val isHealthy = armatureRepository.checkServerHealth()
-                Log.d(tag, "Server health check: $isHealthy")
+                Log.d(tag, "=== CHECKING SERVER CONNECTION ===")
+                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
+                Log.d(tag, "Attempting to check server health...")
+                
+                val isHealthy = getArmatureRepository().checkServerHealth()
+                Log.d(tag, "Server health check result: $isHealthy")
+                
+                if (!isHealthy) {
+                    Log.w(tag, "Server health check failed, trying direct connection test...")
+                    val directTest = NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
+                    Log.d(tag, "Direct connection test result: $directTest")
+                    return@withContext directTest
+                }
+                
+                Log.d(tag, "=== SERVER CONNECTION CHECK COMPLETED ===")
                 isHealthy
             } catch (e: Exception) {
-                Log.e(tag, "Server connection failed", e)
-                false
+                Log.e(tag, "=== SERVER CONNECTION FAILED ===", e)
+                Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
+                Log.e(tag, "Exception message: ${e.message}")
+                e.printStackTrace()
+                
+                // Попробуем прямой тест подключения как fallback
+                try {
+                    Log.d(tag, "Trying fallback direct connection test...")
+                    val directTest = NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
+                    Log.d(tag, "Fallback connection test result: $directTest")
+                    return@withContext directTest
+                } catch (fallbackException: Exception) {
+                    Log.e(tag, "Fallback connection test also failed", fallbackException)
+                    false
+                }
             }
         }
     }
@@ -42,9 +79,11 @@ class SyncService(private val context: Context) {
     suspend fun syncArmatureCoords(result: SyncResult): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(tag, "Starting armature coords sync...")
+                Log.d(tag, "=== STARTING ARMATURE COORDS SYNC ===")
+                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
+                Log.d(tag, "Attempting to load armature coords from server...")
                 
-                val serverData = armatureRepository.loadArmatureCoordsFromServer()
+                val serverData = getArmatureRepository().loadArmatureCoordsFromServer()
                 Log.d(tag, "Server data received: $serverData")
                 
                 if (serverData != null) {
@@ -98,14 +137,26 @@ class SyncService(private val context: Context) {
     suspend fun syncExcelFiles(result: SyncResult): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(tag, "Starting Excel files sync...")
+                Log.d(tag, "=== STARTING EXCEL FILES SYNC ===")
+                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 
-                val excelFiles = armatureRepository.getExcelFilesFromServer()
+                val excelFiles = getArmatureRepository().getExcelFilesFromServer()
                 Log.d(tag, "Found ${excelFiles.size} Excel files on server: $excelFiles")
                 
-                // Диагностика: проверяем, есть ли Armatures.xlsx в списке
+                if (excelFiles.isEmpty()) {
+                    Log.w(tag, "WARNING: No Excel files found on server!")
+                    Log.w(tag, "This could mean:")
+                    Log.w(tag, "1. Server doesn't have Excel files")
+                    Log.w(tag, "2. API endpoint /api/files/excel is not working")
+                    Log.w(tag, "3. Server is not properly configured")
+                    return@withContext false
+                }
+                
+                // Диагностика: проверяем, есть ли нужные файлы в списке
                 val hasArmatures = excelFiles.contains("Armatures.xlsx")
+                val hasBschu = excelFiles.contains("Oborudovanie_BSCHU.xlsx")
                 Log.d(tag, "Armatures.xlsx found in server list: $hasArmatures")
+                Log.d(tag, "Oborudovanie_BSCHU.xlsx found in server list: $hasBschu")
                 
                 var successCount = 0
                 for (filename in excelFiles) {
@@ -113,7 +164,7 @@ class SyncService(private val context: Context) {
                         Log.d(tag, "=== DOWNLOADING EXCEL FILE: $filename ===")
                         Log.d(tag, "Requesting file from server...")
                         
-                        val responseBody = armatureRepository.downloadExcelFile(filename)
+                        val responseBody = getArmatureRepository().downloadExcelFile(filename)
                         if (responseBody != null) {
                             Log.d(tag, "Server response received for: $filename")
                             Log.d(tag, "Response body size: ${responseBody.contentLength()} bytes")
@@ -217,10 +268,24 @@ class SyncService(private val context: Context) {
                     }
                 }
                 
-                Log.d(tag, "Excel sync completed: $successCount/${excelFiles.size} files")
+                Log.d(tag, "=== EXCEL SYNC COMPLETED ===")
+                Log.d(tag, "Successfully downloaded: $successCount/${excelFiles.size} files")
+                Log.d(tag, "Updated files: ${result.updatedFiles.filter { it.endsWith(".xlsx") }}")
+                
+                if (successCount == 0) {
+                    Log.e(tag, "ERROR: No Excel files were downloaded successfully!")
+                    Log.e(tag, "This means either:")
+                    Log.e(tag, "1. Server doesn't have the files")
+                    Log.e(tag, "2. Download endpoints are not working")
+                    Log.e(tag, "3. Network/connection issues")
+                }
+                
                 successCount > 0
             } catch (e: Exception) {
-                Log.e(tag, "Error syncing Excel files", e)
+                Log.e(tag, "=== EXCEL SYNC ERROR ===", e)
+                Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
+                Log.e(tag, "Exception message: ${e.message}")
+                e.printStackTrace()
                 false
             }
         }
@@ -232,15 +297,25 @@ class SyncService(private val context: Context) {
     suspend fun syncPdfFiles(result: SyncResult): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(tag, "Starting PDF files sync...")
+                Log.d(tag, "=== STARTING PDF FILES SYNC ===")
+                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 
-                val pdfFiles = armatureRepository.getPdfFilesFromServer()
+                val pdfFiles = getArmatureRepository().getPdfFilesFromServer()
                 Log.d(tag, "Found ${pdfFiles.size} PDF files on server: $pdfFiles")
+                
+                if (pdfFiles.isEmpty()) {
+                    Log.w(tag, "WARNING: No PDF files found on server!")
+                    Log.w(tag, "This could mean:")
+                    Log.w(tag, "1. Server doesn't have PDF files")
+                    Log.w(tag, "2. API endpoint /api/files/pdf is not working")
+                    Log.w(tag, "3. Server is not properly configured")
+                    return@withContext false
+                }
                 
                 var successCount = 0
                 for (filename in pdfFiles) {
                     try {
-                        val responseBody = armatureRepository.downloadPdfFile(filename)
+                        val responseBody = getArmatureRepository().downloadPdfFile(filename)
                         if (responseBody != null) {
                             val file = File(context.filesDir, "data/$filename")
                             file.parentFile?.mkdirs()
@@ -263,10 +338,24 @@ class SyncService(private val context: Context) {
                     }
                 }
                 
-                Log.d(tag, "PDF sync completed: $successCount/${pdfFiles.size} files")
+                Log.d(tag, "=== PDF SYNC COMPLETED ===")
+                Log.d(tag, "Successfully downloaded: $successCount/${pdfFiles.size} files")
+                Log.d(tag, "Updated files: ${result.updatedFiles.filter { it.endsWith(".pdf") }}")
+                
+                if (successCount == 0) {
+                    Log.e(tag, "ERROR: No PDF files were downloaded successfully!")
+                    Log.e(tag, "This means either:")
+                    Log.e(tag, "1. Server doesn't have the files")
+                    Log.e(tag, "2. Download endpoints are not working")
+                    Log.e(tag, "3. Network/connection issues")
+                }
+                
                 successCount > 0
             } catch (e: Exception) {
-                Log.e(tag, "Error syncing PDF files", e)
+                Log.e(tag, "=== PDF SYNC ERROR ===", e)
+                Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
+                Log.e(tag, "Exception message: ${e.message}")
+                e.printStackTrace()
                 false
             }
         }
@@ -277,25 +366,41 @@ class SyncService(private val context: Context) {
      */
     suspend fun syncAll(): SyncResult {
         return withContext(Dispatchers.IO) {
-            Log.d(tag, "Starting full sync...")
+            Log.d(tag, "=== STARTING FULL SYNC ===")
+            Log.d(tag, "Server URL: ${NetworkModule.getCurrentBaseUrl()}")
             
             val result = SyncResult()
             
             // Проверяем соединение
+            Log.d(tag, "Checking server connection...")
             result.serverConnected = checkServerConnection()
             if (!result.serverConnected) {
                 Log.w(tag, "Server not available, skipping sync")
                 return@withContext result
             }
+            Log.d(tag, "Server connection: OK")
             
             // Синхронизируем данные
+            Log.d(tag, "Starting armature coords sync...")
             result.armatureCoordsSynced = syncArmatureCoords(result)
+            Log.d(tag, "Armature coords sync result: ${result.armatureCoordsSynced}")
+            
+            Log.d(tag, "Starting Excel files sync...")
             result.excelFilesSynced = syncExcelFiles(result)
+            Log.d(tag, "Excel files sync result: ${result.excelFilesSynced}")
+            
+            Log.d(tag, "Starting PDF files sync...")
             result.pdfFilesSynced = syncPdfFiles(result)
+            Log.d(tag, "PDF files sync result: ${result.pdfFilesSynced}")
             
             result.overallSuccess = result.armatureCoordsSynced || result.excelFilesSynced || result.pdfFilesSynced
             
-            Log.d(tag, "Full sync completed: $result")
+            Log.d(tag, "=== FULL SYNC COMPLETED ===")
+            Log.d(tag, "Overall success: ${result.overallSuccess}")
+            Log.d(tag, "Updated files count: ${result.updatedFiles.size}")
+            Log.d(tag, "Updated files: ${result.updatedFiles}")
+            Log.d(tag, "Sync result: $result")
+            
             result
         }
     }

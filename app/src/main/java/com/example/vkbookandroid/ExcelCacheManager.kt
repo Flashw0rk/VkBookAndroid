@@ -36,13 +36,26 @@ class ExcelCacheManager(private val context: Context) {
 
     private fun rootDir(): File = File(context.filesDir, "excel_cache").apply { mkdirs() }
 
-    fun datasetDir(relativePath: String, sheetName: String): File =
-        File(rootDir(), (relativePath + "::" + sheetName).replace('/', '_')).apply { mkdirs() }
+    fun datasetDir(relativePath: String, sheetName: String): File {
+        val dir = File(rootDir(), (relativePath + "::" + sheetName).replace('/', '_'))
+        if (!dir.exists()) {
+            val created = dir.mkdirs()
+            Log.d("ExcelCacheManager", "Created dataset directory: ${dir.absolutePath}, success: $created")
+        }
+        return dir
+    }
 
     private fun manifestFile(dir: File): File = File(dir, "manifest.json")
     private fun headersFile(dir: File): File = File(dir, "headers.json")
     private fun widthsFile(dir: File): File = File(dir, "widths.json")
-    private fun pagesDir(dir: File): File = File(dir, "pages").apply { mkdirs() }
+    private fun pagesDir(dir: File): File {
+        val pagesDir = File(dir, "pages")
+        if (!pagesDir.exists()) {
+            val created = pagesDir.mkdirs()
+            Log.d("ExcelCacheManager", "Created pages directory: ${pagesDir.absolutePath}, success: $created")
+        }
+        return pagesDir
+    }
 
     fun hasCache(relativePath: String, sheetName: String): Boolean {
         val dir = datasetDir(relativePath, sheetName)
@@ -170,8 +183,12 @@ class ExcelCacheManager(private val context: Context) {
     ) {
         val dir = datasetDir(relativePath, sheetName)
         val tmpDir = File(dir.parentFile, dir.name + "_tmp").apply {
-            if (exists()) deleteRecursively()
-            mkdirs()
+            if (exists()) {
+                Log.d("ExcelCacheManager", "Removing existing tmp directory: ${absolutePath}")
+                deleteRecursively()
+            }
+            val created = mkdirs()
+            Log.d("ExcelCacheManager", "Created tmp directory: ${absolutePath}, success: $created")
         }
         val pages = pagesDir(tmpDir)
 
@@ -211,6 +228,13 @@ class ExcelCacheManager(private val context: Context) {
                 if (headerRow != null) {
                     for (cell in headerRow) headers.add(ExcelPagingSession.Companion.getCellValueAsString(cell, wb))
                 }
+                
+                // Убеждаемся, что директория существует перед записью файлов
+                if (!tmpDir.exists()) {
+                    Log.e("ExcelCacheManager", "Tmp directory does not exist: ${tmpDir.absolutePath}")
+                    throw IllegalStateException("Tmp directory does not exist: ${tmpDir.absolutePath}")
+                }
+                
                 headersFile(tmpDir).writeText(gson.toJson(headers))
 
                 val widths = LinkedHashMap<String, Int>()
@@ -253,6 +277,13 @@ class ExcelCacheManager(private val context: Context) {
                         taken++
                     }
                     val pageFile = File(pages, String.format("page_%05d.json", pageIndex))
+                    
+                    // Убеждаемся, что директория pages существует
+                    if (!pages.exists()) {
+                        Log.e("ExcelCacheManager", "Pages directory does not exist: ${pages.absolutePath}")
+                        throw IllegalStateException("Pages directory does not exist: ${pages.absolutePath}")
+                    }
+                    
                     pageFile.writeText(gson.toJson(rows))
                     pageIndex++
                     start += taken

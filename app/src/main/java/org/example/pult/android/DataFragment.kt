@@ -71,9 +71,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
                     // Save column widths to SharedPreferences and update adapter only on ACTION_UP or ACTION_CANCEL
                     if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                        val sharedPrefs = requireContext().getSharedPreferences("ColumnWidths", Context.MODE_PRIVATE)
-                        sharedPrefs.edit().putString("Oborudovanie_BSCHU.xlsx", Gson().toJson(currentColumnWidths)).apply()
-                        Log.d("DataFragment", "Column $headerName resized to $newWidth. Saved: $currentColumnWidths")
+                        com.example.vkbookandroid.utils.ColumnWidthManager.saveBschuColumnWidths(
+                            requireContext(), 
+                            currentColumnWidths, 
+                            "DataFragment"
+                        )
                         adapter.updateColumnWidths(columnIndex, newWidth, true) // Notify here for final update
                     }
                 }
@@ -83,8 +85,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         )
         recyclerView.adapter = adapter
         excelDataManager = AppExcelDataManager(requireContext().applicationContext)
-        val baseUrl = getString(com.example.vkbookandroid.R.string.remote_base_url)
-        val fileProvider: com.example.vkbookandroid.IFileProvider = if (baseUrl.isNotEmpty()) {
+        val baseUrl = com.example.vkbookandroid.ServerSettingsActivity.getCurrentServerUrl(requireContext())
+        val fileProvider: com.example.vkbookandroid.IFileProvider = if (baseUrl != "http://10.0.2.2:8082/") {
             com.example.vkbookandroid.RemoteFileProvider(requireContext(), baseUrl)
         } else {
             com.example.vkbookandroid.FileProvider(requireContext())
@@ -96,6 +98,10 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         setupSearch()
         setupToggleResizeModeButton()
         attachWidthAutoScaler()
+        
+        // Загружаем данные сразу при создании фрагмента
+        ensureDataLoaded()
+        
         return view
     }
 
@@ -234,9 +240,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
 
                 if (initialColumnWidths.isNotEmpty()) {
-                    val sharedPrefs = requireContext().getSharedPreferences("ColumnWidths", Context.MODE_PRIVATE)
-                    val type = object : TypeToken<MutableMap<String, Int>>() {}.type
-                    val savedColumnWidths: MutableMap<String, Int> = Gson().fromJson(sharedPrefs.getString("Oborudovanie_BSCHU.xlsx", null), type) ?: mutableMapOf()
+                    val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadBschuColumnWidths(requireContext()).toMutableMap()
                     
                     // Merge saved widths with initial widths
                     initialColumnWidths.forEach { (header, width) ->
@@ -370,8 +374,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
             }
 
             // Сохраняем
-            val sharedPrefs = requireContext().getSharedPreferences("ColumnWidths", Context.MODE_PRIVATE)
-            sharedPrefs.edit().putString("Oborudovanie_BSCHU.xlsx", Gson().toJson(currentColumnWidths)).apply()
+            com.example.vkbookandroid.utils.ColumnWidthManager.saveBschuColumnWidths(requireContext(), currentColumnWidths, "DataFragment")
         }
     }
 
@@ -419,8 +422,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     
     override fun getWatchedFilePath(): String? {
         return try {
-            val baseUrl = getString(com.example.vkbookandroid.R.string.remote_base_url)
-            if (baseUrl.isNotEmpty()) {
+            val baseUrl = com.example.vkbookandroid.ServerSettingsActivity.getCurrentServerUrl(requireContext())
+            if (baseUrl != "http://10.0.2.2:8082/") {
                 // Для удаленного режима - путь к файлу в data директории
                 val dataDir = requireContext().filesDir.resolve("data")
                 dataDir.resolve("Oborudovanie_BSCHU.xlsx").absolutePath

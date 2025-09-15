@@ -62,10 +62,19 @@
                         android:layout_marginBottom="8dp" />
 
                     <RadioButton
+                        android:id="@+id/radioInternet"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Интернет сервер (192.168.1.54:8082)"
+                        android:textSize="14sp"
+                        android:textColor="@color/black"
+                        android:layout_marginBottom="8dp" />
+
+                    <RadioButton
                         android:id="@+id/radioCustom"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Пользовательский сервер"
+                        android:text="Выбрать свой сервер"
                         android:textSize="14sp"
                         android:textColor="@color/black"
                         android:layout_marginBottom="16dp" />
@@ -99,7 +108,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="💡 Локальный сервер: для разработки на эмуляторе\n🌐 Пользовательский: для интернет-сервера"
+                    android:text="💡 Локальный: для разработки на эмуляторе\n🌐 Интернет: предустановленный сервер\n⚙️ Свой: введите любой адрес сервера"
                     android:textSize="12sp"
                     android:textColor="@color/gray"
                     android:background="@drawable/info_background"

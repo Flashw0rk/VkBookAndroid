@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.example.vkbookandroid.model.ArmatureCoordsData
 import com.example.vkbookandroid.model.ArmatureMarker
+import com.example.vkbookandroid.model.FileInfo
 import com.example.vkbookandroid.network.ArmatureApiService
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
@@ -189,13 +190,49 @@ class ArmatureRepository(
     suspend fun getPdfFilesFromServer(): List<String> {
         return withContext(Dispatchers.IO) {
             try {
+                Log.d("ArmatureRepository", "=== REQUESTING PDF FILES LIST ===")
+                Log.d("ArmatureRepository", "API service available: ${apiService != null}")
+                
                 val response = apiService?.getPdfFiles()
+                Log.d("ArmatureRepository", "PDF files response received")
+                Log.d("ArmatureRepository", "Response code: ${response?.code()}")
+                Log.d("ArmatureRepository", "Response message: ${response?.message()}")
+                Log.d("ArmatureRepository", "Response successful: ${response?.isSuccessful}")
+                
                 if (response?.isSuccessful == true) {
-                    response.body() ?: emptyList()
+                    val fileInfos = response.body() ?: emptyList()
+                    Log.d("ArmatureRepository", "=== PDF FILES LIST RECEIVED ===")
+                    Log.d("ArmatureRepository", "Files count: ${fileInfos.size}")
+                    Log.d("ArmatureRepository", "Files list: $fileInfos")
+                    
+                    if (fileInfos.isEmpty()) {
+                        Log.w("ArmatureRepository", "WARNING: Server returned empty PDF files list!")
+                    }
+                    
+                    // Извлекаем только имена файлов
+                    val filenames = fileInfos.map { it.filename }
+                    Log.d("ArmatureRepository", "Extracted filenames: $filenames")
+                    
+                    filenames
                 } else {
+                    Log.e("ArmatureRepository", "=== PDF FILES LIST REQUEST FAILED ===")
+                    Log.e("ArmatureRepository", "Response code: ${response?.code()}")
+                    Log.e("ArmatureRepository", "Response message: ${response?.message()}")
+                    
+                    // Пытаемся прочитать тело ошибки
+                    try {
+                        val errorBody = response?.errorBody()?.string()
+                        Log.e("ArmatureRepository", "Error body: $errorBody")
+                    } catch (e: Exception) {
+                        Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
+                    }
+                    
                     emptyList()
                 }
             } catch (e: Exception) {
+                Log.e("ArmatureRepository", "=== PDF FILES LIST EXCEPTION ===", e)
+                Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
+                Log.e("ArmatureRepository", "Exception message: ${e.message}")
                 e.printStackTrace()
                 emptyList()
             }
@@ -208,19 +245,51 @@ class ArmatureRepository(
     suspend fun getExcelFilesFromServer(): List<String> {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d("ArmatureRepository", "Requesting Excel files list from server...")
+                Log.d("ArmatureRepository", "=== REQUESTING EXCEL FILES LIST ===")
+                Log.d("ArmatureRepository", "API service available: ${apiService != null}")
+                
                 val response = apiService?.getExcelFiles()
-                Log.d("ArmatureRepository", "Excel files response: ${response?.code()}, success: ${response?.isSuccessful}")
+                Log.d("ArmatureRepository", "Excel files response received")
+                Log.d("ArmatureRepository", "Response code: ${response?.code()}")
+                Log.d("ArmatureRepository", "Response message: ${response?.message()}")
+                Log.d("ArmatureRepository", "Response successful: ${response?.isSuccessful}")
+                Log.d("ArmatureRepository", "Response headers: ${response?.headers()}")
+                
                 if (response?.isSuccessful == true) {
-                    val files = response.body() ?: emptyList()
-                    Log.d("ArmatureRepository", "Received Excel files: $files")
-                    files
+                    val fileInfos = response.body() ?: emptyList()
+                    Log.d("ArmatureRepository", "=== EXCEL FILES LIST RECEIVED ===")
+                    Log.d("ArmatureRepository", "Files count: ${fileInfos.size}")
+                    Log.d("ArmatureRepository", "Files list: $fileInfos")
+                    
+                    if (fileInfos.isEmpty()) {
+                        Log.w("ArmatureRepository", "WARNING: Server returned empty Excel files list!")
+                    }
+                    
+                    // Извлекаем только имена файлов
+                    val filenames = fileInfos.map { it.filename }
+                    Log.d("ArmatureRepository", "Extracted filenames: $filenames")
+                    
+                    filenames
                 } else {
-                    Log.w("ArmatureRepository", "Failed to get Excel files: ${response?.code()}")
+                    Log.e("ArmatureRepository", "=== EXCEL FILES LIST REQUEST FAILED ===")
+                    Log.e("ArmatureRepository", "Response code: ${response?.code()}")
+                    Log.e("ArmatureRepository", "Response message: ${response?.message()}")
+                    
+                    // Пытаемся прочитать тело ошибки
+                    try {
+                        val errorBody = response?.errorBody()?.string()
+                        Log.e("ArmatureRepository", "Error body: $errorBody")
+                    } catch (e: Exception) {
+                        Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
+                    }
+                    
                     emptyList()
                 }
             } catch (e: Exception) {
-                Log.e("ArmatureRepository", "Error getting Excel files from server", e)
+                Log.e("ArmatureRepository", "=== EXCEL FILES LIST EXCEPTION ===", e)
+                Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
+                Log.e("ArmatureRepository", "Exception message: ${e.message}")
+                e.printStackTrace()
                 emptyList()
             }
         }
@@ -293,15 +362,56 @@ class ArmatureRepository(
     suspend fun downloadPdfFile(filename: String): okhttp3.ResponseBody? {
         return withContext(Dispatchers.IO) {
             try {
+                Log.d("ArmatureRepository", "=== DOWNLOADING PDF FILE: $filename ===")
+                Log.d("ArmatureRepository", "Making API request to server...")
+                
                 val response = apiService?.downloadPdf(filename)
+                Log.d("ArmatureRepository", "PDF response received")
+                Log.d("ArmatureRepository", "Response code: ${response?.code()}")
+                Log.d("ArmatureRepository", "Response message: ${response?.message()}")
+                Log.d("ArmatureRepository", "Response successful: ${response?.isSuccessful}")
+                Log.d("ArmatureRepository", "Response headers: ${response?.headers()}")
+                
                 if (response?.isSuccessful == true) {
-                    response.body()
+                    val body = response.body()
+                    if (body != null) {
+                        Log.d("ArmatureRepository", "PDF response body received successfully")
+                        Log.d("ArmatureRepository", "Body content length: ${body.contentLength()} bytes")
+                        Log.d("ArmatureRepository", "Body content type: ${body.contentType()}")
+                        
+                        // Проверяем, что файл не пустой
+                        if (body.contentLength() == 0L) {
+                            Log.e("ArmatureRepository", "ERROR: Server returned empty PDF file for $filename")
+                        } else if (body.contentLength() < 1000L) {
+                            Log.w("ArmatureRepository", "WARNING: Server returned very small PDF file for $filename (${body.contentLength()} bytes)")
+                        }
+                        
+                        return@withContext body
+                    } else {
+                        Log.e("ArmatureRepository", "ERROR: PDF response body is null for $filename")
+                        return@withContext null
+                    }
                 } else {
-                    null
+                    Log.w("ArmatureRepository", "Failed to download PDF: $filename")
+                    Log.w("ArmatureRepository", "Response code: ${response?.code()}")
+                    Log.w("ArmatureRepository", "Response message: ${response?.message()}")
+                    
+                    // Пытаемся прочитать тело ошибки
+                    try {
+                        val errorBody = response?.errorBody()?.string()
+                        Log.w("ArmatureRepository", "Error body: $errorBody")
+                    } catch (e: Exception) {
+                        Log.w("ArmatureRepository", "Could not read error body: ${e.message}")
+                    }
+                    
+                    return@withContext null
                 }
             } catch (e: Exception) {
+                Log.e("ArmatureRepository", "Exception while downloading PDF file: $filename", e)
+                Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
+                Log.e("ArmatureRepository", "Exception message: ${e.message}")
                 e.printStackTrace()
-                null
+                return@withContext null
             }
         }
     }

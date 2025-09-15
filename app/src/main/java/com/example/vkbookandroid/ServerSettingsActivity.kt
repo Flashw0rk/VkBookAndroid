@@ -18,6 +18,7 @@ class ServerSettingsActivity : AppCompatActivity() {
     
     private lateinit var radioGroup: RadioGroup
     private lateinit var radioLocal: RadioButton
+    private lateinit var radioInternet: RadioButton
     private lateinit var radioCustom: RadioButton
     private lateinit var editServerUrl: EditText
     private lateinit var btnSave: Button
@@ -32,7 +33,29 @@ class ServerSettingsActivity : AppCompatActivity() {
         private const val KEY_CUSTOM_URL = "custom_url"
         
         const val MODE_LOCAL = "local"
+        const val MODE_INTERNET = "internet"
         const val MODE_CUSTOM = "custom"
+        
+        /**
+         * Получить текущий URL сервера из настроек
+         */
+        fun getCurrentServerUrl(context: Context): String {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val serverMode = prefs.getString(KEY_SERVER_MODE, MODE_LOCAL) ?: MODE_LOCAL
+            val customUrl = prefs.getString(KEY_CUSTOM_URL, "") ?: ""
+            
+            val resolvedUrl = when (serverMode) {
+                MODE_LOCAL -> "http://10.0.2.2:8082/"
+                MODE_INTERNET -> "http://192.168.1.54:8082/"
+                MODE_CUSTOM -> if (customUrl.isNotBlank()) {
+                    if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
+                } else "http://10.0.2.2:8082/"
+                else -> "http://10.0.2.2:8082/"
+            }
+            
+            android.util.Log.d("ServerSettingsActivity", "getCurrentServerUrl called. Mode: $serverMode, Custom URL: '$customUrl', Resolved URL: '$resolvedUrl'")
+            return resolvedUrl
+        }
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,6 +78,7 @@ class ServerSettingsActivity : AppCompatActivity() {
     private fun initViews() {
         radioGroup = findViewById(R.id.radioGroupServerMode)
         radioLocal = findViewById(R.id.radioLocal)
+        radioInternet = findViewById(R.id.radioInternet)
         radioCustom = findViewById(R.id.radioCustom)
         editServerUrl = findViewById(R.id.editServerUrl)
         btnSave = findViewById(R.id.btnSaveSettings)
@@ -72,6 +96,11 @@ class ServerSettingsActivity : AppCompatActivity() {
                 editServerUrl.isEnabled = false
                 editServerUrl.setText("http://10.0.2.2:8082/")
             }
+            MODE_INTERNET -> {
+                radioInternet.isChecked = true
+                editServerUrl.isEnabled = false
+                editServerUrl.setText("http://192.168.1.54:8082/")
+            }
             MODE_CUSTOM -> {
                 radioCustom.isChecked = true
                 editServerUrl.isEnabled = true
@@ -87,6 +116,10 @@ class ServerSettingsActivity : AppCompatActivity() {
                 R.id.radioLocal -> {
                     editServerUrl.isEnabled = false
                     editServerUrl.setText("http://10.0.2.2:8082/")
+                }
+                R.id.radioInternet -> {
+                    editServerUrl.isEnabled = false
+                    editServerUrl.setText("http://192.168.1.54:8082/")
                 }
                 R.id.radioCustom -> {
                     editServerUrl.isEnabled = true
@@ -114,7 +147,12 @@ class ServerSettingsActivity : AppCompatActivity() {
     }
     
     private fun saveSettings() {
-        val serverMode = if (radioLocal.isChecked) MODE_LOCAL else MODE_CUSTOM
+        val serverMode = when {
+            radioLocal.isChecked -> MODE_LOCAL
+            radioInternet.isChecked -> MODE_INTERNET
+            radioCustom.isChecked -> MODE_CUSTOM
+            else -> MODE_LOCAL
+        }
         val customUrl = editServerUrl.text.toString().trim()
         
         // Валидация URL
@@ -144,11 +182,18 @@ class ServerSettingsActivity : AppCompatActivity() {
     }
     
     private fun testConnection() {
-        val serverMode = if (radioLocal.isChecked) MODE_LOCAL else MODE_CUSTOM
-        val testUrl = if (serverMode == MODE_LOCAL) {
-            "http://10.0.2.2:8082/"
-        } else {
-            editServerUrl.text.toString().trim()
+        val serverMode = when {
+            radioLocal.isChecked -> MODE_LOCAL
+            radioInternet.isChecked -> MODE_INTERNET
+            radioCustom.isChecked -> MODE_CUSTOM
+            else -> MODE_LOCAL
+        }
+        
+        val testUrl = when (serverMode) {
+            MODE_LOCAL -> "http://10.0.2.2:8082/"
+            MODE_INTERNET -> "http://192.168.1.54:8082/"
+            MODE_CUSTOM -> editServerUrl.text.toString().trim()
+            else -> "http://10.0.2.2:8082/"
         }
         
         if (serverMode == MODE_CUSTOM && testUrl.isEmpty()) {
@@ -168,9 +213,13 @@ class ServerSettingsActivity : AppCompatActivity() {
         // Тестируем подключение в фоновом потоке
         Thread {
             try {
+                android.util.Log.d("ServerSettings", "Testing connection to: $testUrl")
+                
                 val success = kotlinx.coroutines.runBlocking {
                     NetworkModule.testConnection(testUrl)
                 }
+                
+                android.util.Log.d("ServerSettings", "Connection test result: $success")
                 
                 runOnUiThread {
                     btnTest.isEnabled = true
@@ -178,15 +227,18 @@ class ServerSettingsActivity : AppCompatActivity() {
                     
                     if (success) {
                         Toast.makeText(this, "Подключение успешно!", Toast.LENGTH_SHORT).show()
+                        android.util.Log.d("ServerSettings", "Connection test successful")
                     } else {
                         Toast.makeText(this, "Ошибка подключения", Toast.LENGTH_SHORT).show()
+                        android.util.Log.d("ServerSettings", "Connection test failed")
                     }
                 }
             } catch (e: Exception) {
+                android.util.Log.e("ServerSettings", "Connection test exception: ${e.message}", e)
                 runOnUiThread {
                     btnTest.isEnabled = true
                     btnTest.text = "Тест подключения"
-                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -198,7 +250,10 @@ class ServerSettingsActivity : AppCompatActivity() {
         
         val baseUrl = when (serverMode) {
             MODE_LOCAL -> "http://10.0.2.2:8082/"
-            MODE_CUSTOM -> customUrl
+            MODE_INTERNET -> "http://192.168.1.54:8082/"
+            MODE_CUSTOM -> if (customUrl.isNotBlank()) {
+                if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
+            } else "http://10.0.2.2:8082/"
             else -> "http://10.0.2.2:8082/"
         }
         
@@ -244,18 +299,4 @@ class ServerSettingsActivity : AppCompatActivity() {
         }
     }
     
-    /**
-     * Получить текущий URL сервера из настроек
-     */
-    fun getCurrentServerUrl(context: Context): String {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val serverMode = prefs.getString(KEY_SERVER_MODE, MODE_LOCAL) ?: MODE_LOCAL
-        val customUrl = prefs.getString(KEY_CUSTOM_URL, "") ?: ""
-        
-        return when (serverMode) {
-            MODE_LOCAL -> "http://10.0.2.2:8082/"
-            MODE_CUSTOM -> customUrl
-            else -> "http://10.0.2.2:8082/"
-        }
-    }
 }

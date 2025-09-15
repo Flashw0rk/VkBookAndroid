@@ -53,12 +53,25 @@ object NetworkModule {
                     "localhost",
                     "10.0.2.2", // Эмулятор Android
                     "127.0.0.1",
+                    "192.168.1.54", // Интернет сервер
                     "192.168.1.", // Локальная сеть (начинается с)
                     "192.168.0.", // Локальная сеть (начинается с)
                     "10.0.0.", // Локальная сеть (начинается с)
                     "172.16.", // Локальная сеть (начинается с)
                     "your-server-domain.com" // Замените на ваш реальный домен
                 )
+                
+                // Для пользовательских серверов - более мягкая проверка
+                val isCustomServer = currentBaseUrl.contains("192.168.") || 
+                                   currentBaseUrl.contains("10.0.") || 
+                                   currentBaseUrl.contains("172.16.") ||
+                                   currentBaseUrl.contains("localhost") ||
+                                   currentBaseUrl.contains("127.0.0.1")
+                
+                if (isCustomServer) {
+                    android.util.Log.d("NetworkModule", "Custom server detected: $hostname - allowing connection")
+                    return@hostnameVerifier true
+                }
                 
                 // Проверяем, является ли хост доверенным
                 val isTrusted = trustedHosts.any { trustedHost ->
@@ -110,6 +123,7 @@ object NetworkModule {
      * Обновить базовый URL сервера
      */
     fun updateBaseUrl(newBaseUrl: String) {
+        android.util.Log.d("NetworkModule", "updateBaseUrl called. Old URL: '$currentBaseUrl', New URL: '$newBaseUrl'")
         currentBaseUrl = newBaseUrl
         retrofit = Retrofit.Builder()
             .baseUrl(currentBaseUrl)
@@ -117,6 +131,7 @@ object NetworkModule {
             .addConverterFactory(GsonConverterFactory.create())
             .build()
         armatureApiService = retrofit.create(ArmatureApiService::class.java)
+        android.util.Log.d("NetworkModule", "NetworkModule updated with new base URL: '$currentBaseUrl'")
     }
     
     /**
@@ -125,20 +140,176 @@ object NetworkModule {
     fun getCurrentBaseUrl(): String = currentBaseUrl
     
     /**
+     * Получить текущий базовый URL (для доступа из других классов)
+     */
+    val baseUrl: String get() = currentBaseUrl
+    
+    /**
      * Тестировать подключение к серверу
      */
     suspend fun testConnection(url: String): Boolean {
         return try {
+            android.util.Log.d("NetworkModule", "Testing connection to: $url")
+            
+            // Создаем специальный клиент для тестирования с обновленным hostnameVerifier
+            val testOkHttpClient = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .writeTimeout(10, TimeUnit.SECONDS)
+                .addInterceptor(HttpLoggingInterceptor().apply {
+                    level = HttpLoggingInterceptor.Level.BODY
+                })
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    android.util.Log.d("NetworkModule", "Making request to: ${request.url}")
+                    android.util.Log.d("NetworkModule", "Request method: ${request.method}")
+                    android.util.Log.d("NetworkModule", "Request headers: ${request.headers}")
+                    
+                    try {
+                        val response = chain.proceed(request)
+                        android.util.Log.d("NetworkModule", "Response code: ${response.code}")
+                        android.util.Log.d("NetworkModule", "Response headers: ${response.headers}")
+                        response
+                    } catch (e: Exception) {
+                        android.util.Log.e("NetworkModule", "Request failed: ${e.message}", e)
+                        throw e
+                    }
+                }
+                // Специальный hostnameVerifier для тестирования
+                .hostnameVerifier { hostname, session ->
+                    try {
+                        android.util.Log.d("NetworkModule", "Testing hostname verification for: $hostname")
+                        
+                        // Список доверенных хостов для тестирования
+                        val trustedHosts = listOf(
+                            "localhost",
+                            "10.0.2.2", // Эмулятор Android
+                            "127.0.0.1",
+                            "192.168.1.54", // Интернет сервер
+                            "192.168.1.", // Локальная сеть (начинается с)
+                            "192.168.0.", // Локальная сеть (начинается с)
+                            "10.0.0.", // Локальная сеть (начинается с)
+                            "172.16." // Локальная сеть (начинается с)
+                        )
+                        
+                        // Для пользовательских серверов - более мягкая проверка
+                        val isCustomServer = url.contains("192.168.") || 
+                                           url.contains("10.0.") || 
+                                           url.contains("172.16.") ||
+                                           url.contains("localhost") ||
+                                           url.contains("127.0.0.1")
+                        
+                        if (isCustomServer) {
+                            android.util.Log.d("NetworkModule", "Custom server detected for testing: $hostname - allowing connection")
+                            return@hostnameVerifier true
+                        }
+                        
+                        // Проверяем, является ли хост доверенным
+                        val isTrusted = trustedHosts.any { trustedHost ->
+                            if (trustedHost.endsWith(".")) {
+                                // Для подсетей (например, "192.168.1.")
+                                hostname.startsWith(trustedHost)
+                            } else {
+                                // Для точных совпадений
+                                hostname.equals(trustedHost, ignoreCase = true)
+                            }
+                        }
+                        
+                        if (isTrusted) {
+                            android.util.Log.d("NetworkModule", "Trusted hostname for testing: $hostname")
+                            return@hostnameVerifier true
+                        }
+                        
+                        // Для остальных хостов используем стандартную проверку
+                        val defaultVerifier = javax.net.ssl.HttpsURLConnection.getDefaultHostnameVerifier()
+                        val result = defaultVerifier.verify(hostname, session)
+                        android.util.Log.d("NetworkModule", "Default verification for testing $hostname: $result")
+                        result
+                        
+                    } catch (e: Exception) {
+                        android.util.Log.w("NetworkModule", "SSL verification failed for testing hostname: $hostname", e)
+                        // В случае ошибки разрешаем подключение для локальных адресов
+                        hostname.contains("localhost") || hostname.contains("127.0.0.1") || hostname.contains("192.168.") || hostname.contains("10.0.")
+                    }
+                }
+                .build()
+            
+            // Попробуем простой HTTP запрос напрямую сначала
+            try {
+                android.util.Log.d("NetworkModule", "Trying direct HTTP request to: $url")
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .get()
+                    .build()
+                
+                val response = testOkHttpClient.newCall(request).execute()
+                android.util.Log.d("NetworkModule", "Direct HTTP response: ${response.code} - ${response.message}")
+                
+                if (response.isSuccessful) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via direct HTTP request")
+                    response.close()
+                    return true
+                }
+                response.close()
+            } catch (e: Exception) {
+                android.util.Log.d("NetworkModule", "Direct HTTP request failed", e)
+            }
+            
+            // Если прямой запрос не сработал, пробуем через Retrofit
             val testRetrofit = Retrofit.Builder()
                 .baseUrl(url)
-                .client(okHttpClient)
+                .client(testOkHttpClient)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()
             
             val testService = testRetrofit.create(ArmatureApiService::class.java)
-            val response = testService.getHealth()
-            response.isSuccessful
+            
+            // Пробуем несколько endpoints для тестирования
+            try {
+                // Сначала пробуем корневой endpoint
+                android.util.Log.d("NetworkModule", "Trying root endpoint: $url")
+                val rootResponse = testService.getRoot()
+                if (rootResponse.isSuccessful) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via root endpoint")
+                    return true
+                }
+                android.util.Log.d("NetworkModule", "Root endpoint response: ${rootResponse.code()} - ${rootResponse.message()}")
+            } catch (e: Exception) {
+                android.util.Log.d("NetworkModule", "Root endpoint failed, trying health endpoint", e)
+            }
+            
+            // Если корневой не работает, пробуем health endpoint
+            try {
+                android.util.Log.d("NetworkModule", "Trying health endpoint: ${url}actuator/health")
+                val healthResponse = testService.getHealth()
+                if (healthResponse.isSuccessful) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via health endpoint")
+                    return true
+                }
+                android.util.Log.d("NetworkModule", "Health endpoint response: ${healthResponse.code()} - ${healthResponse.message()}")
+            } catch (e: Exception) {
+                android.util.Log.d("NetworkModule", "Health endpoint failed, trying info endpoint", e)
+            }
+            
+            // Если health не работает, пробуем info endpoint
+            try {
+                android.util.Log.d("NetworkModule", "Trying info endpoint: ${url}actuator/info")
+                val infoResponse = testService.getInfo()
+                if (infoResponse.isSuccessful) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via info endpoint")
+                    return true
+                }
+                android.util.Log.d("NetworkModule", "Info endpoint response: ${infoResponse.code()} - ${infoResponse.message()}")
+            } catch (e: Exception) {
+                android.util.Log.d("NetworkModule", "Info endpoint failed", e)
+            }
+            
+            // Если все endpoints не работают, но нет исключений - сервер отвечает
+            android.util.Log.d("NetworkModule", "Connection test: server responds but endpoints not available")
+            false
+            
         } catch (e: Exception) {
+            android.util.Log.e("NetworkModule", "Connection test failed: ${e.message}", e)
             false
         }
     }

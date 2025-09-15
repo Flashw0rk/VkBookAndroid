@@ -62,9 +62,11 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 currentColumnWidths[headerName] = newWidth
                 adapter.updateColumnWidths(columnIndex, newWidth, false)
                 if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    val sharedPrefs = requireContext().getSharedPreferences("ColumnWidthsArmature", Context.MODE_PRIVATE)
-                    sharedPrefs.edit().putString("Armatures.xlsx", Gson().toJson(currentColumnWidths)).apply()
-                    Log.d("ArmatureFragment", "Column $headerName resized to $newWidth. Saved: $currentColumnWidths")
+                    com.example.vkbookandroid.utils.ColumnWidthManager.saveArmatureColumnWidths(
+                        requireContext(), 
+                        currentColumnWidths, 
+                        "ArmatureFragment"
+                    )
                     adapter.updateColumnWidths(columnIndex, newWidth, true)
                 }
             }
@@ -79,18 +81,27 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             // Поддерживаем два формата: "Имя.pdf#ID" и просто "Имя.pdf" (тогда ID берём из ячейки Арматура)
             val armatureIdx = headers.indexOfFirst { it.equals("Арматура", ignoreCase = true) }
             val armatureId = if (armatureIdx >= 0 && armatureIdx < values.size) values[armatureIdx]?.trim() else null
-            val pdfDesignationPattern = Regex("(?i)([^\\s;|#]+\\.pdf)(?:[#;|\\s]+(.+))?")
+            val pdfDesignationPattern = Regex("(?i)(.+?\\.pdf)(?:[#;|\\s]+(.+))?")
             val match = pdfDesignationPattern.find(cell)
             val pdfName = match?.groupValues?.getOrNull(1)
             val parsedId = match?.groupValues?.getOrNull(2)?.trim()?.trim('-', ' ', ';', '|', '#')
             val designation: String? = if (!parsedId.isNullOrBlank()) parsedId else armatureId
 
             if (!pdfName.isNullOrBlank() && !designation.isNullOrBlank()) {
+                val pdfPath = "Schemes/$pdfName"
+                Log.d("ArmatureFragment", "=== OPENING SCHEME FROM ROW CLICK ===")
+                Log.d("ArmatureFragment", "Original cell: '$cell'")
+                Log.d("ArmatureFragment", "Extracted PDF name: '$pdfName'")
+                Log.d("ArmatureFragment", "Extracted designation: '$designation'")
+                Log.d("ArmatureFragment", "Final PDF path: '$pdfPath'")
+                
                 val intent = android.content.Intent(requireContext(), PdfViewerActivity::class.java).apply {
-                    putExtra("pdf_path", "Schemes/$pdfName")
+                    putExtra("pdf_path", pdfPath)
                     putExtra("designation", designation)
                 }
                 startActivity(intent)
+            } else {
+                Log.w("ArmatureFragment", "Cannot open scheme: pdfName='$pdfName', designation='$designation'")
             }
         }, onArmatureCellClick = { row ->
             // Клик по названию арматуры: ищем PDF/ID из столбца PDF_Схема_и_ID_арматуры в той же строке
@@ -102,14 +113,24 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             // Берём ID из той же строки в колонке "Арматура" при отсутствии ID после имени PDF
             val idxArm = headers.indexOfFirst { it.equals("Арматура", ignoreCase = true) }
             val armId = if (idxArm >= 0 && idxArm < values.size) values[idxArm]?.trim() else null
-            val pattern = Regex("(?i)([^\\s;|#]+\\.pdf)(?:[#;|\\s]+(.+))?")
+            val pattern = Regex("(?i)(.+?\\.pdf)(?:[#;|\\s]+(.+))?")
             val match = pattern.find(cell)
             val pdfName = match?.groupValues?.getOrNull(1)
             val parsedId = match?.groupValues?.getOrNull(2)?.trim()?.trim('-', ' ', ';', '|', '#')
             val designation: String? = if (!parsedId.isNullOrBlank()) parsedId else armId
-            if (pdfName.isNullOrBlank() || designation.isNullOrBlank()) return@SignalsAdapter
+            if (pdfName.isNullOrBlank() || designation.isNullOrBlank()) {
+                Log.w("ArmatureFragment", "Cannot open scheme from armature cell: pdfName='$pdfName', designation='$designation'")
+                return@SignalsAdapter
+            }
+            val pdfPath = "Schemes/$pdfName"
+            Log.d("ArmatureFragment", "=== OPENING SCHEME FROM ARMATURE CELL CLICK ===")
+            Log.d("ArmatureFragment", "Original cell: '$cell'")
+            Log.d("ArmatureFragment", "Extracted PDF name: '$pdfName'")
+            Log.d("ArmatureFragment", "Extracted designation: '$designation'")
+            Log.d("ArmatureFragment", "Final PDF path: '$pdfPath'")
+            
             val intent = android.content.Intent(requireContext(), PdfViewerActivity::class.java).apply {
-                putExtra("pdf_path", "Schemes/$pdfName")
+                putExtra("pdf_path", pdfPath)
                 putExtra("designation", designation)
             }
             startActivity(intent)
@@ -129,20 +150,23 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
         view.isSoundEffectsEnabled = false
         
         excelDataManager = AppExcelDataManager(requireContext().applicationContext)
-        val baseUrl = getString(R.string.remote_base_url)
-        val fileProvider: IFileProvider = if (baseUrl.isNotEmpty()) {
+        val baseUrl = ServerSettingsActivity.getCurrentServerUrl(requireContext())
+        val fileProvider: IFileProvider = if (baseUrl != "http://10.0.2.2:8082/") {
             RemoteFileProvider(requireContext(), baseUrl)
         } else {
             FileProvider(requireContext())
         }
         excelRepository = ExcelRepository(requireContext(), fileProvider)
-        armatureRepository = com.example.vkbookandroid.repository.ArmatureRepository(requireContext())
+        armatureRepository = com.example.vkbookandroid.repository.ArmatureRepository(requireContext(), com.example.vkbookandroid.network.NetworkModule.getArmatureApiService())
         searchView = view.findViewById(R.id.search_view)
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
 
         setupSearch()
         setupToggleResizeModeButton()
         attachWidthAutoScaler()
+        
+        // Загружаем данные сразу при создании фрагмента
+        ensureDataLoaded()
     }
 
     override fun onResume() {
@@ -183,9 +207,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
 
                 if (initialColumnWidths.isNotEmpty()) {
-                    val sharedPrefs = ctx.getSharedPreferences("ColumnWidthsArmature", Context.MODE_PRIVATE)
-                    val type = object : TypeToken<MutableMap<String, Int>>() {}.type
-                    val savedColumnWidths: MutableMap<String, Int> = Gson().fromJson(sharedPrefs.getString("Armatures.xlsx", null), type) ?: mutableMapOf()
+                    val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadArmatureColumnWidths(ctx).toMutableMap()
                     initialColumnWidths.forEach { (header, width) ->
                         if (!savedColumnWidths.containsKey(header) || savedColumnWidths[header] == null) {
                             savedColumnWidths[header] = width
@@ -311,8 +333,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 adapter.updateColumnWidths(idx, newWForCol, notify)
             }
 
-            val sharedPrefs = requireContext().getSharedPreferences("ColumnWidthsArmature", Context.MODE_PRIVATE)
-            sharedPrefs.edit().putString("Armatures.xlsx", Gson().toJson(currentColumnWidths)).apply()
+            com.example.vkbookandroid.utils.ColumnWidthManager.saveArmatureColumnWidths(requireContext(), currentColumnWidths, "ArmatureFragment")
         }
     }
 
@@ -419,8 +440,8 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
     
     override fun getWatchedFilePath(): String? {
         return try {
-            val baseUrl = getString(R.string.remote_base_url)
-            if (baseUrl.isNotEmpty()) {
+            val baseUrl = ServerSettingsActivity.getCurrentServerUrl(requireContext())
+            if (baseUrl != "http://10.0.2.2:8082/") {
                 // Для удаленного режима - путь к файлу в data директории
                 val dataDir = requireContext().filesDir.resolve("data")
                 dataDir.resolve("Armatures.xlsx").absolutePath
