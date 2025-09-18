@@ -181,7 +181,32 @@ class MainActivity : AppCompatActivity() {
         }
         
         btnSettings.setOnLongClickListener {
-            Toast.makeText(this, "Настройки сервера", Toast.LENGTH_SHORT).show()
+            // Длинное нажатие - запускаем тестирование путей к файлам
+            uiScope.launch {
+                updateSyncStatus("Тестирование путей...")
+                val pathTester = com.example.vkbookandroid.service.ServerPathTester(this@MainActivity)
+                val results = withContext(Dispatchers.IO) {
+                    pathTester.testAllUpdatesPaths()
+                }
+                
+                if (results.isNotEmpty()) {
+                    updateSyncStatus("Найдены рабочие пути!")
+                    val message = "Найдено ${results.size} рабочих путей:\n" + 
+                                 results.take(5).joinToString("\n") { "• ${it.path}" }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                    
+                    Log.d("MainActivity", "=== WORKING PATHS FOUND ===")
+                    results.forEach { result ->
+                        Log.d("MainActivity", "Path: ${result.path}")
+                        Log.d("MainActivity", "URL: ${result.url}")
+                        Log.d("MainActivity", "Response: ${result.responseCode}")
+                        Log.d("MainActivity", "Content: ${result.contentType}")
+                    }
+                } else {
+                    updateSyncStatus("Пути не найдены")
+                    Toast.makeText(this@MainActivity, "Рабочие пути к файлам не найдены", Toast.LENGTH_SHORT).show()
+                }
+            }
             true
         }
     }
@@ -197,6 +222,7 @@ class MainActivity : AppCompatActivity() {
     
     private fun loadServerSettings() {
         val currentUrl = ServerSettingsActivity.getCurrentServerUrl(this)
+        android.util.Log.d("MainActivity", "loadServerSettings: currentUrl=$currentUrl")
         NetworkModule.updateBaseUrl(currentUrl)
     }
     
@@ -229,7 +255,8 @@ class MainActivity : AppCompatActivity() {
         uiScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    syncService.syncAll()
+                    // Сначала пробуем синхронизацию через updates
+                    syncService.syncUpdatesFiles()
                 }
                 
                 when {
@@ -312,32 +339,65 @@ class MainActivity : AppCompatActivity() {
                     updateSyncStatus("Приложение готово")
                 }
                 
-                // Создаем тестовые файлы, если их нет
-                // Временно отключено для диагностики проблем со сборкой
-                /*
+                // Создаем Excel файлы, если их нет
                 val dataDir = filesDir.resolve("data")
                 val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
                 val armaturesFile = dataDir.resolve("Armatures.xlsx")
                 
                 if (!bschuFile.exists() || !armaturesFile.exists()) {
-                    updateSyncStatus("Создание тестовых файлов...")
-                    withContext(Dispatchers.IO) {
-                        TestDataCreator.createTestExcelFiles(this@MainActivity)
+                    updateSyncStatus("Создание Excel файлов...")
+                    val created = withContext(Dispatchers.IO) {
+                        com.example.vkbookandroid.utils.ExcelFileCreator.createExcelFilesInDataDir(this@MainActivity)
                     }
-                    updateSyncStatus("Тестовые файлы созданы")
+                    if (created) {
+                        updateSyncStatus("Excel файлы созданы")
+                        Log.i("MainActivity", "Successfully created missing Excel files")
+                    } else {
+                        updateSyncStatus("Ошибка создания файлов")
+                        Log.e("MainActivity", "Failed to create Excel files")
+                    }
                 }
-                */
                 
-                // Проверяем доступность сервера
+                // Проверяем доступность сервера и тестируем различные пути
                 val isServerAvailable = withContext(Dispatchers.IO) {
-                    syncService.checkServerConnection()
+                    val connectionOk = syncService.checkServerConnection()
+                    
+                    if (connectionOk) {
+                        // Тестируем различные варианты доступа к файлам
+                        Log.d("MainActivity", "Testing different file access methods...")
+                        val directAccessService = com.example.vkbookandroid.service.DirectFileAccessService(this@MainActivity)
+                        val accessResult = directAccessService.tryDifferentFileAccess()
+                        
+                        if (accessResult.hasWorkingPaths()) {
+                            Log.d("MainActivity", "Found working file paths!")
+                            Log.d("MainActivity", "Working paths: ${accessResult.workingPaths}")
+                            
+                            // Пробуем скачать найденные файлы
+                            accessResult.workingPaths.forEach { (filename, path) ->
+                                try {
+                                    val downloaded = directAccessService.downloadFileByWorkingPath(filename, path)
+                                    if (downloaded) {
+                                        Log.d("MainActivity", "Successfully downloaded: $filename")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("MainActivity", "Failed to download $filename", e)
+                                }
+                            }
+                        } else {
+                            Log.w("MainActivity", "No working file paths found")
+                        }
+                        
+                        if (accessResult.hasListingEndpoints()) {
+                            Log.d("MainActivity", "Found working listing endpoints!")
+                            Log.d("MainActivity", "Listing endpoints: ${accessResult.workingListingEndpoints}")
+                        }
+                    }
+                    
+                    connectionOk
                 }
                 
                 if (isServerAvailable) {
                     updateSyncStatus("Готов к обновлению")
-                    // Можно добавить автоматическую синхронизацию здесь
-                    // val result = withContext(Dispatchers.IO) { syncService.syncAll() }
-                    // if (result.overallSuccess) { refreshFragmentsData() }
                 } else {
                     updateSyncStatus("Сервер недоступен")
                 }
@@ -405,12 +465,9 @@ class MainActivity : AppCompatActivity() {
     private fun setupFileWatching() {
         Log.d("MainActivity", "Setting up file watching for automatic data refresh")
         
-        // Отслеживаем файлы только в удаленном режиме
+        // Отслеживаем файлы для удаленного сервера
         val baseUrl = ServerSettingsActivity.getCurrentServerUrl(this)
-        if (baseUrl == "http://10.0.2.2:8082/") {
-            Log.d("MainActivity", "Local mode - file watching disabled")
-            return
-        }
+        Log.d("MainActivity", "Server URL: $baseUrl")
         
         // Настраиваем отслеживание для DataFragment (Oborudovanie_BSCHU.xlsx)
         val bschuFilePath = filesDir.resolve("data").resolve("Oborudovanie_BSCHU.xlsx").absolutePath

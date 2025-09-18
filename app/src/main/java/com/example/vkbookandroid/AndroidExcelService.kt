@@ -24,127 +24,124 @@ class AndroidExcelService(private val context: Context) : ExcelDataManager.Excel
     private val DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy")
 
     override fun readHeaders(inputStream: InputStream, sheetName: String): List<String> {
-        return inputStream.use {
-            val headers = java.util.ArrayList<String>()
-            val workbook = XSSFWorkbook(it)
-            val sheet = workbook.getSheet(sheetName)
-            if (sheet == null) {
-                throw IOException("Лист с именем '" + sheetName + "' не найден.")
-            }
-            val headerRow = sheet.getRow(0)
-            if (headerRow != null) {
-                for (cell in headerRow) {
-                    headers.add(getCellValueAsString(cell, workbook))
-                }
-            }
-            headers.toList()
+        // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!
+        val headers = java.util.ArrayList<String>()
+        val workbook = XSSFWorkbook(inputStream)
+        val sheet = workbook.getSheet(sheetName)
+        if (sheet == null) {
+            throw IOException("Лист с именем '" + sheetName + "' не найден.")
         }
+        val headerRow = sheet.getRow(0)
+        if (headerRow != null) {
+            for (cell in headerRow) {
+                headers.add(getCellValueAsString(cell, workbook))
+            }
+        }
+        return headers.toList()
     }
 
     override fun getColumnWidths(inputStream: InputStream, sheetName: String): Map<String, Int> {
-        return inputStream.use {
-            val widths = java.util.LinkedHashMap<String, Int>()
-            val workbook = XSSFWorkbook(it)
-            val sheet = workbook.getSheet(sheetName)
-            Log.d("AndroidExcelService", "Sheet '" + sheetName + "': " + if (sheet == null) "not found" else "found")
-            if (sheet == null) {
-                throw IOException("Лист с именем '" + sheetName + "' не найден.")
-            }           
-            val headerRow = sheet.getRow(0)
-            Log.d("AndroidExcelService", "Header row: " + if (headerRow == null) "not found" else "found, number of cells: ${headerRow.physicalNumberOfCells}")
-            if (headerRow != null) {
-                for (cell in headerRow) {
-                    val columnName = getCellValueAsString(cell, workbook)
-                    val colIndex = cell.columnIndex
-                    val excelWidth = sheet.getColumnWidth(colIndex)
-                    val pixelWidth = (excelWidth * 40.0 / 256).toInt() // Увеличил множитель до 40.0
-                    Log.d("AndroidExcelService", "Column '" + columnName + "' (index " + colIndex + "): raw excelWidth=" + excelWidth + ", calculated pixelWidth (before Math.max)=" + pixelWidth);
-                    widths.put(columnName, Math.max(200, pixelWidth)) // Увеличил минимальную ширину до 200
-                }
+        // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!
+        val widths = java.util.LinkedHashMap<String, Int>()
+        val workbook = XSSFWorkbook(inputStream)
+        val sheet = workbook.getSheet(sheetName)
+        Log.d("AndroidExcelService", "Sheet '" + sheetName + "': " + if (sheet == null) "not found" else "found")
+        if (sheet == null) {
+            throw IOException("Лист с именем '" + sheetName + "' не найден.")
+        }           
+        val headerRow = sheet.getRow(0)
+        Log.d("AndroidExcelService", "Header row: " + if (headerRow == null) "not found" else "found, number of cells: ${headerRow.physicalNumberOfCells}")
+        if (headerRow != null) {
+            for (cell in headerRow) {
+                val columnName = getCellValueAsString(cell, workbook)
+                val colIndex = cell.columnIndex
+                val excelWidth = sheet.getColumnWidth(colIndex)
+                val pixelWidth = (excelWidth * 40.0 / 256).toInt() // Увеличил множитель до 40.0
+                Log.d("AndroidExcelService", "Column '" + columnName + "' (index " + colIndex + "): raw excelWidth=" + excelWidth + ", calculated pixelWidth (before Math.max)=" + pixelWidth);
+                widths.put(columnName, Math.max(200, pixelWidth)) // Увеличил минимальную ширину до 200
             }
-            Log.d("AndroidExcelService", "Final widths map size: ${widths.size}")
-            widths.toMap()
         }
+        Log.d("AndroidExcelService", "Final widths map size: ${widths.size}")
+        return widths.toMap()
     }
 
     override fun readAllRows(inputStream: InputStream, sheetName: String): List<RowDataDynamic> {
-        return inputStream.use {
-            val data = java.util.ArrayList<RowDataDynamic>()
-            val workbook = XSSFWorkbook(it)
-            val sheet = workbook.getSheet(sheetName)
-            if (sheet == null) {
-                throw IOException("Лист с именем '" + sheetName + "' не найден.")
-            }
-            val headers = java.util.ArrayList<String>()
-            val headerRow = sheet.getRow(0)
-            if (headerRow != null) {
-                for (cell in headerRow) {
-                    headers.add(getCellValueAsString(cell, workbook))
-                }
-            }
-            Log.d("AndroidExcelService", "readAllRows: Headers size: ${headers.size}")
-            
-            val rowIterator = sheet.iterator()
-            if (rowIterator.hasNext()) {
-                rowIterator.next() // Пропускаем строку заголовков
-            }
-
-            val mergedRegions = sheet.mergedRegions as List<CellRangeAddress> // ВОССТАНОВЛЕНО
-            Log.d("AndroidExcelService", "readAllRows: Merged regions size: ${mergedRegions.size}")
-            var rowCount = 0
-            while (rowIterator.hasNext()) {
-                val currentRow = rowIterator.next()
-                rowCount++
-                Log.d("AndroidExcelService", "readAllRows: Processing row: ${currentRow.rowNum}, current data size: ${data.size}")
-                val rowMap = java.util.LinkedHashMap<String, String>()
-                for (i in 0 until headers.size) {
-                    val cell = currentRow.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
-                    val cellValue = getMergedCellValue(cell, mergedRegions, workbook)
-                    rowMap.put(headers[i], cellValue)
-                }
-                Log.d("AndroidExcelService", "readAllRows: Row ${currentRow.rowNum} processed, rowMap size: ${rowMap.size}")
-                data.add(RowDataDynamic(rowMap))
-            }
-            Log.d("AndroidExcelService", "readAllRows: Final data size: ${data.size}")
-            data.toList()
+        // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!
+        // inputStream.use { } автоматически закрывает поток, что вызывает NotOfficeXmlFileException
+        val data = java.util.ArrayList<RowDataDynamic>()
+        val workbook = XSSFWorkbook(inputStream)
+        val sheet = workbook.getSheet(sheetName)
+        if (sheet == null) {
+            throw IOException("Лист с именем '" + sheetName + "' не найден.")
         }
+        val headers = java.util.ArrayList<String>()
+        val headerRow = sheet.getRow(0)
+        if (headerRow != null) {
+            for (cell in headerRow) {
+                headers.add(getCellValueAsString(cell, workbook))
+            }
+        }
+        Log.d("AndroidExcelService", "readAllRows: Headers size: ${headers.size}")
+        
+        val rowIterator = sheet.iterator()
+        if (rowIterator.hasNext()) {
+            rowIterator.next() // Пропускаем строку заголовков
+        }
+
+        val mergedRegions = sheet.mergedRegions as List<CellRangeAddress> // ВОССТАНОВЛЕНО
+        Log.d("AndroidExcelService", "readAllRows: Merged regions size: ${mergedRegions.size}")
+        var rowCount = 0
+        while (rowIterator.hasNext()) {
+            val currentRow = rowIterator.next()
+            rowCount++
+            Log.d("AndroidExcelService", "readAllRows: Processing row: ${currentRow.rowNum}, current data size: ${data.size}")
+            val rowMap = java.util.LinkedHashMap<String, String>()
+            for (i in 0 until headers.size) {
+                val cell = currentRow.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
+                val cellValue = getMergedCellValue(cell, mergedRegions, workbook)
+                rowMap.put(headers[i], cellValue)
+            }
+            Log.d("AndroidExcelService", "readAllRows: Row ${currentRow.rowNum} processed, rowMap size: ${rowMap.size}")
+            data.add(RowDataDynamic(rowMap))
+        }
+        Log.d("AndroidExcelService", "readAllRows: Final data size: ${data.size}")
+        return data.toList()
     }
 
     // Чтение диапазона строк (постранично): startRow — номер данных (0 = первая строка после заголовка), rowCount — количество
     fun readRowsRange(inputStream: InputStream, sheetName: String, startRow: Int, rowCount: Int): List<RowDataDynamic> {
-        return inputStream.use {
-            val data = java.util.ArrayList<RowDataDynamic>()
-            val workbook = XSSFWorkbook(it)
-            val sheet = workbook.getSheet(sheetName) ?: throw IOException("Лист с именем '" + sheetName + "' не найден.")
+        // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!
+        val data = java.util.ArrayList<RowDataDynamic>()
+        val workbook = XSSFWorkbook(inputStream)
+        val sheet = workbook.getSheet(sheetName) ?: throw IOException("Лист с именем '" + sheetName + "' не найден.")
 
-            val headers = java.util.ArrayList<String>()
-            val headerRow = sheet.getRow(0)
-            if (headerRow != null) {
-                for (cell in headerRow) {
-                    headers.add(getCellValueAsString(cell, workbook))
-                }
+        val headers = java.util.ArrayList<String>()
+        val headerRow = sheet.getRow(0)
+        if (headerRow != null) {
+            for (cell in headerRow) {
+                headers.add(getCellValueAsString(cell, workbook))
             }
-
-            val mergedRegions = sheet.mergedRegions as List<CellRangeAddress>
-            // Пропускаем заголовок и стартуем со второй строки в файле (index=1)
-            var skipped = 0
-            var taken = 0
-            val rowIterator = sheet.iterator()
-            if (rowIterator.hasNext()) rowIterator.next() // skip header
-            while (rowIterator.hasNext() && taken < rowCount) {
-                val currentRow = rowIterator.next()
-                if (skipped < startRow) { skipped++; continue }
-                val rowMap = java.util.LinkedHashMap<String, String>()
-                for (i in 0 until headers.size) {
-                    val cell = currentRow.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
-                    val cellValue = getMergedCellValue(cell, mergedRegions, workbook)
-                    rowMap[headers[i]] = cellValue
-                }
-                data.add(RowDataDynamic(rowMap))
-                taken++
-            }
-            data
         }
+
+        val mergedRegions = sheet.mergedRegions as List<CellRangeAddress>
+        // Пропускаем заголовок и стартуем со второй строки в файле (index=1)
+        var skipped = 0
+        var taken = 0
+        val rowIterator = sheet.iterator()
+        if (rowIterator.hasNext()) rowIterator.next() // skip header
+        while (rowIterator.hasNext() && taken < rowCount) {
+            val currentRow = rowIterator.next()
+            if (skipped < startRow) { skipped++; continue }
+            val rowMap = java.util.LinkedHashMap<String, String>()
+            for (i in 0 until headers.size) {
+                val cell = currentRow.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
+                val cellValue = getMergedCellValue(cell, mergedRegions, workbook)
+                rowMap[headers[i]] = cellValue
+            }
+            data.add(RowDataDynamic(rowMap))
+            taken++
+        }
+        return data
     }
 
     /**

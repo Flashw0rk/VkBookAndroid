@@ -41,6 +41,20 @@ interface ArmatureApiService {
     // ========== FILE MANAGEMENT ENDPOINTS ==========
     
     /**
+     * Получить список всех файлов (РАБОЧИЙ ENDPOINT)
+     * Возвращает: {"data": [{"filename": "file.xlsx", "downloadUrl": "/api/files/download/file.xlsx"}]}
+     */
+    @GET("api/files/list")
+    suspend fun getAllFiles(): Response<Map<String, Any>>
+    
+    /**
+     * УНИВЕРСАЛЬНОЕ СКАЧИВАНИЕ ФАЙЛОВ (РАБОЧИЙ ENDPOINT)
+     * Скачать любой файл по имени через рабочий API
+     */
+    @GET("api/files/download")
+    suspend fun downloadFileByName(@Query("filename") filename: String): Response<ResponseBody>
+    
+    /**
      * Получить список PDF файлов
      */
     @GET("api/files/pdf")
@@ -57,6 +71,26 @@ interface ArmatureApiService {
      */
     @GET("api/files/excel")
     suspend fun getExcelFiles(): Response<List<FileInfo>>
+    
+    // ========== UPDATES DIRECTORY ENDPOINTS ==========
+    
+    /**
+     * Получить список всех файлов из папки /opt/vkbook-server/updates
+     */
+    @GET("api/updates/files")
+    suspend fun getUpdatesFiles(): Response<Map<String, Any>>
+    
+    /**
+     * Скачать файл из папки updates
+     */
+    @GET("api/updates/download/{filename}")
+    suspend fun downloadUpdatesFile(@Path("filename") filename: String): Response<ResponseBody>
+    
+    /**
+     * Получить список файлов по типу из папки updates
+     */
+    @GET("api/updates/files/{type}")
+    suspend fun getUpdatesFilesByType(@Path("type") type: String): Response<List<String>>
     
     // ========== ARMATURE COORDS ENDPOINTS ==========
     

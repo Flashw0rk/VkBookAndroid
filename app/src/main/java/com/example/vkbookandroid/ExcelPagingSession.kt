@@ -17,19 +17,19 @@ class ExcelPagingSession private constructor(
 
     companion object {
         fun fromInputStream(input: InputStream, sheetName: String): ExcelPagingSession {
-            input.use {
-                val wb = XSSFWorkbook(it)
-                val sheet = wb.getSheet(sheetName) ?: throw IOException("Лист с именем '" + sheetName + "' не найден.")
-                val headers = ArrayList<String>()
-                val headerRow = sheet.getRow(0)
-                if (headerRow != null) {
-                    for (cell in headerRow) {
-                        headers.add(getCellValueAsString(cell, wb))
-                    }
+            // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!
+            // input.use { } автоматически закрывает поток, что вызывает NotOfficeXmlFileException
+            val wb = XSSFWorkbook(input)
+            val sheet = wb.getSheet(sheetName) ?: throw IOException("Лист с именем '" + sheetName + "' не найден.")
+            val headers = ArrayList<String>()
+            val headerRow = sheet.getRow(0)
+            if (headerRow != null) {
+                for (cell in headerRow) {
+                    headers.add(getCellValueAsString(cell, wb))
                 }
-                val merged = sheet.mergedRegions as List<CellRangeAddress>
-                return ExcelPagingSession(wb, sheet, headers, merged)
             }
+            val merged = sheet.mergedRegions as List<CellRangeAddress>
+            return ExcelPagingSession(wb, sheet, headers, merged)
         }
 
         fun getCellValueAsString(cell: org.apache.poi.ss.usermodel.Cell?, workbook: org.apache.poi.ss.usermodel.Workbook): String {

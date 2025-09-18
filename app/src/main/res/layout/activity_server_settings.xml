@@ -53,19 +53,10 @@
                     android:orientation="vertical">
 
                     <RadioButton
-                        android:id="@+id/radioLocal"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Локальный сервер (эмулятор)"
-                        android:textSize="14sp"
-                        android:textColor="@color/black"
-                        android:layout_marginBottom="8dp" />
-
-                    <RadioButton
                         android:id="@+id/radioInternet"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Интернет сервер (192.168.1.54:8082)"
+                        android:text="VkBook сервер (158.160.157.7:8082)"
                         android:textSize="14sp"
                         android:textColor="@color/black"
                         android:layout_marginBottom="8dp" />
@@ -108,7 +99,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="💡 Локальный: для разработки на эмуляторе\n🌐 Интернет: предустановленный сервер\n⚙️ Свой: введите любой адрес сервера"
+                    android:text="🌐 VkBook сервер: готов к работе на внешнем IP\n⚙️ Свой сервер: введите внешний IP или домен вашего сервера"
                     android:textSize="12sp"
                     android:textColor="@color/gray"
                     android:background="@drawable/info_background"
@@ -118,36 +109,27 @@
 
         </androidx.cardview.widget.CardView>
 
-        <!-- Кнопки -->
-        <LinearLayout
+        <!-- Кнопка диагностики -->
+        <Button
+            android:id="@+id/btnDiagnose"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center">
+            android:text="🔍 Диагностика сети"
+            android:textSize="16sp"
+            android:background="@drawable/button_diagnose_background"
+            android:textColor="@color/white"
+            android:layout_marginBottom="8dp" />
 
-            <Button
-                android:id="@+id/btnTestConnection"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Тест подключения"
-                android:textSize="14sp"
-                android:layout_marginEnd="8dp"
-                android:background="@drawable/button_secondary_background"
-                android:textColor="@color/white" />
-
-            <Button
-                android:id="@+id/btnSaveSettings"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Сохранить"
-                android:textSize="14sp"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/button_primary_background"
-                android:textColor="@color/white" />
-
-        </LinearLayout>
+        <!-- Кнопка сохранения -->
+        <Button
+            android:id="@+id/btnSaveSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Сохранить и подключиться"
+            android:textSize="16sp"
+            android:background="@drawable/button_primary_background"
+            android:textColor="@color/white"
+            android:layout_marginBottom="8dp" />
 
         <Button
             android:id="@+id/btnCancel"

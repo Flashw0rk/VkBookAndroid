@@ -56,7 +56,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         val view = inflater.inflate(R.layout.fragment_data, container, false)
         recyclerView = view.findViewById(R.id.recyclerView)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
-        recyclerView.setHasFixedSize(true)
+        // recyclerView.setHasFixedSize(true) // Отключено из-за конфликта с wrap_content
         recyclerView.setItemViewCacheSize(20)
         adapter = SignalsAdapter(
             emptyList(),

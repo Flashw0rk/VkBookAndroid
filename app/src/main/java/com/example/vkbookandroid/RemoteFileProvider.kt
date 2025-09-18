@@ -72,10 +72,20 @@ class RemoteFileProvider(
             
             // 4. В последнюю очередь пробуем assets
             Log.d("RemoteFileProvider", "File not found in data/ or cache, falling back to assets: $normalized")
-            context.assets.open(normalized)
+            try {
+                context.assets.open(normalized)
+            } catch (assetException: Exception) {
+                Log.e("RemoteFileProvider", "Asset not found: $normalized, creating empty placeholder")
+                createEmptyPlaceholderFile(normalized)
+            }
         } catch (e: Exception) {
             Log.w("RemoteFileProvider", "Fallback to assets for $relativePath", e)
-            context.assets.open(normalized)
+            try {
+                context.assets.open(normalized)
+            } catch (assetException: Exception) {
+                Log.e("RemoteFileProvider", "Asset not found in fallback: $normalized, creating empty placeholder")
+                createEmptyPlaceholderFile(normalized)
+            }
         }
     }
     
@@ -105,6 +115,32 @@ class RemoteFileProvider(
         }
     }
     
+    /**
+     * Создать пустой placeholder файл для отсутствующих Excel файлов
+     */
+    private fun createEmptyPlaceholderFile(normalized: String): InputStream {
+        return when {
+            normalized == "Oborudovanie_BSCHU.xlsx" -> {
+                Log.w("RemoteFileProvider", "Creating placeholder for Oborudovanie_BSCHU.xlsx")
+                // Создаем минимальный CSV контент для БЩУ
+                val csvContent = """Номер,Наименование,Тип,Состояние,Описание
+1,Файл не найден на сервере,Ошибка,Недоступен,Файл Oborudovanie_BSCHU.xlsx отсутствует в assets и не был загружен с сервера"""
+                csvContent.byteInputStream()
+            }
+            normalized == "Armatures.xlsx" -> {
+                Log.w("RemoteFileProvider", "Creating placeholder for Armatures.xlsx")
+                // Создаем минимальный CSV контент для арматуры
+                val csvContent = """Арматура,PDF_Схема_и_ID_арматуры,Тип,Состояние,Описание
+Файл не найден,error.pdf#ERR001,Ошибка,Недоступен,Файл Armatures.xlsx отсутствует в assets и не был загружен с сервера"""
+                csvContent.byteInputStream()
+            }
+            else -> {
+                Log.w("RemoteFileProvider", "Creating empty placeholder for: $normalized")
+                "".byteInputStream()
+            }
+        }
+    }
+
     /**
      * Безопасная санитизация пути к файлу
      */

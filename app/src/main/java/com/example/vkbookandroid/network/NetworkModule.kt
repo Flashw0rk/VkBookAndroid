@@ -18,7 +18,7 @@ object NetworkModule {
     // private const val BASE_URL = "https://your-server-domain.com/" // Для интернет-сервера
     
     // Динамический URL из настроек
-    private var currentBaseUrl = "http://10.0.2.2:8082/" // Значение по умолчанию
+    private var currentBaseUrl = "http://158.160.157.7/" // Значение по умолчанию
     
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -48,17 +48,19 @@ object NetworkModule {
             try {
                 android.util.Log.d("NetworkModule", "Verifying hostname: $hostname")
                 
-                // Список доверенных хостов для локальной разработки
+                // Список доверенных хостов для внешних серверов
                 val trustedHosts = listOf(
+                    "158.160.157.7", // VkBook Server на Yandex Cloud
                     "localhost",
-                    "10.0.2.2", // Эмулятор Android
                     "127.0.0.1",
-                    "192.168.1.54", // Интернет сервер
                     "192.168.1.", // Локальная сеть (начинается с)
                     "192.168.0.", // Локальная сеть (начинается с)
                     "10.0.0.", // Локальная сеть (начинается с)
                     "172.16.", // Локальная сеть (начинается с)
-                    "your-server-domain.com" // Замените на ваш реальный домен
+                    "ngrok.io", // ngrok туннели
+                    "ngrok-free.app", // ngrok бесплатные туннели
+                    "localhost.run", // localhost.run туннели
+                    "tunnelto.dev" // tunnelto.dev туннели
                 )
                 
                 // Для пользовательских серверов - более мягкая проверка
@@ -66,7 +68,11 @@ object NetworkModule {
                                    currentBaseUrl.contains("10.0.") || 
                                    currentBaseUrl.contains("172.16.") ||
                                    currentBaseUrl.contains("localhost") ||
-                                   currentBaseUrl.contains("127.0.0.1")
+                                   currentBaseUrl.contains("127.0.0.1") ||
+                                   currentBaseUrl.contains("ngrok.io") ||
+                                   currentBaseUrl.contains("ngrok-free.app") ||
+                                   currentBaseUrl.contains("localhost.run") ||
+                                   currentBaseUrl.contains("tunnelto.dev")
                 
                 if (isCustomServer) {
                     android.util.Log.d("NetworkModule", "Custom server detected: $hostname - allowing connection")
@@ -98,7 +104,7 @@ object NetworkModule {
             } catch (e: Exception) {
                 android.util.Log.w("NetworkModule", "SSL verification failed for hostname: $hostname", e)
                 // В случае ошибки разрешаем подключение для локальных адресов
-                hostname.contains("localhost") || hostname.contains("127.0.0.1") || hostname.contains("10.0.2.2")
+                hostname.contains("localhost") || hostname.contains("127.0.0.1") || hostname.contains("158.160.157.7")
             }
         }
         .build()
@@ -124,6 +130,7 @@ object NetworkModule {
      */
     fun updateBaseUrl(newBaseUrl: String) {
         android.util.Log.d("NetworkModule", "updateBaseUrl called. Old URL: '$currentBaseUrl', New URL: '$newBaseUrl'")
+        android.util.Log.d("NetworkModule", "Device info: Model=${android.os.Build.MODEL}, Manufacturer=${android.os.Build.MANUFACTURER}, Product=${android.os.Build.PRODUCT}")
         currentBaseUrl = newBaseUrl
         retrofit = Retrofit.Builder()
             .baseUrl(currentBaseUrl)
@@ -182,10 +189,9 @@ object NetworkModule {
                         
                         // Список доверенных хостов для тестирования
                         val trustedHosts = listOf(
+                            "158.160.157.7", // VkBook Server на Yandex Cloud
                             "localhost",
-                            "10.0.2.2", // Эмулятор Android
                             "127.0.0.1",
-                            "192.168.1.54", // Интернет сервер
                             "192.168.1.", // Локальная сеть (начинается с)
                             "192.168.0.", // Локальная сеть (начинается с)
                             "10.0.0.", // Локальная сеть (начинается с)

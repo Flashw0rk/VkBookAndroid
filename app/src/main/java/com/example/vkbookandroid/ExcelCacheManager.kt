@@ -185,10 +185,25 @@ class ExcelCacheManager(private val context: Context) {
         val tmpDir = File(dir.parentFile, dir.name + "_tmp").apply {
             if (exists()) {
                 Log.d("ExcelCacheManager", "Removing existing tmp directory: ${absolutePath}")
-                deleteRecursively()
+                val deleted = deleteRecursively()
+                Log.d("ExcelCacheManager", "Existing tmp directory deleted: $deleted")
             }
+            
+            // Убеждаемся, что родительская директория существует
+            parentFile?.let { parent ->
+                if (!parent.exists()) {
+                    val parentCreated = parent.mkdirs()
+                    Log.d("ExcelCacheManager", "Created parent directory: ${parent.absolutePath}, success: $parentCreated")
+                }
+            }
+            
             val created = mkdirs()
             Log.d("ExcelCacheManager", "Created tmp directory: ${absolutePath}, success: $created")
+            
+            if (!created && !exists()) {
+                Log.e("ExcelCacheManager", "❌ Failed to create tmp directory!")
+                throw IllegalStateException("Failed to create tmp directory: $absolutePath")
+            }
         }
         val pages = pagesDir(tmpDir)
 
@@ -320,8 +335,39 @@ class ExcelCacheManager(private val context: Context) {
         writeManifest(tmpDir, manifest)
 
         // Атомарная замена
-        if (dir.exists()) dir.deleteRecursively()
-        tmpDir.renameTo(dir)
+        try {
+            if (dir.exists()) {
+                Log.d("ExcelCacheManager", "Removing existing cache directory: ${dir.absolutePath}")
+                val deleted = dir.deleteRecursively()
+                Log.d("ExcelCacheManager", "Cache directory deleted: $deleted")
+            }
+            
+            Log.d("ExcelCacheManager", "Renaming tmp directory from: ${tmpDir.absolutePath}")
+            Log.d("ExcelCacheManager", "Renaming tmp directory to: ${dir.absolutePath}")
+            val renamed = tmpDir.renameTo(dir)
+            Log.d("ExcelCacheManager", "Tmp directory renamed successfully: $renamed")
+            
+            if (!renamed) {
+                Log.e("ExcelCacheManager", "❌ Failed to rename tmp directory!")
+                Log.e("ExcelCacheManager", "Tmp dir exists: ${tmpDir.exists()}")
+                Log.e("ExcelCacheManager", "Target dir exists: ${dir.exists()}")
+                
+                // Fallback: копируем файлы вручную
+                Log.d("ExcelCacheManager", "Attempting manual copy as fallback...")
+                if (!dir.exists()) dir.mkdirs()
+                tmpDir.copyRecursively(dir, overwrite = true)
+                tmpDir.deleteRecursively()
+                Log.d("ExcelCacheManager", "✅ Manual copy completed")
+            }
+        } catch (e: Exception) {
+            Log.e("ExcelCacheManager", "💥 Exception during atomic replacement", e)
+            // Убеждаемся, что tmp директория удалена
+            if (tmpDir.exists()) {
+                Log.d("ExcelCacheManager", "Cleaning up tmp directory after error")
+                tmpDir.deleteRecursively()
+            }
+            throw e
+        }
     }
 
     /** Принудительная пересборка кэша (используется кнопкой "Обновить данные"). */
