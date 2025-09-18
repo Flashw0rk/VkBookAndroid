@@ -967,7 +967,9 @@ class PdfViewerActivity : AppCompatActivity() {
     }
     
     private fun buildMarkersInfo(designation: String?): String {
-        val pdfMarkers = markers["План на отметке -4,8.pdf"] ?: return "Метки не найдены"
+        // Используем текущий открытый PDF, а не жёстко заданное имя.
+        val pdfName = currentPdfName ?: return "Метки не найдены"
+        val pdfMarkers = markers[pdfName] ?: return "Метки не найдены"
         
         val info = StringBuilder("=== МЕТКИ АРМАТУРЫ ===\n")
         

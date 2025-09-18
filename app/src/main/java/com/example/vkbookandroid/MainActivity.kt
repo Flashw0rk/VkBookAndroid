@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.vkbookandroid.service.SyncService
 import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.utils.AutoSyncSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,12 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
     
@@ -44,8 +51,16 @@ class MainActivity : AppCompatActivity() {
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         // Обновляем настройки сервера после возврата из настроек
         loadServerSettings()
-        // Проверяем соединение с новыми настройками
-        checkConnectionOnStartup()
+        
+        // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ
+        if (AutoSyncSettings.isSyncOnSettingsChangeEnabled(this@MainActivity)) {
+            // Автосинхронизация при изменении настроек ВКЛЮЧЕНА
+            checkConnectionOnStartup()
+            // Можно добавить автоматическую синхронизацию здесь, если нужно
+        } else {
+            // Только проверка соединения без синхронизации
+            checkConnectionOnStartup()
+        }
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,9 +107,37 @@ class MainActivity : AppCompatActivity() {
         // Инициализируем ViewPager2 сразу для быстрого отображения UI
         initializeViewPager()
         
-        // Проверка соединения и обновления в фоне
-        checkConnectionOnStartup()
-        initializeAndCheckUpdates()
+        // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ ПРИ ЗАПУСКЕ
+        if (AutoSyncSettings.isSyncOnStartupEnabled(this)) {
+            // Автосинхронизация при запуске ВКЛЮЧЕНА
+            checkConnectionOnStartup()
+            initializeAndCheckUpdates() // Старая функция с синхронизацией
+        } else {
+            // Автосинхронизация при запуске ОТКЛЮЧЕНА (по умолчанию)
+            checkConnectionOnStartup() // Только проверка соединения
+            initializeBasicFiles() // Только базовые файлы без синхронизации
+        }
+
+        // Одноразовая очистка запрещённых PDF при старте (мягко)
+        try {
+            val removed = com.example.vkbookandroid.service.DataCleanupService(this).removeDisallowedPdfs()
+            if (removed > 0) {
+                android.util.Log.i("MainActivity", "Removed $removed disallowed PDFs during startup cleanup")
+            }
+        } catch (_: Exception) {}
+
+        // ПРОВЕРЯЕМ НАСТРОЙКИ ФОНОВОЙ СИНХРОНИЗАЦИИ
+        if (AutoSyncSettings.isBackgroundSyncEnabled(this)) {
+            // Фоновая синхронизация ВКЛЮЧЕНА - планируем WorkManager
+            schedulePeriodicBackgroundSync()
+        } else {
+            // Фоновая синхронизация ОТКЛЮЧЕНА (по умолчанию)
+            // Отменяем все запланированные задачи
+            WorkManager.getInstance(this).cancelUniqueWork("vkbook_periodic_sync")
+            Log.i("MainActivity", "Background sync is DISABLED - cancelled all scheduled work")
+        }
+
+        // Добавляем пункт "О приложении" в меню (через уже существующую иконку меню)
 
     }
     
@@ -158,6 +201,7 @@ class MainActivity : AppCompatActivity() {
             true
         }
         
+        // РУЧНАЯ СИНХРОНИЗАЦИЯ - автообновления отключены
         // Добавляем диагностику по двойному тапу
         var lastTapTime = 0L
         btnSync.setOnClickListener {
@@ -167,7 +211,7 @@ class MainActivity : AppCompatActivity() {
                 diagnoseFiles()
                 Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
             } else {
-                // Обычный тап - запускаем синхронизацию
+                // Обычный тап - запускаем РУЧНУЮ синхронизацию (автообновления отключены)
                 startSync()
             }
             lastTapTime = currentTime
@@ -179,36 +223,6 @@ class MainActivity : AppCompatActivity() {
             val intent = android.content.Intent(this, ServerSettingsActivity::class.java)
             settingsLauncher.launch(intent)
         }
-        
-        btnSettings.setOnLongClickListener {
-            // Длинное нажатие - запускаем тестирование путей к файлам
-            uiScope.launch {
-                updateSyncStatus("Тестирование путей...")
-                val pathTester = com.example.vkbookandroid.service.ServerPathTester(this@MainActivity)
-                val results = withContext(Dispatchers.IO) {
-                    pathTester.testAllUpdatesPaths()
-                }
-                
-                if (results.isNotEmpty()) {
-                    updateSyncStatus("Найдены рабочие пути!")
-                    val message = "Найдено ${results.size} рабочих путей:\n" + 
-                                 results.take(5).joinToString("\n") { "• ${it.path}" }
-                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
-                    
-                    Log.d("MainActivity", "=== WORKING PATHS FOUND ===")
-                    results.forEach { result ->
-                        Log.d("MainActivity", "Path: ${result.path}")
-                        Log.d("MainActivity", "URL: ${result.url}")
-                        Log.d("MainActivity", "Response: ${result.responseCode}")
-                        Log.d("MainActivity", "Content: ${result.contentType}")
-                    }
-                } else {
-                    updateSyncStatus("Пути не найдены")
-                    Toast.makeText(this@MainActivity, "Рабочие пути к файлам не найдены", Toast.LENGTH_SHORT).show()
-                }
-            }
-            true
-        }
     }
     
     private fun setupHashInfoButton() {
@@ -218,6 +232,8 @@ class MainActivity : AppCompatActivity() {
             hashDialog.show(supportFragmentManager, "HashInfoDialog")
             true
         }
+
+        // Убираем скрытую активацию режима разработчика
     }
     
     private fun loadServerSettings() {
@@ -246,17 +262,18 @@ class MainActivity : AppCompatActivity() {
     
     
     /**
-     * Запуск синхронизации
+     * Запуск РУЧНОЙ синхронизации (автообновления отключены)
+     * Пользователь может обновить данные только нажав кнопку "Синхронизация"
      */
     private fun startSync() {
         btnSync.isEnabled = false
-        updateSyncStatus("Обновление...")
+        updateSyncStatus("Ручное обновление...")
         
         uiScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
-                    // Сначала пробуем синхронизацию через updates
-                    syncService.syncUpdatesFiles()
+                    // Полная РУЧНАЯ синхронизация данных (координаты, Excel, PDF)
+                    syncService.syncAll()
                 }
                 
                 when {
@@ -306,20 +323,152 @@ class MainActivity : AppCompatActivity() {
     private fun updateSyncStatus(status: String) {
         tvSyncStatus.text = status
     }
+
+    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_more -> {
+                showMoreMenu()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    /**
+     * Диалог "О приложении" с версией и кнопкой копирования.
+     */
+    private fun openAboutScreen() {
+        startActivity(android.content.Intent(this, AboutActivity::class.java))
+    }
+
+    /**
+     * Короткое меню с действием "О приложении" и быстрым доступом к синку.
+     * Без техдеталей для пользователя.
+     */
+    private fun showMoreMenu() {
+        val items = arrayOf(
+            "О приложении",
+            "Проверить обновления"
+        )
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setItems(items) { d, which ->
+                when (which) {
+                    0 -> openAboutScreen()
+                    1 -> startSync()
+                }
+                d.dismiss()
+            }
+            .show()
+    }
+
+    /**
+     * Планирование периодической фоновой синхронизации.
+     * Условия: требуется сеть (CONNECTED), интервал из настроек, уникальная задача.
+     * 
+     * Вызывается ТОЛЬКО если фоновая синхронизация включена в настройках
+     */
+    private fun schedulePeriodicBackgroundSync() {
+        try {
+            val intervalHours = AutoSyncSettings.getSyncIntervalHours(this)
+            
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val workRequest = PeriodicWorkRequestBuilder<com.example.vkbookandroid.service.SyncWorker>(
+                intervalHours.toLong(), 
+                TimeUnit.HOURS
+            )
+                .setConstraints(constraints)
+                .build()
+
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                "vkbook_periodic_sync",
+                ExistingPeriodicWorkPolicy.REPLACE, // REPLACE чтобы обновить интервал
+                workRequest
+            )
+            
+            android.util.Log.i("MainActivity", "Background sync scheduled every $intervalHours hours")
+            
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Failed to schedule periodic sync: ${e.message}")
+        }
+    }
+    
+    /**
+     * Инициализация только базовых файлов без синхронизации с сервером.
+     * Создаёт необходимые файлы для работы приложения, но НЕ загружает данные с сервера.
+     */
+    private fun initializeBasicFiles() {
+        uiScope.launch {
+            try {
+                updateSyncStatus("Инициализация файлов...")
+                
+                // Проверяем, нужно ли выполнить начальную установку
+                val appInstallService = com.example.vkbookandroid.service.AppInstallationService(this@MainActivity)
+                
+                if (appInstallService.needsInitialSetup()) {
+                    updateSyncStatus("Первоначальная установка...")
+                    
+                    val setupComplete = withContext(Dispatchers.IO) {
+                        appInstallService.performInitialSetup()
+                    }
+                    
+                    if (setupComplete) {
+                        updateSyncStatus("Установка завершена")
+                    } else {
+                        updateSyncStatus("Ошибка установки")
+                        return@launch
+                    }
+                } else {
+                    updateSyncStatus("Приложение готово")
+                }
+                
+                // Создаем Excel файлы, если их нет (БЕЗ загрузки с сервера)
+                val dataDir = filesDir.resolve("data")
+                val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
+                val armaturesFile = dataDir.resolve("Armatures.xlsx")
+                
+                if (!bschuFile.exists() || !armaturesFile.exists()) {
+                    updateSyncStatus("Создание базовых Excel файлов...")
+                    val created = withContext(Dispatchers.IO) {
+                        com.example.vkbookandroid.utils.ExcelFileCreator.createExcelFilesInDataDir(this@MainActivity)
+                    }
+                    if (created) {
+                        updateSyncStatus("Excel файлы созданы")
+                    } else {
+                        updateSyncStatus("Ошибка создания Excel файлов")
+                    }
+                }
+                
+                // АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА
+                // Пользователь может запустить синхронизацию вручную через кнопку "Синхронизация"
+                updateSyncStatus("Готово (автообновления отключены)")
+                
+                Log.i("MainActivity", "Basic files initialized. Auto-sync is DISABLED - user can sync manually")
+                
+            } catch (e: Exception) {
+                updateSyncStatus("Ошибка инициализации: ${e.message}")
+                Log.e("MainActivity", "Error during basic files initialization", e)
+            }
+        }
+    }
     
     
     /**
-     * Инициализация файлов и проверка обновлений при запуске
+     * Инициализация файлов и проверка обновлений при запуске (ТОЛЬКО если включена автосинхронизация)
      */
     private fun initializeAndCheckUpdates() {
         uiScope.launch {
             try {
                 updateSyncStatus("Проверка установки...")
                 
-                // Диагностика файлов
-                Log.d("MainActivity", "Running file diagnostics...")
-                
-                // Проверяем, нужно ли выполнить начальную установку
+                // Инициализируем базовые файлы
                 val appInstallService = com.example.vkbookandroid.service.AppInstallationService(this@MainActivity)
                 
                 if (appInstallService.needsInitialSetup()) {
@@ -351,63 +500,35 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (created) {
                         updateSyncStatus("Excel файлы созданы")
-                        Log.i("MainActivity", "Successfully created missing Excel files")
                     } else {
-                        updateSyncStatus("Ошибка создания файлов")
-                        Log.e("MainActivity", "Failed to create Excel files")
+                        updateSyncStatus("Ошибка создания Excel файлов")
                     }
                 }
                 
-                // Проверяем доступность сервера и тестируем различные пути
+                // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - выполняем синхронизацию
                 val isServerAvailable = withContext(Dispatchers.IO) {
-                    val connectionOk = syncService.checkServerConnection()
-                    
-                    if (connectionOk) {
-                        // Тестируем различные варианты доступа к файлам
-                        Log.d("MainActivity", "Testing different file access methods...")
-                        val directAccessService = com.example.vkbookandroid.service.DirectFileAccessService(this@MainActivity)
-                        val accessResult = directAccessService.tryDifferentFileAccess()
-                        
-                        if (accessResult.hasWorkingPaths()) {
-                            Log.d("MainActivity", "Found working file paths!")
-                            Log.d("MainActivity", "Working paths: ${accessResult.workingPaths}")
-                            
-                            // Пробуем скачать найденные файлы
-                            accessResult.workingPaths.forEach { (filename, path) ->
-                                try {
-                                    val downloaded = directAccessService.downloadFileByWorkingPath(filename, path)
-                                    if (downloaded) {
-                                        Log.d("MainActivity", "Successfully downloaded: $filename")
-                                    }
-                                } catch (e: Exception) {
-                                    Log.w("MainActivity", "Failed to download $filename", e)
-                                }
-                            }
-                        } else {
-                            Log.w("MainActivity", "No working file paths found")
-                        }
-                        
-                        if (accessResult.hasListingEndpoints()) {
-                            Log.d("MainActivity", "Found working listing endpoints!")
-                            Log.d("MainActivity", "Listing endpoints: ${accessResult.workingListingEndpoints}")
-                        }
-                    }
-                    
-                    connectionOk
+                    syncService.checkServerConnection()
                 }
                 
                 if (isServerAvailable) {
-                    updateSyncStatus("Готов к обновлению")
+                    updateSyncStatus("Автосинхронизация...")
+                    val result = withContext(Dispatchers.IO) {
+                        syncService.syncAll()
+                    }
+                    
+                    if (result.overallSuccess) {
+                        updateSyncStatus("Автообновление завершено")
+                        refreshFragmentsData()
+                    } else {
+                        updateSyncStatus("Ошибка автообновления")
+                    }
                 } else {
                     updateSyncStatus("Сервер недоступен")
                 }
                 
-                // Настройка отслеживания файлов для автоматического обновления
-                setupFileWatching()
-                
             } catch (e: Exception) {
                 updateSyncStatus("Ошибка инициализации")
-                Log.e("MainActivity", "Error during initialization", e)
+                Log.e("MainActivity", "Error during auto-initialization", e)
             }
         }
     }

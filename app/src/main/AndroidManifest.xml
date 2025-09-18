@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -39,6 +39,12 @@
             android:exported="false"
             android:theme="@style/Theme.VkBookAndroid"
             android:label="Настройки сервера" />
+
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VkBookAndroid"
+            android:label="О приложении" />
     </application>
 
 </manifest>

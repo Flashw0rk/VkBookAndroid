@@ -57,9 +57,12 @@ class AppInstallationService(private val context: Context) {
                 Log.d(tag, "Data directory already exists: ${dataDir.absolutePath}")
             }
             
-            // Создаем базовые файлы для первого запуска
-            Log.d(tag, "Creating base files...")
-            createBaseFiles()
+            // Создаем минимальный набор базовых файлов для первого запуска
+            Log.d(tag, "Creating base files (minimal)...")
+            createBaseArmatureCoords()
+            createBaseExcelFiles()
+            // ВАЖНО: создаём только один PDF "Безымянный-1.pdf"
+            createBasePdfScheme("Безымянный-1.pdf", "Базовая схема 1")
             
             // Проверяем, что файлы созданы
             val jsonFile = File(dataDir, "armature_coords.json")
@@ -83,18 +86,7 @@ class AppInstallationService(private val context: Context) {
     /**
      * Создать базовые файлы для первого запуска
      */
-    private fun createBaseFiles() {
-        // Создаем базовый JSON файл с координатами
-        createBaseArmatureCoords()
-        
-        // Создаем базовые Excel файлы
-        createBaseExcelFiles()
-        
-        // Создаем базовые PDF схемы
-        createBasePdfSchemes()
-        
-        Log.d(tag, "Base files created successfully")
-    }
+    // Удалён общий метод createBaseFiles() — логика разнесена по вызовам выше
     
     /**
      * Создать базовый файл armature_coords.json
@@ -246,17 +238,7 @@ class AppInstallationService(private val context: Context) {
     /**
      * Создать базовые PDF схемы
      */
-    private fun createBasePdfSchemes() {
-        try {
-            // Создаем PDF файлы программно
-            createBasePdfScheme("Безымянный-1.pdf", "Базовая схема 1")
-            createBasePdfScheme("Безымянный-2.pdf", "Базовая схема 2")
-            
-            Log.d(tag, "Created base PDF schemes")
-        } catch (e: Exception) {
-            Log.e(tag, "Error creating base PDF schemes", e)
-        }
-    }
+    // УДАЛЕНО: генерация второго PDF при установке
     
     
     /**
@@ -264,6 +246,11 @@ class AppInstallationService(private val context: Context) {
      */
     private fun createBasePdfScheme(filename: String, title: String) {
         try {
+            // Проверяем бизнес-правила имен
+            if (!com.example.vkbookandroid.utils.FilePolicies.isPdfAllowed(filename)) {
+                Log.w(tag, "Skipping disallowed PDF file: $filename")
+                return
+            }
             // Создаем минимальный PDF файл (заглушку)
             val pdfContent = createMinimalPdfContent(title)
             
@@ -367,7 +354,8 @@ class AppInstallationService(private val context: Context) {
             File(dataDir, filename).exists()
         }
         
-        val pdfFiles = listOf("Безымянный-1.pdf", "Безымянный-2.pdf")
+        // Проверяем только один обязательный PDF
+        val pdfFiles = listOf("Безымянный-1.pdf")
         val allPdfExist = pdfFiles.all { filename ->
             File(dataDir, filename).exists()
         }

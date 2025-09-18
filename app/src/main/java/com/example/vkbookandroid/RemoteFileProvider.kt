@@ -116,29 +116,13 @@ class RemoteFileProvider(
     }
     
     /**
-     * Создать пустой placeholder файл для отсутствующих Excel файлов
+     * Создать безопасный пустой поток для отсутствующих файлов,
+     * чтобы не подменять формат (например, .xlsx) некорректным содержимым.
+     * Вместо этого UI/верхний уровень должен обработать отсутствие данных.
      */
     private fun createEmptyPlaceholderFile(normalized: String): InputStream {
-        return when {
-            normalized == "Oborudovanie_BSCHU.xlsx" -> {
-                Log.w("RemoteFileProvider", "Creating placeholder for Oborudovanie_BSCHU.xlsx")
-                // Создаем минимальный CSV контент для БЩУ
-                val csvContent = """Номер,Наименование,Тип,Состояние,Описание
-1,Файл не найден на сервере,Ошибка,Недоступен,Файл Oborudovanie_BSCHU.xlsx отсутствует в assets и не был загружен с сервера"""
-                csvContent.byteInputStream()
-            }
-            normalized == "Armatures.xlsx" -> {
-                Log.w("RemoteFileProvider", "Creating placeholder for Armatures.xlsx")
-                // Создаем минимальный CSV контент для арматуры
-                val csvContent = """Арматура,PDF_Схема_и_ID_арматуры,Тип,Состояние,Описание
-Файл не найден,error.pdf#ERR001,Ошибка,Недоступен,Файл Armatures.xlsx отсутствует в assets и не был загружен с сервера"""
-                csvContent.byteInputStream()
-            }
-            else -> {
-                Log.w("RemoteFileProvider", "Creating empty placeholder for: $normalized")
-                "".byteInputStream()
-            }
-        }
+        Log.w("RemoteFileProvider", "Returning empty placeholder for missing file: $normalized")
+        return "".byteInputStream()
     }
 
     /**

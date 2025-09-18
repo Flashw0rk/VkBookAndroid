@@ -16,6 +16,7 @@ import java.io.InputStream
  */
 class SyncService(private val context: Context) {
     
+    // Менеджер хешей для проверки целостности загружаемых файлов
     private val fileHashManager = FileHashManager(context)
     private val tag = "SyncService"
     

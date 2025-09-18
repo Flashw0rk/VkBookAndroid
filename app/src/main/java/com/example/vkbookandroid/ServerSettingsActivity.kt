@@ -5,18 +5,33 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.Spinner
+import android.widget.Switch
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.utils.AutoSyncSettings
 import java.net.InetAddress
 import java.net.Socket
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 
 /**
  * Activity для настройки параметров сервера
@@ -30,6 +45,16 @@ class ServerSettingsActivity : AppCompatActivity() {
     private lateinit var btnDiagnose: Button
     private lateinit var btnSave: Button
     private lateinit var btnCancel: Button
+    
+    // Элементы UI для автосинхронизации
+    private lateinit var switchAutoSync: Switch
+    private lateinit var layoutAutoSyncDetails: LinearLayout
+    private lateinit var checkSyncOnStartup: CheckBox
+    private lateinit var checkSyncOnSettings: CheckBox
+    private lateinit var checkBackgroundSync: CheckBox
+    private lateinit var layoutSyncInterval: LinearLayout
+    private lateinit var spinnerSyncInterval: Spinner
+    private lateinit var tvAutoSyncStatus: TextView
     
     private lateinit var sharedPrefs: SharedPreferences
     private val executor = Executors.newFixedThreadPool(4)
@@ -66,6 +91,7 @@ class ServerSettingsActivity : AppCompatActivity() {
             return resolvedUrl
         }
     }
+    // dev-меню удалено
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,7 +108,13 @@ class ServerSettingsActivity : AppCompatActivity() {
         
         // Настройка обработчиков событий
         setupEventHandlers()
+
+        // dev-доступ удалён
     }
+
+    // Удалено меню разработчика и связанная логика
+
+    // Удалён запуск теста путей из меню разработчика
     
     private fun initViews() {
         radioGroup = findViewById(R.id.radioGroupServerMode)
@@ -92,6 +124,18 @@ class ServerSettingsActivity : AppCompatActivity() {
         btnDiagnose = findViewById(R.id.btnDiagnose)
         btnSave = findViewById(R.id.btnSaveSettings)
         btnCancel = findViewById(R.id.btnCancel)
+        
+        // Инициализация элементов автосинхронизации
+        switchAutoSync = findViewById(R.id.switchAutoSync)
+        layoutAutoSyncDetails = findViewById(R.id.layoutAutoSyncDetails)
+        checkSyncOnStartup = findViewById(R.id.checkSyncOnStartup)
+        checkSyncOnSettings = findViewById(R.id.checkSyncOnSettings)
+        checkBackgroundSync = findViewById(R.id.checkBackgroundSync)
+        layoutSyncInterval = findViewById(R.id.layoutSyncInterval)
+        spinnerSyncInterval = findViewById(R.id.spinnerSyncInterval)
+        tvAutoSyncStatus = findViewById(R.id.tvAutoSyncStatus)
+        
+        setupAutoSyncUI()
     }
     
     private fun loadSettings() {
@@ -116,6 +160,94 @@ class ServerSettingsActivity : AppCompatActivity() {
                 editServerUrl.setText("http://158.160.157.7/")
             }
         }
+    }
+    
+    /**
+     * Настройка UI для автосинхронизации
+     */
+    private fun setupAutoSyncUI() {
+        // Настройка спиннера интервалов
+        val intervalAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            AutoSyncSettings.AVAILABLE_INTERVALS.map { "$it ч" }
+        )
+        intervalAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spinnerSyncInterval.adapter = intervalAdapter
+        
+        // Обработчик мастер-переключателя
+        switchAutoSync.setOnCheckedChangeListener { _, isChecked ->
+            layoutAutoSyncDetails.visibility = if (isChecked) View.VISIBLE else View.GONE
+            updateAutoSyncStatus()
+            
+            if (!isChecked) {
+                // Если автосинхронизация отключается, отключаем все подопции
+                checkSyncOnStartup.isChecked = false
+                checkSyncOnSettings.isChecked = false
+                checkBackgroundSync.isChecked = false
+                layoutSyncInterval.visibility = View.GONE
+            }
+        }
+        
+        // Обработчик фоновой синхронизации
+        checkBackgroundSync.setOnCheckedChangeListener { _, isChecked ->
+            layoutSyncInterval.visibility = if (isChecked) View.VISIBLE else View.GONE
+            updateAutoSyncStatus()
+        }
+        
+        // Обработчики других чекбоксов
+        checkSyncOnStartup.setOnCheckedChangeListener { _, _ -> updateAutoSyncStatus() }
+        checkSyncOnSettings.setOnCheckedChangeListener { _, _ -> updateAutoSyncStatus() }
+        
+        loadAutoSyncSettings()
+    }
+    
+    /**
+     * Загрузка настроек автосинхронизации
+     */
+    private fun loadAutoSyncSettings() {
+        switchAutoSync.isChecked = AutoSyncSettings.isAutoSyncEnabled(this)
+        checkSyncOnStartup.isChecked = AutoSyncSettings.isSyncOnStartupEnabled(this)
+        checkSyncOnSettings.isChecked = AutoSyncSettings.isSyncOnSettingsChangeEnabled(this)
+        checkBackgroundSync.isChecked = AutoSyncSettings.isBackgroundSyncEnabled(this)
+        
+        // Установка интервала
+        val currentInterval = AutoSyncSettings.getSyncIntervalHours(this)
+        val intervalIndex = AutoSyncSettings.AVAILABLE_INTERVALS.indexOf(currentInterval)
+        if (intervalIndex >= 0) {
+            spinnerSyncInterval.setSelection(intervalIndex)
+        }
+        
+        // Обновление видимости элементов
+        layoutAutoSyncDetails.visibility = if (switchAutoSync.isChecked) View.VISIBLE else View.GONE
+        layoutSyncInterval.visibility = if (checkBackgroundSync.isChecked) View.VISIBLE else View.GONE
+        
+        updateAutoSyncStatus()
+    }
+    
+    /**
+     * Сохранение настроек автосинхронизации
+     */
+    private fun saveAutoSyncSettings() {
+        AutoSyncSettings.setAutoSyncEnabled(this, switchAutoSync.isChecked)
+        AutoSyncSettings.setSyncOnStartupEnabled(this, checkSyncOnStartup.isChecked)
+        AutoSyncSettings.setSyncOnSettingsChangeEnabled(this, checkSyncOnSettings.isChecked)
+        AutoSyncSettings.setBackgroundSyncEnabled(this, checkBackgroundSync.isChecked)
+        
+        // Сохранение интервала
+        val selectedIntervalIndex = spinnerSyncInterval.selectedItemPosition
+        if (selectedIntervalIndex >= 0 && selectedIntervalIndex < AutoSyncSettings.AVAILABLE_INTERVALS.size) {
+            val selectedInterval = AutoSyncSettings.AVAILABLE_INTERVALS[selectedIntervalIndex]
+            AutoSyncSettings.setSyncIntervalHours(this, selectedInterval)
+        }
+    }
+    
+    /**
+     * Обновление статуса автосинхронизации
+     */
+    private fun updateAutoSyncStatus() {
+        val summary = AutoSyncSettings.getSettingsSummary(this)
+        tvAutoSyncStatus.text = summary
     }
     
     private fun setupEventHandlers() {
@@ -172,11 +304,17 @@ class ServerSettingsActivity : AppCompatActivity() {
             }
         }
         
-        // Сохранение настроек
+        // Сохранение настроек сервера
         sharedPrefs.edit()
             .putString(KEY_SERVER_MODE, serverMode)
             .putString(KEY_CUSTOM_URL, customUrl)
             .apply()
+        
+        // Сохранение настроек автосинхронизации
+        saveAutoSyncSettings()
+        
+        // Обновление фоновой синхронизации согласно новым настройкам
+        updateBackgroundSync()
         
         // Обновление NetworkModule
         updateNetworkModule()
@@ -204,6 +342,44 @@ class ServerSettingsActivity : AppCompatActivity() {
         
         // Обновляем NetworkModule с новым URL
         NetworkModule.updateBaseUrl(baseUrl)
+    }
+    
+    /**
+     * Обновление фоновой синхронизации согласно настройкам
+     */
+    private fun updateBackgroundSync() {
+        if (AutoSyncSettings.isBackgroundSyncEnabled(this)) {
+            // Фоновая синхронизация включена - планируем WorkManager
+            try {
+                val intervalHours = AutoSyncSettings.getSyncIntervalHours(this)
+                
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+
+                val workRequest = PeriodicWorkRequestBuilder<com.example.vkbookandroid.service.SyncWorker>(
+                    intervalHours.toLong(), 
+                    TimeUnit.HOURS
+                )
+                    .setConstraints(constraints)
+                    .build()
+
+                WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                    "vkbook_periodic_sync",
+                    ExistingPeriodicWorkPolicy.REPLACE, // REPLACE чтобы обновить интервал
+                    workRequest
+                )
+                
+                android.util.Log.i("ServerSettingsActivity", "Background sync scheduled every $intervalHours hours")
+                
+            } catch (e: Exception) {
+                android.util.Log.w("ServerSettingsActivity", "Failed to schedule periodic sync: ${e.message}")
+            }
+        } else {
+            // Фоновая синхронизация отключена - отменяем все задачи
+            WorkManager.getInstance(this).cancelUniqueWork("vkbook_periodic_sync")
+            android.util.Log.i("ServerSettingsActivity", "Background sync cancelled - disabled in settings")
+        }
     }
     
     private fun isValidUrl(url: String): Boolean {

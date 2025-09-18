@@ -16,6 +16,13 @@ import java.util.Locale
  * Репозиторий для работы с данными арматур
  * Поддерживает загрузку как из assets, так и с сервера
  */
+/**
+ * Репозиторий доступа к данным арматуры.
+ * Источники:
+ *  - filesDir/data (локально сохранённые файлы)
+ *  - assets (резерв)
+ *  - серверные API (через ArmatureApiService) с фоллбэками
+ */
 class ArmatureRepository(
     private val context: Context,
     private val apiService: ArmatureApiService? = null
@@ -24,8 +31,8 @@ class ArmatureRepository(
     private val gson = Gson()
     
     /**
-     * Загрузить маркеры из filesDir (основной источник)
-     * Поддерживает как новый формат (с "points"), так и старый формат
+     * Загрузка маркеров из filesDir (основной источник после синхронизации).
+     * Поддерживает два формата JSON: старый (Map<String, Map<String, ArmatureCoords>>) и новый (points).
      */
     suspend fun loadMarkersFromFilesDir(): Map<String, Map<String, org.example.pult.model.ArmatureCoords>> {
         return withContext(Dispatchers.IO) {
@@ -93,7 +100,7 @@ class ArmatureRepository(
     }
     
     /**
-     * Загрузить маркеры из assets (старый формат)
+     * Загрузка маркеров из assets как резервный вариант (старый формат данных).
      */
     suspend fun loadMarkersFromAssets(): Map<String, Map<String, org.example.pult.model.ArmatureCoords>> {
         return withContext(Dispatchers.IO) {
@@ -160,23 +167,114 @@ class ArmatureRepository(
                         Log.d("ArmatureRepository", "Body markers count: ${body.size}")
                         Log.d("ArmatureRepository", "Body markers: $body")
                         
-                        // Проверяем, есть ли данные
                         if (body.isNotEmpty()) {
                             Log.d("ArmatureRepository", "Successfully loaded ${body.size} PDF files with markers from server")
                             return@withContext body
                         } else {
                             Log.w("ArmatureRepository", "Server returned empty markers map")
-                            return@withContext null
                         }
                     } else {
                         Log.w("ArmatureRepository", "Response body is null")
-                        return@withContext null
                     }
                 } else {
                     Log.w("ArmatureRepository", "Failed to get armature coords: ${response?.code()}")
-                    Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}")
-                    return@withContext null
+                    try { Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}") } catch (_: Exception) {}
                 }
+
+                // ФОЛБЭК 1: универсальная загрузка по имени файла
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: downloadFileByName(armature_coords.json)")
+                    val dl = apiService?.downloadFileByName("armature_coords.json")
+                    if (dl?.isSuccessful == true) {
+                        val json = dl.body()?.string()
+                        if (!json.isNullOrBlank()) {
+                            val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                Map::class.java,
+                                String::class.java,
+                                com.google.gson.reflect.TypeToken.getParameterized(
+                                    Map::class.java,
+                                    String::class.java,
+                                    ArmatureMarker::class.java
+                                ).type
+                            ).type
+                            val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                            if (parsed != null && parsed.isNotEmpty()) {
+                                Log.d("ArmatureRepository", "Fallback byName succeeded: ${parsed.size} PDFs")
+                                return@withContext parsed
+                            }
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "downloadFileByName fallback failed: code=${dl?.code()}")
+                    }
+                }
+
+                // ФОЛБЭК 2: список JSON файлов через /api/files/json
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getJsonFiles()")
+                    val listResp = apiService?.getJsonFiles()
+                    if (listResp?.isSuccessful == true) {
+                        val files = listResp.body().orEmpty()
+                        val hasCoords = files.any { it.filename.equals("armature_coords.json", ignoreCase = true) }
+                        Log.d("ArmatureRepository", "getJsonFiles returned ${files.size} items, hasCoords=$hasCoords")
+                        if (hasCoords) {
+                            val dl = apiService.downloadFileByName("armature_coords.json")
+                            if (dl.isSuccessful) {
+                                val json = dl.body()?.string()
+                                if (!json.isNullOrBlank()) {
+                                    val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                        Map::class.java,
+                                        String::class.java,
+                                        com.google.gson.reflect.TypeToken.getParameterized(
+                                            Map::class.java,
+                                            String::class.java,
+                                            ArmatureMarker::class.java
+                                        ).type
+                                    ).type
+                                    val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                    if (parsed != null && parsed.isNotEmpty()) {
+                                        Log.d("ArmatureRepository", "Fallback json list + byName succeeded")
+                                        return@withContext parsed
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ФОЛБЭК 3: updates API
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getUpdatesFilesByType(json)")
+                    val upd = apiService?.getUpdatesFilesByType("json")
+                    if (upd?.isSuccessful == true) {
+                        val names = upd.body().orEmpty()
+                        val has = names.any { it.equals("armature_coords.json", ignoreCase = true) }
+                        if (has) {
+                            val dl = apiService.downloadUpdatesFile("armature_coords.json")
+                            if (dl.isSuccessful) {
+                                val json = dl.body()?.string()
+                                if (!json.isNullOrBlank()) {
+                                    val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                        Map::class.java,
+                                        String::class.java,
+                                        com.google.gson.reflect.TypeToken.getParameterized(
+                                            Map::class.java,
+                                            String::class.java,
+                                            ArmatureMarker::class.java
+                                        ).type
+                                    ).type
+                                    val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                    if (parsed != null && parsed.isNotEmpty()) {
+                                        Log.d("ArmatureRepository", "Fallback updates download succeeded")
+                                        return@withContext parsed
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Log.w("ArmatureRepository", "All fallbacks for armature_coords failed")
+                return@withContext null
             } catch (e: Exception) {
                 Log.e("ArmatureRepository", "Error loading armature coords from server", e)
                 return@withContext null
@@ -213,7 +311,7 @@ class ArmatureRepository(
                     val filenames = fileInfos.map { it.filename }
                     Log.d("ArmatureRepository", "Extracted filenames: $filenames")
                     
-                    filenames
+                    if (filenames.isNotEmpty()) return@withContext filenames else Log.w("ArmatureRepository", "Empty PDF list from primary endpoint")
                 } else {
                     Log.e("ArmatureRepository", "=== PDF FILES LIST REQUEST FAILED ===")
                     Log.e("ArmatureRepository", "Response code: ${response?.code()}")
@@ -226,9 +324,45 @@ class ArmatureRepository(
                     } catch (e: Exception) {
                         Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
                     }
-                    
-                    emptyList()
                 }
+
+                // ФОЛБЭК A: общий список файлов /api/files/list
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getAllFiles() for PDFs")
+                    val all = apiService?.getAllFiles()
+                    if (all?.isSuccessful == true) {
+                        val body = all.body().orEmpty()
+                        val dataAny = body["data"]
+                        if (dataAny is List<*>) {
+                            val names = dataAny.mapNotNull { item ->
+                                when (item) {
+                                    is com.example.vkbookandroid.model.FileInfo -> item.filename
+                                    is Map<*, *> -> item["filename"] as? String
+                                    else -> null
+                                }
+                            }.filter { it.endsWith(".pdf", ignoreCase = true) }
+                            if (names.isNotEmpty()) {
+                                Log.d("ArmatureRepository", "Fallback allFiles PDFs: ${names.size} items")
+                                return@withContext names
+                            }
+                        }
+                    }
+                }
+
+                // ФОЛБЭК B: updates по типу
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getUpdatesFilesByType(pdf)")
+                    val upd = apiService?.getUpdatesFilesByType("pdf")
+                    if (upd?.isSuccessful == true) {
+                        val names = upd.body().orEmpty().filter { it.endsWith(".pdf", ignoreCase = true) }
+                        if (names.isNotEmpty()) {
+                            Log.d("ArmatureRepository", "Fallback updates PDFs: ${names.size} items")
+                            return@withContext names
+                        }
+                    }
+                }
+
+                emptyList()
             } catch (e: Exception) {
                 Log.e("ArmatureRepository", "=== PDF FILES LIST EXCEPTION ===", e)
                 Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
@@ -268,8 +402,7 @@ class ArmatureRepository(
                     // Извлекаем только имена файлов
                     val filenames = fileInfos.map { it.filename }
                     Log.d("ArmatureRepository", "Extracted filenames: $filenames")
-                    
-                    filenames
+                    if (filenames.isNotEmpty()) return@withContext filenames else Log.w("ArmatureRepository", "Empty Excel list from primary endpoint")
                 } else {
                     Log.e("ArmatureRepository", "=== EXCEL FILES LIST REQUEST FAILED ===")
                     Log.e("ArmatureRepository", "Response code: ${response?.code()}")
@@ -282,9 +415,45 @@ class ArmatureRepository(
                     } catch (e: Exception) {
                         Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
                     }
-                    
-                    emptyList()
                 }
+
+                // ФОЛБЭК A: общий список файлов /api/files/list
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getAllFiles() for Excel")
+                    val all = apiService?.getAllFiles()
+                    if (all?.isSuccessful == true) {
+                        val body = all.body().orEmpty()
+                        val dataAny = body["data"]
+                        if (dataAny is List<*>) {
+                            val names = dataAny.mapNotNull { item ->
+                                when (item) {
+                                    is com.example.vkbookandroid.model.FileInfo -> item.filename
+                                    is Map<*, *> -> item["filename"] as? String
+                                    else -> null
+                                }
+                            }.filter { it.endsWith(".xlsx", ignoreCase = true) }
+                            if (names.isNotEmpty()) {
+                                Log.d("ArmatureRepository", "Fallback allFiles Excel: ${names.size} items")
+                                return@withContext names
+                            }
+                        }
+                    }
+                }
+
+                // ФОЛБЭК B: updates по типу
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying fallback: getUpdatesFilesByType(excel)")
+                    val upd = apiService?.getUpdatesFilesByType("excel")
+                    if (upd?.isSuccessful == true) {
+                        val names = upd.body().orEmpty().filter { it.endsWith(".xlsx", ignoreCase = true) }
+                        if (names.isNotEmpty()) {
+                            Log.d("ArmatureRepository", "Fallback updates Excel: ${names.size} items")
+                            return@withContext names
+                        }
+                    }
+                }
+
+                emptyList()
             } catch (e: Exception) {
                 Log.e("ArmatureRepository", "=== EXCEL FILES LIST EXCEPTION ===", e)
                 Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
@@ -329,23 +498,38 @@ class ArmatureRepository(
                         return@withContext body
                     } else {
                         Log.e("ArmatureRepository", "ERROR: Response body is null for $filename")
-                        return@withContext null
                     }
-                } else {
-                    Log.w("ArmatureRepository", "Failed to download $filename")
-                    Log.w("ArmatureRepository", "Response code: ${response?.code()}")
-                    Log.w("ArmatureRepository", "Response message: ${response?.message()}")
-                    
-                    // Пытаемся прочитать тело ошибки
-                    try {
-                        val errorBody = response?.errorBody()?.string()
-                        Log.w("ArmatureRepository", "Error body: $errorBody")
-                    } catch (e: Exception) {
-                        Log.w("ArmatureRepository", "Could not read error body: ${e.message}")
-                    }
-                    
-                    return@withContext null
                 }
+
+                Log.w("ArmatureRepository", "Primary Excel download failed for $filename, trying fallbacks")
+                try { Log.w("ArmatureRepository", "Response code: ${response?.code()} message=${response?.message()}") } catch (_: Exception) {}
+                try { Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}") } catch (_: Exception) {}
+
+                // ФОЛБЭК 1: универсальная загрузка по имени
+                runCatching {
+                    val byName = apiService?.downloadFileByName(filename)
+                    if (byName?.isSuccessful == true) {
+                        val body = byName.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "Fallback download by name succeeded for $filename")
+                            return@withContext body
+                        }
+                    }
+                }
+
+                // ФОЛБЭК 2: загрузка из updates
+                runCatching {
+                    val upd = apiService?.downloadUpdatesFile(filename)
+                    if (upd?.isSuccessful == true) {
+                        val body = upd.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "Fallback download from updates succeeded for $filename")
+                            return@withContext body
+                        }
+                    }
+                }
+
+                return@withContext null
             } catch (e: Exception) {
                 Log.e("ArmatureRepository", "Exception while downloading Excel file: $filename", e)
                 Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
@@ -389,23 +573,38 @@ class ArmatureRepository(
                         return@withContext body
                     } else {
                         Log.e("ArmatureRepository", "ERROR: PDF response body is null for $filename")
-                        return@withContext null
                     }
-                } else {
-                    Log.w("ArmatureRepository", "Failed to download PDF: $filename")
-                    Log.w("ArmatureRepository", "Response code: ${response?.code()}")
-                    Log.w("ArmatureRepository", "Response message: ${response?.message()}")
-                    
-                    // Пытаемся прочитать тело ошибки
-                    try {
-                        val errorBody = response?.errorBody()?.string()
-                        Log.w("ArmatureRepository", "Error body: $errorBody")
-                    } catch (e: Exception) {
-                        Log.w("ArmatureRepository", "Could not read error body: ${e.message}")
-                    }
-                    
-                    return@withContext null
                 }
+
+                Log.w("ArmatureRepository", "Primary PDF download failed for $filename, trying fallbacks")
+                try { Log.w("ArmatureRepository", "Response code: ${response?.code()} message=${response?.message()}") } catch (_: Exception) {}
+                try { Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}") } catch (_: Exception) {}
+
+                // ФОЛБЭК 1: универсальная загрузка по имени
+                runCatching {
+                    val byName = apiService?.downloadFileByName(filename)
+                    if (byName?.isSuccessful == true) {
+                        val body = byName.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "Fallback download by name succeeded for $filename")
+                            return@withContext body
+                        }
+                    }
+                }
+
+                // ФОЛБЭК 2: загрузка из updates
+                runCatching {
+                    val upd = apiService?.downloadUpdatesFile(filename)
+                    if (upd?.isSuccessful == true) {
+                        val body = upd.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "Fallback download from updates succeeded for $filename")
+                            return@withContext body
+                        }
+                    }
+                }
+
+                return@withContext null
             } catch (e: Exception) {
                 Log.e("ArmatureRepository", "Exception while downloading PDF file: $filename", e)
                 Log.e("ArmatureRepository", "Exception type: ${e.javaClass.simpleName}")
