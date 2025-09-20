@@ -47,7 +47,6 @@ public class ExcelService implements ExcelDataManager.ExcelDataService {
         return headers;
     }
 
-    @Override
     public Map<String, Integer> getColumnWidths(InputStream inputStream, String sheetName) throws IOException {
         Map<String, Integer> widths = new LinkedHashMap<>();
         try (Workbook workbook = new XSSFWorkbook(inputStream)) {

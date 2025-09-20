@@ -14,6 +14,8 @@ import androidx.recyclerview.widget.RecyclerView
 import org.example.pult.RowDataDynamic
 import org.example.pult.android.dpToPx
 import android.view.MotionEvent
+import android.os.Handler
+import android.os.Looper
 
 class SignalsAdapter(
     private var data: List<RowDataDynamic>,
@@ -32,6 +34,7 @@ class SignalsAdapter(
     private var pdfSchemeColIndex: Int = -1
     private val hiddenHeaderNames: Set<String> = setOf("PDF_Схема_и_ID_арматуры")
     private var clickableArmatures: Set<String> = emptySet() // Арматуры с координатами в JSON
+    private var selectedColumnHeaderName: String? = null
 
     private fun isHidden(headerName: String): Boolean {
         return hidePdfSchemeColumn && hiddenHeaderNames.any { it.equals(headerName, ignoreCase = true) }
@@ -56,6 +59,8 @@ class SignalsAdapter(
         private val headerContainer: LinearLayout = itemView.findViewById(R.id.linearLayoutRowContent)
         private var _initialX = 0f
         private var _initialWidth = 0
+        private val longPressHandler = Handler(Looper.getMainLooper())
+        private var pendingSelection: Runnable? = null
 
         fun bind(headers: List<String>, columnWidths: Map<String, Int>, totalRowWidth: Int, context: Context, isResizingMode: Boolean) {
             _isResizingMode = isResizingMode
@@ -72,7 +77,11 @@ class SignalsAdapter(
                 val textView = TextView(context).apply {
                     layoutParams = LinearLayout.LayoutParams(colWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
                     text = headerName
-                    setBackgroundResource(R.drawable.cell_border) // Cell border
+                    if (adapter.isColumnSelected(headerName)) {
+                        setBackgroundResource(R.drawable.cell_header_selected)
+                    } else {
+                        setBackgroundResource(R.drawable.cell_border)
+                    }
                     gravity = Gravity.START or Gravity.TOP
                     setPadding(context.dpToPx(4), context.dpToPx(4), context.dpToPx(4), context.dpToPx(4))
                     setTypeface(typeface, Typeface.BOLD)
@@ -83,6 +92,39 @@ class SignalsAdapter(
                 maxHeaderHeight = maxOf(maxHeaderHeight, textView.measuredHeight)
                 headerTextViews.add(textView)
                 headerContainer.addView(textView)
+
+                // Поиск по столбцу: долгий тап 3 секунды для активации, одиночный клик по выделенному — деактивировать
+                var longPressActivated = false
+                textView.setOnTouchListener { _, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            longPressActivated = false
+                            pendingSelection?.let { longPressHandler.removeCallbacks(it) }
+                            pendingSelection = Runnable {
+                                longPressActivated = true
+                                adapter.activateColumnSearch(headerName)
+                            }
+                            longPressHandler.postDelayed(pendingSelection!!, 3000)
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            pendingSelection?.let { longPressHandler.removeCallbacks(it) }
+                            pendingSelection = null
+                            // Если был совершен долгий тап и мы активировали колонку — поглощаем UP, чтобы клик не сработал
+                            if (longPressActivated) {
+                                longPressActivated = false
+                                return@setOnTouchListener true
+                            }
+                            false
+                        }
+                        else -> false
+                    }
+                }
+                textView.setOnClickListener {
+                    if (adapter.isColumnSelected(headerName)) {
+                        adapter.deactivateColumnSearch()
+                    }
+                }
 
                 val isLastVisible = visibleIndices.isNotEmpty() && index == visibleIndices.last()
                 if (!isLastVisible) {
@@ -253,11 +295,16 @@ class SignalsAdapter(
                     layoutParams = LinearLayout.LayoutParams(colWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
                     text = if (i < values.size) values[i] ?: "" else ""
                     val cellText = text
-                    if (adapter.currentSearchQuery.isNotEmpty() && (cellText?.contains(adapter.currentSearchQuery, ignoreCase = true) == true)) {
-                        setBackgroundResource(R.drawable.cell_highlight)
-                    } else {
-                    setBackgroundResource(R.drawable.cell_border)
-                    }
+                    val query = adapter.currentSearchQuery
+                    if (query.isNotEmpty()) {
+                        val matches = cellText?.contains(query, ignoreCase = true) == true
+                        val shouldHighlight = if (adapter.hasSelectedColumn()) {
+                            adapter.isColumnSelected(headerName) && matches
+                        } else {
+                            matches
+                        }
+                        if (shouldHighlight) setBackgroundResource(R.drawable.cell_highlight) else setBackgroundResource(R.drawable.cell_border)
+                    } else setBackgroundResource(R.drawable.cell_border)
                     gravity = Gravity.START or Gravity.TOP
                     setPadding(context.dpToPx(4), context.dpToPx(4), context.dpToPx(4), context.dpToPx(4))
                     textSize = 12f
@@ -513,10 +560,30 @@ class SignalsAdapter(
     }
 
     fun filter(searchText: String) {
-        currentSearchQuery = searchText
-        data = if (searchText.isEmpty()) _originalData else _originalData.filter { row ->
+        val normalized = searchText.trim()
+        currentSearchQuery = normalized
+        if (normalized.isEmpty()) {
+            data = _originalData
+            notifyDataSetChanged()
+            return
+        }
+        val selectedHeader = selectedColumnHeaderName
+        data = if (!selectedHeader.isNullOrBlank()) {
+            val colIndex = headers.indexOfFirst { it.equals(selectedHeader, ignoreCase = true) }
+            if (colIndex >= 0) {
+                _originalData.filter { row ->
+                    val values = row.getAllProperties()
+                    val cell = if (colIndex < values.size) values[colIndex] else null
+                    cell?.contains(normalized, ignoreCase = true) == true
+                }
+            } else {
+                _originalData
+            }
+        } else {
+            _originalData.filter { row ->
                 row.getAllProperties().any { value ->
-                    value?.contains(searchText, ignoreCase = true) == true
+                    value?.contains(normalized, ignoreCase = true) == true
+                }
             }
         }
         notifyDataSetChanged()
@@ -548,5 +615,35 @@ class SignalsAdapter(
         // Учитываем хэндлы между колонками и правый конечный хэндл только для видимых колонок
         val handleWidth = context.dpToPx(16)
         return totalWidth + visibleCount * handleWidth
+    }
+
+    // === Поиск по столбцам ===
+    fun activateColumnSearch(headerName: String) {
+        if (selectedColumnHeaderName == headerName) return
+        selectedColumnHeaderName = headerName
+        Log.d("SignalsAdapter", "Column search activated for: $headerName")
+        // Перерисовать заголовок для подсветки и применить фильтр к текущему запросу
+        notifyItemChanged(0)
+        if (currentSearchQuery.isNotEmpty()) {
+            filter(currentSearchQuery)
+        }
+    }
+
+    fun deactivateColumnSearch() {
+        val prev = selectedColumnHeaderName
+        selectedColumnHeaderName = null
+        Log.d("SignalsAdapter", "Column search deactivated (was: $prev)")
+        notifyItemChanged(0)
+        if (currentSearchQuery.isNotEmpty()) {
+            filter(currentSearchQuery)
+        }
+    }
+
+    fun isColumnSelected(headerName: String): Boolean {
+        return selectedColumnHeaderName?.equals(headerName, ignoreCase = true) == true
+    }
+
+    fun hasSelectedColumn(): Boolean {
+        return !selectedColumnHeaderName.isNullOrBlank()
     }
 }

@@ -117,14 +117,8 @@ class MainActivity : AppCompatActivity() {
             checkConnectionOnStartup() // Только проверка соединения
             initializeBasicFiles() // Только базовые файлы без синхронизации
         }
-
-        // Одноразовая очистка запрещённых PDF при старте (мягко)
-        try {
-            val removed = com.example.vkbookandroid.service.DataCleanupService(this).removeDisallowedPdfs()
-            if (removed > 0) {
-                android.util.Log.i("MainActivity", "Removed $removed disallowed PDFs during startup cleanup")
-            }
-        } catch (_: Exception) {}
+        
+        // УБРАНО: удаление PDF при запуске
 
         // ПРОВЕРЯЕМ НАСТРОЙКИ ФОНОВОЙ СИНХРОНИЗАЦИИ
         if (AutoSyncSettings.isBackgroundSyncEnabled(this)) {

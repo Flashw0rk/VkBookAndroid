@@ -129,12 +129,18 @@ class RemoteFileProvider(
      * Безопасная санитизация пути к файлу
      */
     private fun sanitizePath(path: String): String {
-        // Удаляем опасные символы и последовательности
-        return path
+        // Удаляем опасные последовательности и нормализуем разделители директорий
+        val normalizedSeparators = path
             .replace("..", "") // Удаляем path traversal
             .replace("//", "/") // Удаляем двойные слеши
             .replace("\\", "/") // Заменяем обратные слеши
-            .filter { it.isLetterOrDigit() || it in listOf('/', '-', '_', '.') } // Только безопасные символы
+
+        // Разрешаем распространённые символы в именах файлов: пробел, плюс, запятая, круглые/квадратные скобки
+        // и стандартные разделители/знаки. Юникодные буквы/цифры (в т.ч. кириллица) уже разрешены через isLetterOrDigit
+        val allowedPunctuation = setOf('/', '-', '_', '.', ' ', '+', ',', '(', ')', '[', ']')
+
+        return normalizedSeparators
+            .filter { ch -> ch.isLetterOrDigit() || ch in allowedPunctuation }
             .trim()
     }
 
