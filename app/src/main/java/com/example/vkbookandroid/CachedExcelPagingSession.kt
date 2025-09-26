@@ -11,7 +11,11 @@ import java.io.File
 class CachedExcelPagingSession(private val datasetDir: File) : PagingSession {
     private val gson = Gson()
     private val cachedHeaders: List<String> by lazy {
-        val json = File(datasetDir, "headers.json").readText()
+        val headersFile = File(datasetDir, "headers.json")
+        if (!headersFile.exists()) {
+            throw IllegalStateException("Headers file does not exist: ${headersFile.absolutePath}")
+        }
+        val json = headersFile.readText()
         gson.fromJson(json, object : TypeToken<List<String>>() {}.type)
     }
 

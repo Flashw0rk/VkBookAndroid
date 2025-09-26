@@ -51,6 +51,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     private var currentColumnWidths: MutableMap<String, Int> = mutableMapOf()
     private lateinit var searchView: SearchView
     private lateinit var toggleResizeModeButton: Button
+    private lateinit var scrollToTopButton: android.widget.ImageButton
+    private lateinit var scrollToBottomButton: android.widget.ImageButton
     private var isResizingMode: Boolean = false
     private var isDataLoaded: Boolean = false
     private var isLoadingPage: Boolean = false
@@ -154,6 +156,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         excelRepository = com.example.vkbookandroid.ExcelRepository(requireContext(), fileProvider)
         searchView = view.findViewById(R.id.search_view)
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
+        scrollToTopButton = view.findViewById(R.id.scroll_to_top_button)
+        scrollToBottomButton = view.findViewById(R.id.scroll_to_bottom_button)
 
         // Инициализация новой системы поиска
         initializeSearchSystem()
@@ -161,6 +165,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         setupSearch()
         setupSearchFlow()
         setupToggleResizeModeButton()
+        setupScrollButtons()
         attachWidthAutoScaler()
         
         // Загружаем данные сразу при создании фрагмента
@@ -346,6 +351,43 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
             // Отключаем/включаем прокрутку RecyclerView: оставим включённой, но не будем перехватывать события сверху
             recyclerView.isNestedScrollingEnabled = true
             Log.d("DataFragment", "Resizing mode toggled: $isResizingMode")
+        }
+    }
+
+    private fun setupScrollButtons() {
+        scrollToTopButton.setOnClickListener {
+            scrollToTop()
+        }
+        
+        scrollToBottomButton.setOnClickListener {
+            scrollToBottom()
+        }
+    }
+
+    private fun scrollToTop() {
+        try {
+            val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
+            if (layoutManager != null) {
+                layoutManager.scrollToPositionWithOffset(0, 0)
+                recyclerView.smoothScrollToPosition(0)
+            }
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error scrolling to top", e)
+        }
+    }
+
+    private fun scrollToBottom() {
+        try {
+            val itemCount = adapter.itemCount
+            if (itemCount > 0) {
+                val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
+                if (layoutManager != null) {
+                    layoutManager.scrollToPositionWithOffset(itemCount - 1, 0)
+                    recyclerView.smoothScrollToPosition(itemCount - 1)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error scrolling to bottom", e)
         }
     }
 

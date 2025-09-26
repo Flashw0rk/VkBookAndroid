@@ -11,6 +11,8 @@ import java.io.File
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Кэш постраничных данных Excel на диске (вариант 2).
@@ -33,6 +35,9 @@ class ExcelCacheManager(private val context: Context) {
 
     // Версия структуры кэша. Меняем при изменении формата.
     private val schemaVersion: Int = 2
+    
+    // Мьютекс для синхронизации операций с кэшем
+    private val cacheLock = ReentrantLock()
 
     private fun rootDir(): File = File(context.filesDir, "excel_cache").apply { mkdirs() }
 
@@ -68,18 +73,20 @@ class ExcelCacheManager(private val context: Context) {
     }
 
     fun openCachedSessionOrNull(relativePath: String, sheetName: String): CachedExcelPagingSession? {
-        return try {
-            val dir = datasetDir(relativePath, sheetName)
-            val hasHeaders = headersFile(dir).exists()
-            val hasWidths = widthsFile(dir).exists()
-            val hasPages = File(dir, "pages").listFiles { f ->
-                f.name.startsWith("page_") && f.name.endsWith(".json")
-            }?.isNotEmpty() == true
-            if (!(hasHeaders && hasWidths && hasPages)) return null
-            CachedExcelPagingSession(dir)
-        } catch (e: Exception) {
-            Log.w("ExcelCacheManager", "Failed to open cached session for $relativePath::$sheetName", e)
-            null
+        return cacheLock.withLock {
+            try {
+                val dir = datasetDir(relativePath, sheetName)
+                val hasHeaders = headersFile(dir).exists()
+                val hasWidths = widthsFile(dir).exists()
+                val hasPages = File(dir, "pages").listFiles { f ->
+                    f.name.startsWith("page_") && f.name.endsWith(".json")
+                }?.isNotEmpty() == true
+                if (!(hasHeaders && hasWidths && hasPages)) return@withLock null
+                CachedExcelPagingSession(dir)
+            } catch (e: Exception) {
+                Log.w("ExcelCacheManager", "Failed to open cached session for $relativePath::$sheetName", e)
+                null
+            }
         }
     }
 
@@ -163,11 +170,13 @@ class ExcelCacheManager(private val context: Context) {
     ) {
         // Поручим запуск корутины стороне вызывающего кода (фрагмент/репозиторий) — здесь только синхронная сборка
         Thread {
-            try {
-                buildCache(relativePath, sheetName, pageSize, openInputStream)
-                onUpdated?.invoke()
-            } catch (e: Exception) {
-                Log.e("ExcelCacheManager", "Cache build failed for $relativePath", e)
+            cacheLock.withLock {
+                try {
+                    buildCache(relativePath, sheetName, pageSize, openInputStream)
+                    onUpdated?.invoke()
+                } catch (e: Exception) {
+                    Log.e("ExcelCacheManager", "Cache build failed for $relativePath", e)
+                }
             }
         }.start()
     }
@@ -181,6 +190,7 @@ class ExcelCacheManager(private val context: Context) {
         pageSize: Int,
         openInputStream: () -> InputStream
     ) {
+        cacheLock.withLock {
         val dir = datasetDir(relativePath, sheetName)
         val tmpDir = File(dir.parentFile, dir.name + "_tmp").apply {
             if (exists()) {
@@ -367,6 +377,7 @@ class ExcelCacheManager(private val context: Context) {
                 tmpDir.deleteRecursively()
             }
             throw e
+        }
         }
     }
 

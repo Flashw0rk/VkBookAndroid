@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
     
     // Синхронизация
     private lateinit var btnSync: Button
-    private lateinit var btnSettings: Button
+    private lateinit var btnSettings: android.widget.ImageButton
     private lateinit var tvSyncStatus: TextView
     private lateinit var syncService: SyncService
     private lateinit var dataRefreshManager: DataRefreshManager
