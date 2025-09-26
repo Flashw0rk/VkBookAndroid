@@ -78,6 +78,39 @@ class ExcelRepository(
             onUpdated = onUpdated
         )
     }
+    
+    /**
+     * ПРОФЕССИОНАЛЬНОЕ РЕШЕНИЕ: Поиск по всей таблице арматуры
+     * Ищет по всем строкам Excel файла, а не только по загруженным в память
+     */
+    fun searchInAllArmatures(searchQuery: String, columnName: String? = null): List<org.example.pult.RowDataDynamic> {
+        val input = fileProvider.open(PATH_ARMATURES)
+        return try {
+            val session = ExcelPagingSession.fromInputStream(input, SHEET_ARMATURES)
+            val results = session.searchInAllData(searchQuery, columnName)
+            session.close()
+            results
+        } catch (e: Exception) {
+            android.util.Log.e("ExcelRepository", "Error searching in all armatures", e)
+            emptyList()
+        }
+    }
+    
+    /**
+     * Получает общее количество строк арматуры в Excel файле
+     */
+    fun getTotalArmaturesCount(): Int {
+        val input = fileProvider.open(PATH_ARMATURES)
+        return try {
+            val session = ExcelPagingSession.fromInputStream(input, SHEET_ARMATURES)
+            val count = session.getTotalDataRows()
+            session.close()
+            count
+        } catch (e: Exception) {
+            android.util.Log.e("ExcelRepository", "Error getting total armatures count", e)
+            0
+        }
+    }
 }
 
 

@@ -23,6 +23,18 @@ import android.widget.Button
 import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.lifecycle.Observer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.collect
+import com.example.vkbookandroid.search.SearchManager
+import com.example.vkbookandroid.search.SearchResult
 
 // Extension function to convert dp to pixels
 fun Context.dpToPx(dp: Int): Int {
@@ -32,6 +44,7 @@ fun Context.dpToPx(dp: Int): Int {
 class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
     private lateinit var recyclerView: RecyclerView
+    private var emptyView: android.widget.TextView? = null
     private lateinit var adapter: SignalsAdapter
     private lateinit var excelDataManager: AppExcelDataManager
     private lateinit var excelRepository: com.example.vkbookandroid.ExcelRepository
@@ -42,11 +55,20 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     private var isDataLoaded: Boolean = false
     private var isLoadingPage: Boolean = false
     private var nextStartRow: Int = 0
-    private val pageSize: Int = 100
+    private val pageSize: Int = 1500
     private var pagingSession: com.example.vkbookandroid.ExcelPagingSession? = null
     private var lastMeasuredListWidth: Int = 0
     private var cachedSession: com.example.vkbookandroid.PagingSession? = null
     private var lastHeaders: List<String> = emptyList()
+    
+    // Новая система поиска
+    private lateinit var searchManager: SearchManager
+    private var currentSearchQuery: String = ""
+    private var searchJob: Job? = null
+    private val queryFlow = MutableStateFlow("")
+    private var nextRequestId: Int = 0
+    private var activeRequestId: Int = -1
+    private var lastRawQuery: String = ""
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -55,7 +77,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     ): View? {
         val view = inflater.inflate(R.layout.fragment_data, container, false)
         recyclerView = view.findViewById(R.id.recyclerView)
+        val hscroll: android.widget.HorizontalScrollView? = view.findViewById(R.id.hscroll)
+        emptyView = view.findViewById(R.id.empty_view)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
+        // Отключаем анимации, чтобы избежать дергания при обновлениях
+        recyclerView.itemAnimator = null
         // recyclerView.setHasFixedSize(true) // Отключено из-за конфликта с wrap_content
         recyclerView.setItemViewCacheSize(20)
         adapter = SignalsAdapter(
@@ -83,6 +109,40 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
             onRowClick = null,
             hidePdfSchemeColumn = false
         )
+        adapter.setOnAfterSearchResultsApplied {
+            // Жестко сбрасываем скролл: останавливаем текущий, обнуляем горизонтальный, затем вертикальный
+            try { recyclerView.stopScroll() } catch (_: Throwable) {}
+            try { hscroll?.post { hscroll.scrollTo(0, 0) } } catch (_: Throwable) {}
+            // Тройной скролл + после layout (вертикально к шапке)
+            recyclerView.post {
+                try {
+                    (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+                    recyclerView.scrollToPosition(0)
+                } catch (_: Throwable) {}
+            }
+            recyclerView.postDelayed({
+                try {
+                    (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+                    recyclerView.scrollToPosition(0)
+                } catch (_: Throwable) {}
+            }, 100)
+            recyclerView.postDelayed({
+                try {
+                    (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+                    recyclerView.scrollToPosition(0)
+                } catch (_: Throwable) {}
+            }, 220)
+            recyclerView.viewTreeObserver?.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    try {
+                        (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0)
+                        recyclerView.scrollToPosition(0)
+                        hscroll?.scrollTo(0, 0)
+                    } catch (_: Throwable) {}
+                    recyclerView.viewTreeObserver?.removeOnGlobalLayoutListener(this)
+                }
+            })
+        }
         recyclerView.adapter = adapter
         excelDataManager = AppExcelDataManager(requireContext().applicationContext)
         val baseUrl = com.example.vkbookandroid.ServerSettingsActivity.getCurrentServerUrl(requireContext())
@@ -95,7 +155,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         searchView = view.findViewById(R.id.search_view)
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
 
+        // Инициализация новой системы поиска
+        initializeSearchSystem()
+        
         setupSearch()
+        setupSearchFlow()
         setupToggleResizeModeButton()
         attachWidthAutoScaler()
         
@@ -145,14 +209,27 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     private fun setupSearch() {
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(query: String?): Boolean {
-                filterData(query.orEmpty())
+                // При Submit прокручиваем к началу после применения результата
+                recyclerView.tag = "scroll_to_top_next"
+                // Отправляем запрос в Flow-пайплайн
+                queryFlow.value = query.orEmpty()
                 (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged(query.orEmpty())
                 return true
             }
 
             override fun onQueryTextChange(newText: String?): Boolean {
-                filterData(newText.orEmpty())
-                (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged(newText.orEmpty())
+                val newQuery = newText.orEmpty()
+                val isDeletion = newQuery.length < lastRawQuery.length
+
+                // Мгновенный скролл к заголовку при удалении любого символа
+                if (isDeletion) {
+                    try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
+                }
+
+                recyclerView.tag = "scroll_to_top_next"
+                queryFlow.value = newQuery
+                (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged(newQuery)
+                lastRawQuery = newQuery
                 return true
             }
         })
@@ -161,7 +238,9 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         searchView.setOnCloseListener {
             // Очищаем поиск при нажатии на крестик
             searchView.setQuery("", false)
-            filterData("")
+            recyclerView.tag = "scroll_to_top_next"
+            queryFlow.value = ""
+            lastRawQuery = ""
             (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged("")
             true // Возвращаем true, чтобы SearchView не закрывался
         }
@@ -178,8 +257,77 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     }
 
     fun filterData(query: String) {
-        // Делегируем фильтрацию адаптеру, чтобы одновременно выставлялся currentSearchQuery для подсветки
-        adapter.filter(query)
+        // Переведено на Flow-пайплайн: просто отправляем значение
+        recyclerView.tag = "scroll_to_top_next"
+        queryFlow.value = query
+    }
+
+    private fun setupSearchFlow() {
+        lifecycleScope.launch {
+            queryFlow
+                .map { it.trim() }
+                .debounce(300)
+                .distinctUntilChanged()
+                .flatMapLatest { normalized ->
+                    flow {
+                        currentSearchQuery = normalized
+                        // Всегда скроллим к началу на любое изменение запроса
+                        recyclerView.tag = "scroll_to_top_next"
+                        val requestIdForThisQuery = (++nextRequestId)
+                        activeRequestId = requestIdForThisQuery
+
+                        if (normalized.isEmpty()) {
+                            // Очистка результатов и скролл к началу
+                if (isDataReadyForSearch()) {
+                    adapter.clearSearchResultsOptimized()
+                    recyclerView.post {
+                        try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
+                        recyclerView.requestLayout()
+                    }
+                    // Дополнительно: показать таблицу и скрыть пустой вид при очистке
+                    emptyView?.visibility = View.GONE
+                    (recyclerView.parent as? View)?.visibility = View.VISIBLE
+                    // Дополнительный скролл чуть позже, чтобы закрепить заголовок
+                    recyclerView.postDelayed({
+                        try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
+                    }, 150)
+                }
+                            emit(Unit)
+                            return@flow
+                        }
+
+                        // Дожидаемся готовности данных/индекса, затем выполняем поиск
+                        try {
+                            if (::searchManager.isInitialized) {
+                                if (searchManager.isIndexReady.value != true) {
+                                    waitForIndexAndSearch(normalized, requestIdForThisQuery)
+                                } else {
+                                    performEnhancedSearch(normalized, requestIdForThisQuery)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) {
+                                // flatMapLatest уже отменил старую работу
+                            } else {
+                                Log.e("DataFragment", "Search error in flow", e)
+                                if (isDataReadyForSearch()) adapter.clearSearchResults()
+                            }
+                        }
+                        emit(Unit)
+                    }
+                }
+                .collect { /* no-op, всё сделано побочно */ }
+        }
+    }
+
+    private suspend fun waitForIndexAndSearch(searchText: String, requestId: Int) {
+        var attempts = 0
+        val maxAttempts = 30 // ~900ms c шагом 30ms
+        while (attempts < maxAttempts && searchManager.isIndexReady.value != true) {
+            delay(30)
+            attempts++
+        }
+        performEnhancedSearch(searchText, requestId)
     }
 
     fun setSearchQueryExternal(query: String) {
@@ -288,6 +436,26 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                     Log.d("DataFragment", "RecyclerView visibility: ${recyclerView.visibility}")
                 }
 
+                // Предпрогрев индекса на полном наборе данных после первичной загрузки (в фоне)
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val combined = mutableListOf<org.example.pult.RowDataDynamic>()
+                        combined.addAll(firstPage)
+                        val session = cachedSession ?: pagingSession
+                        var cursor = firstPage.size
+                        val step = pageSize
+                        while (session != null) {
+                            val next = try { session.readRange(cursor, step) } catch (_: Exception) { emptyList() }
+                            if (next.isEmpty()) break
+                            combined.addAll(next)
+                            cursor += next.size
+                        }
+                        if (::searchManager.isInitialized) {
+                            searchManager.prewarmIndex(combined, headers)
+                        }
+                    } catch (_: Exception) {}
+                }
+
                 // 2) Тихая пересборка кэша в фоне и обновление по готовности
                 excelRepository.refreshCacheBschu(pageSize) {
                     lifecycleScope.launch(Dispatchers.IO) {
@@ -303,6 +471,23 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                             cachedSession = newCached
                             pagingSession?.close()
                             pagingSession = null
+
+                            // Предпрогрев индекса после фонового обновления кэша (в фоне)
+                            try {
+                                val combined = mutableListOf<org.example.pult.RowDataDynamic>()
+                                combined.addAll(newFirstPage)
+                                var cursor = newFirstPage.size
+                                val step = pageSize
+                                while (true) {
+                                    val next = try { newCached.readRange(cursor, step) } catch (_: Exception) { emptyList() }
+                                    if (next.isEmpty()) break
+                                    combined.addAll(next)
+                                    cursor += next.size
+                                }
+                                if (::searchManager.isInitialized) {
+                                    searchManager.prewarmIndex(combined, newHeaders)
+                                }
+                            } catch (_: Exception) {}
                         }
                     }
                 }
@@ -402,6 +587,17 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     fun ensureDataLoaded() {
         Log.d("DataFragment", "ensureDataLoaded called: isDataLoaded=$isDataLoaded, isAdded=$isAdded, isVisible=$isVisible")
         if (!isDataLoaded) {
+            // Проверяем, завершена ли инициализация приложения
+            val mainActivity = activity as? com.example.vkbookandroid.MainActivity
+            if (mainActivity != null && !mainActivity.isInitializationComplete()) {
+                Log.d("DataFragment", "Initialization not complete, waiting...")
+                mainActivity.addInitializationListener {
+                    Log.d("DataFragment", "Initialization complete, starting data load")
+                    loadSignalsData()
+                }
+                return
+            }
+            
             Log.d("DataFragment", "Data not loaded, starting loadSignalsData()")
             loadSignalsData()
         } else {
@@ -435,5 +631,290 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
             Log.e("DataFragment", "Error getting watched file path", e)
             null
         }
+    }
+    
+    /**
+     * Инициализация новой системы поиска
+     */
+    private fun initializeSearchSystem() {
+        try {
+            // Инициализируем SearchManager
+            searchManager = SearchManager(requireContext())
+            
+            // Настраиваем наблюдатели
+            setupSearchObservers()
+            
+            Log.d("DataFragment", "Search system initialized successfully")
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error initializing search system", e)
+        }
+    }
+    
+    /**
+     * Настройка наблюдателей для SearchManager
+     */
+    private fun setupSearchObservers() {
+        // Наблюдаем за результатами поиска
+        searchManager.searchResults.observe(viewLifecycleOwner, Observer { results ->
+            if (results != null) {
+                if (results.requestId >= 0 && results.requestId != activeRequestId) {
+                    Log.d("DataFragment", "Observer: outdated results requestId=${results.requestId}, active=${activeRequestId}")
+                    return@Observer
+                }
+                val expected = currentSearchQuery.trim()
+                if (results.normalizedQuery.isNotEmpty()) {
+                    val same = com.example.vkbookandroid.utils.SearchNormalizer.normalizeSearchQuery(expected) == results.normalizedQuery
+                    if (!same) {
+                        Log.d("DataFragment", "Observer: normalized query mismatch. expected='$expected', got='${results.normalizedQuery}'")
+                        return@Observer
+                    }
+                }
+                handleSearchResults(results)
+            }
+        })
+        
+        // Наблюдаем за состоянием поиска
+        searchManager.isSearching.observe(viewLifecycleOwner, Observer { isSearching ->
+            if (isSearching) {
+                // Показываем индикатор загрузки
+                Log.d("DataFragment", "Search started")
+            } else {
+                // Скрываем индикатор загрузки
+                Log.d("DataFragment", "Search completed")
+            }
+        })
+        
+        // Наблюдаем за историей поиска
+        searchManager.searchHistory.observe(viewLifecycleOwner, Observer { history ->
+            // Обновляем историю поиска в UI
+            Log.d("DataFragment", "Search history updated: ${history.size} items")
+        })
+    }
+    
+    /**
+     * Обработка результатов поиска от SearchManager
+     */
+    private fun handleSearchResults(results: SearchManager.SearchResults) {
+        Log.d("DataFragment", "Handling search results: ${results.totalCount} items, from cache: ${results.fromCache}")
+        if (results.requestId >= 0 && results.requestId != activeRequestId) {
+            Log.d("DataFragment", "Ignoring outdated results for requestId=${results.requestId}, active=${activeRequestId}")
+            return
+        }
+        
+        try {
+            if (results.results.isNotEmpty()) {
+                // ИСПРАВЛЕНИЕ: Сортируем результаты по релевантности (лучшие совпадения наверх)
+                val sortedResults = results.results.sortedByDescending { it.matchScore }
+                Log.d("DataFragment", "Sorted search results by relevance: top score = ${sortedResults.firstOrNull()?.matchScore}")
+                // Сбрасываем возможный режим поиска по столбцу, чтобы подсветка не терялась
+                try { adapter.deactivateColumnSearch() } catch (_: Throwable) {}
+                
+                adapter.updateSearchResults(sortedResults, currentSearchQuery)
+                recyclerView.post {
+                    try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
+                            recyclerView.tag = null
+                    recyclerView.requestLayout()
+                }
+                // Показать таблицу и скрыть пустой вид
+                emptyView?.visibility = View.GONE
+                (recyclerView.parent as? View)?.visibility = View.VISIBLE
+                
+                // ИСПРАВЛЕНИЕ: НЕ прокручиваем таблицу - найденные строки уже перемещены наверх
+                // Пользователь остается на том же месте, но видит найденные результаты сверху
+                Log.d("DataFragment", "Search results reordered: most relevant (${sortedResults.size} results) moved to top")
+            } else {
+                // Пустой результат: показываем пустой вид и скрываем таблицу
+                // Не возвращаем полную таблицу, чтобы не создавать ложное ощущение «как будто поиск пустой»
+                try { adapter.updateFilteredDataPreserveOrder(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
+                recyclerView.post {
+                    try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
+                            recyclerView.tag = null
+                    recyclerView.requestLayout()
+                }
+                Log.d("DataFragment", "No search results found for query: '$currentSearchQuery'")
+                // Скрыть таблицу и показать пустой вид
+                (recyclerView.parent as? View)?.visibility = View.GONE
+                emptyView?.visibility = View.VISIBLE
+            }
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error handling search results", e)
+            // Fallback к старому методу
+            val rowData = results.results.map { it.data }
+            adapter.setSearchResults(rowData, currentSearchQuery)
+        }
+    }
+    
+    /**
+     * Ожидает готовности данных и выполняет поиск
+     */
+    private fun waitForDataAndSearch(searchText: String) {
+        searchJob?.cancel()
+        searchJob = lifecycleScope.launch {
+            var attempts = 0
+            val maxAttempts = 20 // Максимум 2 секунды ожидания (20 * 100ms)
+            
+            while (attempts < maxAttempts && !isDataReadyForSearch()) {
+                delay(100)
+                attempts++
+            }
+            
+            if (isDataReadyForSearch()) {
+                Log.d("DataFragment", "Data ready after $attempts attempts, performing enhanced search")
+                if (::searchManager.isInitialized) {
+                    val rid = (++nextRequestId)
+                    activeRequestId = rid
+                    performEnhancedSearch(searchText, rid)
+                } else {
+                    Log.w("DataFragment", "SearchManager not initialized, search skipped")
+                }
+            } else {
+                Log.w("DataFragment", "Data still not ready after $maxAttempts attempts")
+            }
+        }
+    }
+    
+    /**
+     * Проверяет, готовы ли данные для поиска
+     */
+    private fun isDataReadyForSearch(): Boolean {
+        // Проверяем базовые условия
+        if (!isDataLoaded) {
+            Log.d("DataFragment", "Data not loaded yet")
+            return false
+        }
+        
+        if (!::adapter.isInitialized) {
+            Log.d("DataFragment", "Adapter not initialized")
+            return false
+        }
+        
+        // ИСПРАВЛЕНИЕ: Проверяем, что у адаптера есть данные для поиска
+        val originalData = adapter.getOriginalData()
+        if (originalData.isEmpty()) {
+            Log.w("DataFragment", "Adapter has no original data for search")
+            return false
+        }
+        
+        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаемся, что данные не содержат только null значения
+        val validDataCount = originalData.count { row ->
+            val values = row.getAllProperties()
+            values.any { it != null && it.toString().trim().isNotEmpty() }
+        }
+        
+        if (validDataCount == 0) {
+            Log.w("DataFragment", "All data rows are empty or contain only null values")
+            return false
+        }
+        
+        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаемся, что headers не пустые
+        if (adapter.headers.isEmpty()) {
+            Log.w("DataFragment", "Headers are empty")
+            return false
+        }
+        
+        // ИСПРАВЛЕНИЕ: Дополнительная проверка - убеждаемся, что фрагмент еще активен
+        if (!isAdded || !isVisible) {
+            Log.w("DataFragment", "Fragment not active (isAdded: $isAdded, isVisible: $isVisible)")
+            return false
+        }
+        
+        // ИСПРАВЛЕНИЕ: Проверяем, что RecyclerView готов к работе
+        if (recyclerView.width <= 0 || recyclerView.height <= 0) {
+            Log.d("DataFragment", "RecyclerView not laid out yet (${recyclerView.width}x${recyclerView.height})")
+            return false
+        }
+        
+        Log.d("DataFragment", "Data ready for search: ${originalData.size} items, ${validDataCount} valid rows, ${adapter.headers.size} headers")
+        return true
+    }
+    
+    /**
+     * Улучшенная фильтрация данных с использованием SearchManager
+     */
+    private suspend fun performEnhancedSearch(searchText: String, requestId: Int) {
+        val normalizedSearch = searchText.trim()
+        
+        if (!isDataReadyForSearch()) {
+            Log.w("DataFragment", "Cannot perform enhanced search: data not ready yet")
+            return
+        }
+        
+        try {
+            val originalData = adapter.getOriginalData()
+            val headers = adapter.headers
+            // НОВОЕ: Расширяем набор данных для индекса/поиска за пределы первой страницы
+            val dataForSearch = withContext(Dispatchers.IO) {
+                try {
+                    val combined = mutableListOf<org.example.pult.RowDataDynamic>()
+                    combined.addAll(originalData)
+
+                    val session = cachedSession ?: pagingSession
+                    var cursor = originalData.size
+                    val step = pageSize
+
+                    while (session != null) {
+                        val toRead = step
+                        val next = try {
+                            session.readRange(cursor, toRead)
+                        } catch (e: Exception) {
+                            Log.w("DataFragment", "ReadRange failed at $cursor+$toRead: ${e.message}")
+                            emptyList()
+                        }
+                        if (next.isEmpty()) break
+                        combined.addAll(next)
+                        cursor += next.size
+                    }
+
+                    Log.d(
+                        "DataFragment",
+                        "Data for search prepared: original=${originalData.size}, total=${combined.size}"
+                    )
+                    combined.toList()
+                } catch (e: Exception) {
+                    Log.w("DataFragment", "Failed to prepare extended data for search, fallback to original", e)
+                    originalData
+                }
+            }
+            val selectedColumn = if (adapter.hasSelectedColumn()) {
+                adapter.getSelectedColumnName()
+            } else null
+            
+            // Используем SearchManager для поиска
+            searchManager.performSearch(
+                query = normalizedSearch,
+                data = dataForSearch,
+                headers = headers,
+                selectedColumn = selectedColumn,
+                forceRefresh = false,
+                requestId = requestId
+            )
+            
+        } catch (e: Exception) {
+            Log.e("DataFragment", "Error during enhanced search", e)
+            // ИСПРАВЛЕНИЕ: Вместо fallback к старому методу, очищаем результаты поиска
+            if (isDataReadyForSearch()) {
+                adapter.clearSearchResultsOptimized()
+            }
+        }
+    }
+    
+    /**
+     * Очистка ресурсов
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+        
+        // Очищаем ресурсы SearchManager
+        if (::searchManager.isInitialized) {
+            searchManager.cleanup()
+        }
+        
+        // Очищаем ресурсы адаптера
+        if (::adapter.isInitialized) {
+            adapter.cleanup()
+        }
+        
+        // Отменяем все активные задачи поиска
+        searchJob?.cancel()
     }
 }

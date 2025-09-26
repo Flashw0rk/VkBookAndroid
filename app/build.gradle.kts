@@ -94,6 +94,8 @@ dependencies {
     // WorkManager для фоновой синхронизации
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     
+    // Удалено: зависимости SQLite FTS5 (поиск работает на PersistentSearchEngine)
+
     // Сетевые зависимости для API
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")

@@ -252,7 +252,7 @@
             android:layout_height="wrap_content"
             android:text="🔍 Диагностика сети"
             android:textSize="16sp"
-            android:background="@drawable/button_diagnose_background"
+            android:background="@drawable/button_secondary_background"
             android:textColor="@color/white"
             android:layout_marginBottom="8dp" />
 

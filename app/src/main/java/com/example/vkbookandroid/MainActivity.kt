@@ -48,6 +48,10 @@ class MainActivity : AppCompatActivity() {
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
     
+    // Состояние инициализации
+    private var isInitializationComplete = false
+    private val initializationListeners = mutableListOf<() -> Unit>()
+    
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         // Обновляем настройки сервера после возврата из настроек
         loadServerSettings()
@@ -61,6 +65,31 @@ class MainActivity : AppCompatActivity() {
             // Только проверка соединения без синхронизации
             checkConnectionOnStartup()
         }
+    }
+    
+    /**
+     * Добавляет слушатель, который будет вызван после завершения инициализации
+     */
+    fun addInitializationListener(listener: () -> Unit) {
+        if (isInitializationComplete) {
+            listener()
+        } else {
+            initializationListeners.add(listener)
+        }
+    }
+    
+    /**
+     * Проверяет, завершена ли инициализация
+     */
+    fun isInitializationComplete(): Boolean = isInitializationComplete
+    
+    /**
+     * Уведомляет о завершении инициализации
+     */
+    private fun notifyInitializationComplete() {
+        isInitializationComplete = true
+        initializationListeners.forEach { it() }
+        initializationListeners.clear()
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -141,6 +170,10 @@ class MainActivity : AppCompatActivity() {
         // Проверяем, что ViewPager2 уже инициализирован
         if (::pagerAdapter.isInitialized) {
             ensureCurrentTabLoaded()
+            // УЛУЧШЕНИЕ: Применяем поиск к текущей вкладке при возврате в приложение
+            if (sharedSearchQuery.isNotEmpty()) {
+                applySharedSearchToCurrentTab(viewPager.currentItem)
+            }
         }
     }
 
@@ -183,6 +216,54 @@ class MainActivity : AppCompatActivity() {
         // Фоллбек через адаптер
         (pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
         (pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
+    }
+    
+    /**
+     * Применяет общий поисковый запрос к конкретной вкладке
+     */
+    private fun applySharedSearchToCurrentTab(position: Int) {
+        if (!::pagerAdapter.isInitialized) {
+            Log.w("MainActivity", "PagerAdapter not initialized, cannot apply search")
+            return
+        }
+        
+        if (sharedSearchQuery.isBlank()) {
+            Log.d("MainActivity", "Shared search query is blank, skipping")
+            return
+        }
+        
+        Log.d("MainActivity", "Applying shared search '$sharedSearchQuery' to tab $position")
+        
+        when (position) {
+            0 -> {
+                // Вкладка "Сигналы БЩУ"
+                Log.d("MainActivity", "=== SEARCHING IN TAB 0: DataFragment (БЩУ сигналы) ===")
+                val fragment = supportFragmentManager.findFragmentByTag("f0") as? org.example.pult.android.DataFragment
+                    ?: (pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment)
+                if (fragment != null) {
+                    Log.d("MainActivity", "Found DataFragment, applying search")
+                    fragment.setSearchQueryExternal(sharedSearchQuery)
+                } else {
+                    Log.w("MainActivity", "DataFragment not found for tab $position")
+                }
+            }
+            1 -> {
+                // Вкладка "Арматура"
+                Log.d("MainActivity", "=== SEARCHING IN TAB 1: ArmatureFragment (Арматура) ===")
+                val fragment = supportFragmentManager.findFragmentByTag("f1") as? com.example.vkbookandroid.ArmatureFragment
+                    ?: (pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment)
+                if (fragment != null) {
+                    Log.d("MainActivity", "Found ArmatureFragment, applying search")
+                    fragment.setSearchQueryExternal(sharedSearchQuery)
+                } else {
+                    Log.w("MainActivity", "ArmatureFragment not found for tab $position")
+                }
+            }
+            2 -> {
+                // Вкладка "Схемы" - пока не поддерживает поиск
+                Log.d("MainActivity", "Schemes tab doesn't support search yet")
+            }
+        }
     }
     
     /**
@@ -446,6 +527,9 @@ class MainActivity : AppCompatActivity() {
                 
                 Log.i("MainActivity", "Basic files initialized. Auto-sync is DISABLED - user can sync manually")
                 
+                // Уведомляем о завершении инициализации
+                notifyInitializationComplete()
+                
             } catch (e: Exception) {
                 updateSyncStatus("Ошибка инициализации: ${e.message}")
                 Log.e("MainActivity", "Error during basic files initialization", e)
@@ -565,9 +649,18 @@ class MainActivity : AppCompatActivity() {
         // Ленивая, но ускоренная подгрузка при переключении вкладок
         viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
+                Log.d("MainActivity", "Tab selected: $position, shared search query: '$sharedSearchQuery'")
                 ensureTabLoaded(position)
-                // При переключении вкладки применим общий поисковый запрос к новой вкладке
-                applySharedSearchToFragments()
+                // УЛУЧШЕНИЕ: Применяем поиск к новой вкладке с задержкой
+                // чтобы дать время загрузиться данным
+                if (sharedSearchQuery.isNotEmpty()) {
+                    uiScope.launch {
+                        // Увеличиваем задержку для гарантированной загрузки данных
+                        kotlinx.coroutines.delay(300)
+                        Log.d("MainActivity", "Applying search '$sharedSearchQuery' to tab $position after delay")
+                        applySharedSearchToCurrentTab(position)
+                    }
+                }
             }
         })
         

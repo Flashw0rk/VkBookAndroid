@@ -89,6 +89,92 @@ class ExcelPagingSession private constructor(
         return Companion.getCellValueAsString(cell, workbook)
     }
 
+    /**
+     * ПРОФЕССИОНАЛЬНОЕ РЕШЕНИЕ: Поиск по всей таблице Excel
+     * Ищет по всем строкам, а не только по загруженным в память
+     */
+    fun searchInAllData(searchQuery: String, columnName: String? = null): List<RowDataDynamic> {
+        val normalizedQuery = searchQuery.trim().lowercase()
+        if (normalizedQuery.isEmpty()) return emptyList()
+        
+        val results = mutableListOf<RowDataDynamic>()
+        val targetColumnIndex = if (columnName != null) {
+            headers.indexOfFirst { it.equals(columnName, ignoreCase = true) }
+        } else -1
+        
+        val firstDataRowIndex = 1 // Пропускаем заголовок
+        var rowIndex = firstDataRowIndex
+        var processedRows = 0
+        val maxSearchRows = 10000 // Защита от бесконечного поиска
+        
+        while (processedRows < maxSearchRows) {
+            val row = sheet.getRow(rowIndex) ?: break
+            
+            val rowMap = LinkedHashMap<String, String>()
+            var hasMatch = false
+            
+            for (i in headers.indices) {
+                val cell = row.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
+                val value = getMergedCellValue(cell)
+                rowMap[headers[i]] = value
+                
+                // Проверяем совпадение
+                if (!hasMatch && value.isNotEmpty()) {
+                    val cellValue = value.trim().lowercase()
+                    val shouldCheckThisCell = targetColumnIndex == -1 || i == targetColumnIndex
+                    
+                    if (shouldCheckThisCell && cellValue.contains(normalizedQuery)) {
+                        hasMatch = true
+                    }
+                }
+            }
+            
+            if (hasMatch) {
+                results.add(RowDataDynamic(rowMap))
+            }
+            
+            rowIndex++
+            processedRows++
+        }
+        
+        return results
+    }
+    
+    /**
+     * Получает общее количество строк данных в таблице
+     */
+    fun getTotalDataRows(): Int {
+        var count = 0
+        var rowIndex = 1 // Пропускаем заголовок
+        
+        while (true) {
+            val row = sheet.getRow(rowIndex)
+            if (row == null) break
+            
+            // Проверяем, что строка не пустая
+            var hasData = false
+            for (i in headers.indices) {
+                val cell = row.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
+                val value = getMergedCellValue(cell)
+                if (value.isNotEmpty()) {
+                    hasData = true
+                    break
+                }
+            }
+            
+            if (hasData) {
+                count++
+            } else {
+                // Если встретили пустую строку, останавливаемся
+                break
+            }
+            
+            rowIndex++
+        }
+        
+        return count
+    }
+
     override fun close() {
         try { workbook.close() } catch (_: Throwable) {}
     }

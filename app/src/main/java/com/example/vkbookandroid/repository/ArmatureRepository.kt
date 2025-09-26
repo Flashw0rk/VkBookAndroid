@@ -181,10 +181,54 @@ class ArmatureRepository(
                     try { Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}") } catch (_: Exception) {}
                 }
 
-                // ФОЛБЭК 1: универсальная загрузка по имени файла
+                // ФОЛБЭК 1: универсальная загрузка по имени файла (включая path и абсолютный URL)
                 runCatching {
                     Log.d("ArmatureRepository", "Trying fallback: downloadFileByName(armature_coords.json)")
-                    val dl = apiService?.downloadFileByName("armature_coords.json")
+                    // Попытка через downloadUrl из list
+                    val list = apiService?.getAllFiles()
+                    if (list?.isSuccessful == true) {
+                        val data = list.body()?.get("data") as? List<*>
+                        val match = data?.firstOrNull {
+                            val name = when (it) {
+                                is com.example.vkbookandroid.model.FileInfo -> it.filename
+                                is Map<*, *> -> it["filename"] as? String
+                                else -> null
+                            }
+                            name?.equals("armature_coords.json", ignoreCase = true) == true
+                        }
+                        val url = when (match) {
+                            is com.example.vkbookandroid.model.FileInfo -> match.path // в модели есть path
+                            is Map<*, *> -> (match["downloadUrl"] as? String) ?: (match["path"] as? String)
+                            else -> null
+                        } ?: "/api/files/download/" + java.net.URLEncoder.encode("armature_coords.json", Charsets.UTF_8.name()).replace("+", "%20")
+                        if (!url.isNullOrBlank()) {
+                            val abs = if (url.startsWith("http")) url else com.example.vkbookandroid.network.NetworkModule.getCurrentBaseUrl().trimEnd('/') + "/" + url.trimStart('/')
+                            val byUrl = com.example.vkbookandroid.network.NetworkModule.getArmatureApiService().downloadByUrl(abs)
+                            if (byUrl.isSuccessful) {
+                                val json = byUrl.body()?.string()
+                                if (!json.isNullOrBlank()) {
+                                    val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                        Map::class.java,
+                                        String::class.java,
+                                        com.google.gson.reflect.TypeToken.getParameterized(
+                                            Map::class.java,
+                                            String::class.java,
+                                            ArmatureMarker::class.java
+                                        ).type
+                                    ).type
+                                    val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                    if (parsed != null && parsed.isNotEmpty()) {
+                                        Log.d("ArmatureRepository", "Fallback by downloadUrl succeeded")
+                                        return@withContext parsed
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // path вариант
+                    val encodedPath = java.net.URLEncoder.encode("armature_coords.json", Charsets.UTF_8.name()).replace("+", "%20")
+                    val dl = apiService?.downloadFileByPath(encodedPath)
                     if (dl?.isSuccessful == true) {
                         val json = dl.body()?.string()
                         if (!json.isNullOrBlank()) {
@@ -205,6 +249,48 @@ class ArmatureRepository(
                         }
                     } else {
                         Log.w("ArmatureRepository", "downloadFileByName fallback failed: code=${dl?.code()}")
+                        // query: raw и encoded
+                        val dl2 = apiService?.downloadFileByName("armature_coords.json")
+                        if (dl2?.isSuccessful == true) {
+                            val json = dl2.body()?.string()
+                            if (!json.isNullOrBlank()) {
+                                val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                    Map::class.java,
+                                    String::class.java,
+                                    com.google.gson.reflect.TypeToken.getParameterized(
+                                        Map::class.java,
+                                        String::class.java,
+                                        ArmatureMarker::class.java
+                                    ).type
+                                ).type
+                                val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                if (parsed != null && parsed.isNotEmpty()) {
+                                    Log.d("ArmatureRepository", "Fallback byName raw succeeded")
+                                    return@withContext parsed
+                                }
+                            }
+                        }
+                        val enc = java.net.URLEncoder.encode("armature_coords.json", Charsets.UTF_8.name())
+                        val dl3 = apiService?.downloadFileByName(enc)
+                        if (dl3?.isSuccessful == true) {
+                            val json = dl3.body()?.string()
+                            if (!json.isNullOrBlank()) {
+                                val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                    Map::class.java,
+                                    String::class.java,
+                                    com.google.gson.reflect.TypeToken.getParameterized(
+                                        Map::class.java,
+                                        String::class.java,
+                                        ArmatureMarker::class.java
+                                    ).type
+                                ).type
+                                val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                if (parsed != null && parsed.isNotEmpty()) {
+                                    Log.d("ArmatureRepository", "Fallback byName encoded succeeded")
+                                    return@withContext parsed
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -217,7 +303,7 @@ class ArmatureRepository(
                         val hasCoords = files.any { it.filename.equals("armature_coords.json", ignoreCase = true) }
                         Log.d("ArmatureRepository", "getJsonFiles returned ${files.size} items, hasCoords=$hasCoords")
                         if (hasCoords) {
-                            val dl = apiService.downloadFileByName("armature_coords.json")
+                            val dl = apiService.downloadFileByName(java.net.URLEncoder.encode("armature_coords.json", Charsets.UTF_8.name()))
                             if (dl.isSuccessful) {
                                 val json = dl.body()?.string()
                                 if (!json.isNullOrBlank()) {
@@ -234,6 +320,27 @@ class ArmatureRepository(
                                     if (parsed != null && parsed.isNotEmpty()) {
                                         Log.d("ArmatureRepository", "Fallback json list + byName succeeded")
                                         return@withContext parsed
+                                    }
+                                }
+                            } else {
+                                val dl2 = apiService.downloadFileByName("armature_coords.json")
+                                if (dl2.isSuccessful) {
+                                    val json = dl2.body()?.string()
+                                    if (!json.isNullOrBlank()) {
+                                        val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                            Map::class.java,
+                                            String::class.java,
+                                            com.google.gson.reflect.TypeToken.getParameterized(
+                                                Map::class.java,
+                                                String::class.java,
+                                                ArmatureMarker::class.java
+                                            ).type
+                                        ).type
+                                        val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                                        if (parsed != null && parsed.isNotEmpty()) {
+                                            Log.d("ArmatureRepository", "Fallback json list + byName raw succeeded")
+                                            return@withContext parsed
+                                        }
                                     }
                                 }
                             }

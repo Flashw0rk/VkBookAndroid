@@ -38,13 +38,7 @@ object ExcelFileCreator {
                 cell.cellStyle = cellStyle
             }
             
-            // Добавляем пример данных
-            val dataRow = sheet.createRow(1)
-            dataRow.createCell(0).setCellValue("1")
-            dataRow.createCell(1).setCellValue("Пример сигнала БЩУ")
-            dataRow.createCell(2).setCellValue("Дискретный")
-            dataRow.createCell(3).setCellValue("Норма")
-            dataRow.createCell(4).setCellValue("Описание примера сигнала БЩУ")
+            // Файл создается пустым, данные загружаются с сервера при синхронизации
             
             // Автоподбор ширины колонок
             headers.indices.forEach { sheet.autoSizeColumn(it) }
@@ -92,13 +86,7 @@ object ExcelFileCreator {
                 cell.cellStyle = cellStyle
             }
             
-            // Добавляем пример данных
-            val dataRow = sheet.createRow(1)
-            dataRow.createCell(0).setCellValue("Пример арматуры")
-            dataRow.createCell(1).setCellValue("example.pdf#ARM001")
-            dataRow.createCell(2).setCellValue("Задвижка")
-            dataRow.createCell(3).setCellValue("Закрыто")
-            dataRow.createCell(4).setCellValue("Пример описания арматуры")
+            // Файл создается пустым, данные загружаются с сервера при синхронизации
             
             // Автоподбор ширины колонок
             headers.indices.forEach { sheet.autoSizeColumn(it) }
@@ -153,12 +141,7 @@ object ExcelFileCreator {
                 bschuHeaderRow.createCell(index).setCellValue(header)
             }
             
-            val bschuDataRow = bschuSheet.createRow(1)
-            bschuDataRow.createCell(0).setCellValue("1")
-            bschuDataRow.createCell(1).setCellValue("Пример сигнала БЩУ")
-            bschuDataRow.createCell(2).setCellValue("Дискретный")
-            bschuDataRow.createCell(3).setCellValue("Норма")
-            bschuDataRow.createCell(4).setCellValue("Описание примера сигнала БЩУ")
+            // Файл создается пустым, данные загружаются с сервера при синхронизации
             
             bschuHeaders.indices.forEach { bschuSheet.autoSizeColumn(it) }
             
@@ -178,12 +161,7 @@ object ExcelFileCreator {
                 armatureHeaderRow.createCell(index).setCellValue(header)
             }
             
-            val armatureDataRow = armatureSheet.createRow(1)
-            armatureDataRow.createCell(0).setCellValue("Пример арматуры")
-            armatureDataRow.createCell(1).setCellValue("example.pdf#ARM001")
-            armatureDataRow.createCell(2).setCellValue("Задвижка")
-            armatureDataRow.createCell(3).setCellValue("Закрыто")
-            armatureDataRow.createCell(4).setCellValue("Пример описания арматуры")
+            // Файл создается пустым, данные загружаются с сервера при синхронизации
             
             armatureHeaders.indices.forEach { armatureSheet.autoSizeColumn(it) }
             

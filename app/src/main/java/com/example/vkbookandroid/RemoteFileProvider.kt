@@ -70,21 +70,33 @@ class RemoteFileProvider(
             // 3. Проверяем общий размер кэша
             FileSizeValidator.cleanupCacheIfNeeded(cacheDir)
             
-            // 4. В последнюю очередь пробуем assets
-            Log.d("RemoteFileProvider", "File not found in data/ or cache, falling back to assets: $normalized")
-            try {
-                context.assets.open(normalized)
-            } catch (assetException: Exception) {
-                Log.e("RemoteFileProvider", "Asset not found: $normalized, creating empty placeholder")
-                createEmptyPlaceholderFile(normalized)
+            // 4. В последнюю очередь пробуем assets (ТОЛЬКО для не-Excel файлов)
+            Log.d("RemoteFileProvider", "File not found in data/ or cache, falling back to assets (if allowed): $normalized")
+            val isExcel = normalized.endsWith(".xlsx", ignoreCase = true) || normalized.endsWith(".xls", ignoreCase = true)
+            if (isExcel) {
+                // Никогда не возвращаем пустой поток для Excel — это приводит к EmptyFileException в POI
+                throw java.io.FileNotFoundException("Excel file missing: $normalized")
+            } else {
+                try {
+                    context.assets.open(normalized)
+                } catch (assetException: Exception) {
+                    Log.e("RemoteFileProvider", "Asset not found: $normalized, creating empty placeholder")
+                    createEmptyPlaceholderFile(normalized)
+                }
             }
         } catch (e: Exception) {
             Log.w("RemoteFileProvider", "Fallback to assets for $relativePath", e)
-            try {
-                context.assets.open(normalized)
-            } catch (assetException: Exception) {
-                Log.e("RemoteFileProvider", "Asset not found in fallback: $normalized, creating empty placeholder")
-                createEmptyPlaceholderFile(normalized)
+            val isExcel = normalized.endsWith(".xlsx", ignoreCase = true) || normalized.endsWith(".xls", ignoreCase = true)
+            if (isExcel) {
+                // Пусть верхний уровень обработает отсутствие Excel-файла корректным сообщением/инициализацией
+                throw e
+            } else {
+                try {
+                    context.assets.open(normalized)
+                } catch (assetException: Exception) {
+                    Log.e("RemoteFileProvider", "Asset not found in fallback: $normalized, creating empty placeholder")
+                    createEmptyPlaceholderFile(normalized)
+                }
             }
         }
     }

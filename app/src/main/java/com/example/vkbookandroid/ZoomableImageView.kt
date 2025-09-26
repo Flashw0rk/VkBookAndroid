@@ -44,16 +44,31 @@ class ZoomableImageView @JvmOverloads constructor(
     }
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            // ИСПРАВЛЕНИЕ: Сохраняем состояние панорамирования при начале масштабирования
+            isPanning = false
+            return true
+        }
+        
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             val scaleFactor = detector.scaleFactor
             val targetScale = (currentScale * scaleFactor).coerceIn(minScale, maxScale)
             val delta = targetScale / currentScale
-            matrix.postScale(delta, delta, detector.focusX, detector.focusY)
-            imageMatrix = matrix
-            currentScale = targetScale
-            onScaleChanged?.invoke(currentScale)
-            onMatrixChanged?.invoke(Matrix(matrix))
+            
+            // ИСПРАВЛЕНИЕ: Плавное масштабирование с ограничением
+            if (kotlin.math.abs(delta - 1.0f) > 0.01f) { // Игнорируем микро-изменения
+                matrix.postScale(delta, delta, detector.focusX, detector.focusY)
+                imageMatrix = matrix
+                currentScale = targetScale
+                onScaleChanged?.invoke(currentScale)
+                onMatrixChanged?.invoke(Matrix(matrix))
+            }
             return true
+        }
+        
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            // ИСПРАВЛЕНИЕ: Плавное завершение масштабирования
+            // Не сбрасываем панорамирование здесь, это делается в handlePan
         }
     })
 
@@ -108,7 +123,7 @@ class ZoomableImageView @JvmOverloads constructor(
                 isPanning = true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (isPanning && !scaleDetector.isInProgress) {
+                if (isPanning && !scaleDetector.isInProgress && event.pointerCount == 1) {
                     val dx = event.x - lastX
                     val dy = event.y - lastY
                     matrix.postTranslate(dx, dy)
@@ -118,8 +133,21 @@ class ZoomableImageView @JvmOverloads constructor(
                     onMatrixChanged?.invoke(Matrix(matrix))
                 }
             }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // ИСПРАВЛЕНИЕ: Когда убираем один палец, не сбрасываем панорамирование
+                // Это предотвращает "дергание" схемы
+                if (event.pointerCount == 2) {
+                    // Обновляем координаты для оставшегося пальца
+                    val remainingPointerIndex = if (event.actionIndex == 0) 1 else 0
+                    lastX = event.getX(remainingPointerIndex)
+                    lastY = event.getY(remainingPointerIndex)
+                }
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                isPanning = false
+                // ИСПРАВЛЕНИЕ: Сбрасываем панорамирование только при полном поднятии всех пальцев
+                if (event.pointerCount <= 1) {
+                    isPanning = false
+                }
             }
         }
     }

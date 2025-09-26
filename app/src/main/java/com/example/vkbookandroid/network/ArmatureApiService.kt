@@ -84,7 +84,19 @@ interface ArmatureApiService {
      * Скачать файл из папки updates
      */
     @GET("api/updates/download/{filename}")
-    suspend fun downloadUpdatesFile(@Path("filename") filename: String): Response<ResponseBody>
+    suspend fun downloadUpdatesFile(@Path(value = "filename", encoded = true) filename: String): Response<ResponseBody>
+
+    /**
+     * Скачать файл по пути: path-параметр вместо query. Удобно для имен с '+' и пробелами
+     */
+    @GET("api/files/download/{filename}")
+    suspend fun downloadFileByPath(@Path(value = "filename", encoded = true) filename: String): Response<ResponseBody>
+
+    /**
+     * Скачать по абсолютному URL (ретрофит сам не изменяет URL)
+     */
+    @GET
+    suspend fun downloadByUrl(@Url url: String): Response<ResponseBody>
     
     /**
      * Получить список файлов по типу из папки updates

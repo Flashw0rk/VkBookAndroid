@@ -13,4 +13,8 @@
     <color name="gray">#FF757575</color>
     <color name="gray_light">#FFE0E0E0</color>
     <color name="info_background">#FFF3E5F5</color>
+    
+    <!-- Цвета для поиска -->
+    <color name="colorPrimary">#FF1976D2</color>
+    <color name="light_gray">#FFF5F5F5</color>
 </resources>

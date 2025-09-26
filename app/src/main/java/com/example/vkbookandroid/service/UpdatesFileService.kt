@@ -3,6 +3,7 @@ package com.example.vkbookandroid.service
 import android.content.Context
 import android.util.Log
 import com.example.vkbookandroid.network.ArmatureApiService
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.example.vkbookandroid.network.NetworkModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -164,20 +165,120 @@ class UpdatesFileService(private val context: Context) {
      */
     private suspend fun downloadFileFromUpdates(filename: String): ResponseBody? {
         return try {
-            // 🚀 ИСПОЛЬЗУЕМ РАБОЧИЙ УНИВЕРСАЛЬНЫЙ ENDPOINT: /api/files/download?filename=
-            Log.d(tag, "🚀 Using WORKING universal download endpoint for: $filename")
-            val response = apiService.downloadFileByName(filename)
-            if (response.isSuccessful) {
-                Log.d(tag, "✅ Downloaded via WORKING universal endpoint: $filename")
-                Log.d(tag, "Response size: ${response.body()?.contentLength()} bytes")
-                return response.body()
-            } else {
-                Log.e(tag, "❌ Universal download failed for $filename: HTTP ${response.code()}")
-                Log.e(tag, "Error message: ${response.message()}")
-                return null
+            Log.d(tag, "🚀 Trying multiple strategies to download: $filename")
+
+            // Q) Безопасная сборка абсолютного URL через HttpUrl.Builder c сырым именем файла
+            runCatching {
+                val base = NetworkModule.getCurrentBaseUrl().trimEnd('/')
+                val baseUrl = base.toHttpUrlOrNull()
+                if (baseUrl != null) {
+                    val built = baseUrl.newBuilder()
+                        .addPathSegment("api")
+                        .addPathSegment("files")
+                        .addPathSegment("download")
+                        .addQueryParameter("filename", filename)
+                        .build()
+                        .toString()
+                    val r = apiService.downloadByUrl(built)
+                    if (r.isSuccessful) {
+                        Log.d(tag, "✅ Downloaded via HttpUrl.Builder query: $built")
+                        return r.body()
+                    } else {
+                        Log.w(tag, "HttpUrl.Builder attempt failed: code=${r.code()}")
+                    }
+                } else {
+                    Log.w(tag, "HttpUrl.parse returned null for base: $base")
+                }
             }
+
+            // A) Попытка по абсолютному URL, если есть в списке файлов
+            runCatching {
+                val list = apiService.getAllFiles()
+                if (list.isSuccessful) {
+                    val body = list.body()
+                    val data = body?.get("data") as? List<*>
+                    val match = data?.firstOrNull {
+                        val name = when (it) {
+                            is com.example.vkbookandroid.model.FileInfo -> it.filename
+                            is Map<*, *> -> it["filename"] as? String
+                            else -> null
+                        }
+                        name?.equals(filename, ignoreCase = false) == true
+                    }
+                    val url = when (match) {
+                        is com.example.vkbookandroid.model.FileInfo -> null // нет поля downloadUrl в модели
+                        is Map<*, *> -> (match["downloadUrl"] as? String) ?: (match["path"] as? String)
+                        else -> null
+                    } ?: run {
+                        // Собираем по умолчанию путь скачивания через filename
+                        val encoded = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name()).replace("+", "%20")
+                        "/api/files/download/$encoded"
+                    }
+                    if (!url.isNullOrBlank()) {
+                        val abs = if (url.startsWith("http")) url else NetworkModule.getCurrentBaseUrl().trimEnd('/') + "/" + url.trimStart('/')
+                        val r = apiService.downloadByUrl(abs)
+                        if (r.isSuccessful) {
+                            Log.d(tag, "✅ Downloaded via downloadUrl: $abs")
+                            return r.body()
+                        }
+                    }
+                }
+            }
+
+            // B) Вариант с path-параметром (encoded path): /api/files/download/{filename}
+            runCatching {
+                val encodedPath = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
+                    .replace("+", "%20") // пробелы как %20
+                val r = apiService.downloadFileByPath(encodedPath)
+                if (r.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via path endpoint: $filename")
+                    return r.body()
+                }
+            }
+
+            // C) Вариант с query: сначала raw, потом строго закодированный, затем строгая ручная экранизация (' '->%20, '+'->%2B)
+            runCatching {
+                val r1 = apiService.downloadFileByName(filename)
+                if (r1.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via query raw: $filename")
+                    return r1.body()
+                }
+                val encoded = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
+                val r2 = apiService.downloadFileByName(encoded)
+                if (r2.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via query encoded: $filename -> $encoded")
+                    return r2.body()
+                }
+                val strict = filename
+                    .replace(" ", "%20")
+                    .replace("+", "%2B")
+                val r3 = apiService.downloadFileByName(strict)
+                if (r3.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via query strict: $filename -> $strict")
+                    return r3.body()
+                }
+            }
+
+            // D) Вариант updates с encoded path
+            runCatching {
+                val encodedUpd = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
+                    .replace("+", "%20")
+                val upd = apiService.downloadUpdatesFile(encodedUpd)
+                if (upd.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via updates encoded path: $filename")
+                    return upd.body()
+                }
+                val updRaw = apiService.downloadUpdatesFile(filename)
+                if (updRaw.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via updates raw path: $filename")
+                    return updRaw.body()
+                }
+            }
+
+            Log.e(tag, "❌ All download strategies failed for: $filename")
+            null
         } catch (e: Exception) {
-            Log.e(tag, "💥 Exception in universal download for $filename", e)
+            Log.e(tag, "💥 Exception in download for $filename", e)
             null
         }
     }
