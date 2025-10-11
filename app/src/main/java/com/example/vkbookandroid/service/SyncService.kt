@@ -135,7 +135,7 @@ class SyncService(private val context: Context) {
     /**
      * Синхронизировать Excel файлы с сервера
      */
-    suspend fun syncExcelFiles(result: SyncResult): Boolean {
+    suspend fun syncExcelFiles(result: SyncResult, onPerFileProgress: ((current: Int, total: Int) -> Unit)? = null): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== STARTING EXCEL FILES SYNC ===")
@@ -159,12 +159,57 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "Armatures.xlsx found in server list: $hasArmatures")
                 Log.d(tag, "Oborudovanie_BSCHU.xlsx found in server list: $hasBschu")
                 
+                // Получим метаданные файлов (размер и sha256), чтобы корректно решать: пропускать или скачивать
+                val api = com.example.vkbookandroid.network.NetworkModule.getArmatureApiService()
+                val serverSizes: Map<String, Long>
+                val serverHashes: Map<String, String>
+                run {
+                    var sizesTmp: Map<String, Long> = emptyMap()
+                    var hashesTmp: Map<String, String> = emptyMap()
+                    try {
+                        val resp = api.getAllFiles()
+                        if (resp.isSuccessful) {
+                            val body = resp.body()
+                            val data = body?.get("data") as? List<*>
+                            val sz = mutableMapOf<String, Long>()
+                            val hs = mutableMapOf<String, String>()
+                            data?.forEach { any ->
+                                val m = any as? Map<*, *> ?: return@forEach
+                                val name = m["filename"] as? String ?: return@forEach
+                                (m["size"] as? Number)?.toLong()?.let { sz[name] = it }
+                                (m["sha256"] as? String)?.let { hs[name] = it }
+                            }
+                            sizesTmp = sz
+                            hashesTmp = hs
+                        }
+                    } catch (_: Exception) {}
+                    serverSizes = sizesTmp
+                    serverHashes = hashesTmp
+                }
+
                 var successCount = 0
+                var processed = 0
+                val total = excelFiles.size.coerceAtLeast(1)
                 for (filename in excelFiles) {
                     try {
+                        onPerFileProgress?.invoke(processed, total)
                         Log.d(tag, "=== DOWNLOADING EXCEL FILE: $filename ===")
                         Log.d(tag, "Requesting file from server...")
                         
+                        // Пропуск загрузки только если есть SHA-256 с сервера и он совпадает с сохраненным
+                        try {
+                            val expectedHash = serverHashes[filename]
+                            val local = File(context.filesDir, "data/$filename")
+                            if (!expectedHash.isNullOrBlank()) {
+                                val saved = fileHashManager.getSavedFileHash(filename)
+                                val sizeOk = serverSizes[filename]?.let { sz -> local.exists() && local.length() == sz } ?: local.exists()
+                                if (saved != null && saved.equals(expectedHash, true) && sizeOk) {
+                                    Log.d(tag, "Skip download (up-to-date by sha256): $filename")
+                                    continue
+                                }
+                            }
+                        } catch (_: Exception) {}
+
                         val responseBody = getArmatureRepository().downloadExcelFile(filename)
                         if (responseBody != null) {
                             Log.d(tag, "Server response received for: $filename")
@@ -211,15 +256,9 @@ class SyncService(private val context: Context) {
                                 }
                             }
                             
-                            // Проверяем целостность загруженного файла
+                            // Обновим сохраненный хеш после успешной загрузки
                             if (file.exists() && file.length() > 0) {
-                                val fileHash = fileHashManager.calculateFileHash(file)
-                                if (fileHash != null) {
-                                    fileHashManager.saveFileHash(filename, fileHash)
-                                    Log.d(tag, "File integrity verified: $filename (SHA-256: ${fileHash.take(16)}...)")
-                                } else {
-                                    Log.w(tag, "Failed to calculate hash for: $filename")
-                                }
+                                try { fileHashManager.updateFileHashAfterDownload(file) } catch (_: Exception) {}
                             }
                             
                             Log.d(tag, "Download completed: $filename")
@@ -267,6 +306,8 @@ class SyncService(private val context: Context) {
                         Log.e(tag, "Exception message: ${e.message}")
                         e.printStackTrace()
                     }
+                    processed++
+                    onPerFileProgress?.invoke(processed, total)
                 }
                 
                 Log.d(tag, "=== EXCEL SYNC COMPLETED ===")
@@ -295,7 +336,7 @@ class SyncService(private val context: Context) {
     /**
      * Синхронизировать PDF файлы с сервера
      */
-    suspend fun syncPdfFiles(result: SyncResult): Boolean {
+    suspend fun syncPdfFiles(result: SyncResult, onPerFileProgress: ((current: Int, total: Int) -> Unit)? = null): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== STARTING PDF FILES SYNC ===")
@@ -313,9 +354,42 @@ class SyncService(private val context: Context) {
                     return@withContext false
                 }
                 
+                // Получим метаданные файлов для экономии трафика
+                val api = com.example.vkbookandroid.network.NetworkModule.getArmatureApiService()
+                val serverMeta: Map<String, Long> = run {
+                    try {
+                        val resp = api.getAllFiles()
+                        if (resp.isSuccessful) {
+                            val body = resp.body()
+                            val data = body?.get("data") as? List<*>
+                            data?.mapNotNull {
+                                val m = it as? Map<*, *> ?: return@mapNotNull null
+                                val name = m["filename"] as? String ?: return@mapNotNull null
+                                val size = (m["size"] as? Number)?.toLong() ?: return@mapNotNull null
+                                name to size
+                            }?.toMap() ?: emptyMap()
+                        } else emptyMap()
+                    } catch (_: Exception) { emptyMap() }
+                }
+
                 var successCount = 0
+                var processed = 0
+                val total = pdfFiles.size.coerceAtLeast(1)
                 for (filename in pdfFiles) {
                     try {
+                        onPerFileProgress?.invoke(processed, total)
+                        // Пропускаем скачивание, если локальный файл совпадает по размеру с серверным
+                        try {
+                            val expectedSize = serverMeta[filename]
+                            if (expectedSize != null) {
+                                val local = File(context.filesDir, "data/$filename")
+                                if (local.exists() && local.length() == expectedSize) {
+                                    Log.d(tag, "Skip download (up-to-date by size): $filename ($expectedSize bytes)")
+                                    continue
+                                }
+                            }
+                        } catch (_: Exception) {}
+
                         val responseBody = getArmatureRepository().downloadPdfFile(filename)
                         if (responseBody != null) {
                             val file = File(context.filesDir, "data/$filename")
@@ -337,6 +411,8 @@ class SyncService(private val context: Context) {
                     } catch (e: Exception) {
                         Log.e(tag, "Error downloading PDF file: $filename", e)
                     }
+                    processed++
+                    onPerFileProgress?.invoke(processed, total)
                 }
                 
                 Log.d(tag, "=== PDF SYNC COMPLETED ===")
@@ -365,7 +441,7 @@ class SyncService(private val context: Context) {
     /**
      * Полная синхронизация всех данных
      */
-    suspend fun syncAll(): SyncResult {
+    suspend fun syncAll(progress: ProgressReporter? = null): SyncResult {
         return withContext(Dispatchers.IO) {
             Log.d(tag, "=== STARTING FULL SYNC ===")
             Log.d(tag, "Server URL: ${NetworkModule.getCurrentBaseUrl()}")
@@ -383,15 +459,21 @@ class SyncService(private val context: Context) {
             
             // Синхронизируем данные
             Log.d(tag, "Starting armature coords sync...")
+            progress?.update(0, 100, "Синхронизация координат...")
             result.armatureCoordsSynced = syncArmatureCoords(result)
+            progress?.update(20, 100, "Синхронизация Excel...")
             Log.d(tag, "Armature coords sync result: ${result.armatureCoordsSynced}")
             
             Log.d(tag, "Starting Excel files sync...")
-            result.excelFilesSynced = syncExcelFiles(result)
+            result.excelFilesSynced = syncExcelFiles(result) { cur, total ->
+                progress?.update(20 + (cur * 60 / total), 100, "Синхронизация Excel ($cur/$total)...")
+            }
             Log.d(tag, "Excel files sync result: ${result.excelFilesSynced}")
             
             Log.d(tag, "Starting PDF files sync...")
-            result.pdfFilesSynced = syncPdfFiles(result)
+            result.pdfFilesSynced = syncPdfFiles(result) { cur, total ->
+                progress?.update(80 + (cur * 20 / total), 100, "Синхронизация PDF ($cur/$total)...")
+            }
             Log.d(tag, "PDF files sync result: ${result.pdfFilesSynced}")
             
             result.overallSuccess = result.armatureCoordsSynced || result.excelFilesSynced || result.pdfFilesSynced
@@ -404,6 +486,10 @@ class SyncService(private val context: Context) {
             
             result
         }
+    }
+
+    fun interface ProgressReporter {
+        fun update(current: Int, total: Int, phase: String?)
     }
     
     /**

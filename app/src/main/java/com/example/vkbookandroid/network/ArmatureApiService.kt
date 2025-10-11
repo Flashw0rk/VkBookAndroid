@@ -5,6 +5,7 @@ import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
+import com.example.vkbookandroid.model.AuthStatusResponse
 
 /**
  * API интерфейс для работы с VkBookServer
@@ -83,8 +84,19 @@ interface ArmatureApiService {
     /**
      * Скачать файл из папки updates
      */
-    @GET("api/updates/download/{filename}")
-    suspend fun downloadUpdatesFile(@Path(value = "filename", encoded = true) filename: String): Response<ResponseBody>
+    @GET("api/updates/download")
+    suspend fun downloadUpdatesFile(@Query("filename") filename: String): Response<ResponseBody>
+    /**
+     * Загрузить файл в updates (универсальная загрузка)
+     */
+    @Multipart
+    @POST("api/updates/upload")
+    suspend fun uploadUpdatesFile(
+        @Part file: MultipartBody.Part,
+        @Query("filename") filename: String? = null,
+        @Header("X-Admin-Login") adminLogin: String? = null,
+        @Header("X-Admin-Password") adminPassword: String? = null
+    ): Response<com.example.vkbookandroid.model.UploadResponse>
 
     /**
      * Скачать файл по пути: path-параметр вместо query. Удобно для имен с '+' и пробелами
@@ -103,6 +115,13 @@ interface ArmatureApiService {
      */
     @GET("api/updates/files/{type}")
     suspend fun getUpdatesFilesByType(@Path("type") type: String): Response<List<String>>
+    
+    // ========== ADMIN AUTH ==========
+    /**
+     * Проверить статус admin auth
+     */
+    @GET("api/admin/auth-status")
+    suspend fun checkAdminAuthStatus(): Response<AuthStatusResponse>
     
     // ========== ARMATURE COORDS ENDPOINTS ==========
     

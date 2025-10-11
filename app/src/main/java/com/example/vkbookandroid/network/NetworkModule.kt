@@ -21,6 +21,13 @@ object NetworkModule {
     private var currentBaseUrl = "http://158.160.157.7/" // Значение по умолчанию
     
     private val okHttpClient = OkHttpClient.Builder()
+        // Глобальный API Key для всех запросов
+        .addInterceptor { chain ->
+            val original = chain.request()
+            val builder = original.newBuilder()
+                .addHeader("X-API-Key", "vkbook-2024-secret-key-abc123")
+            chain.proceed(builder.build())
+        }
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)

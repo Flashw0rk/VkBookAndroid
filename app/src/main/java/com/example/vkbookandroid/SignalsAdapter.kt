@@ -30,7 +30,8 @@ class SignalsAdapter(
     private val onColumnResize: (columnIndex: Int, newWidth: Int, action: Int) -> Unit,
     private val onRowClick: ((RowDataDynamic) -> Unit)? = null,
     private val onArmatureCellClick: ((RowDataDynamic) -> Unit)? = null,
-    private val hidePdfSchemeColumn: Boolean = true
+    private val hidePdfSchemeColumn: Boolean = true,
+    private val onCellClick: ((rowIndex: Int, columnIndex: Int, headerName: String, currentValue: String, rowData: RowDataDynamic) -> Unit)? = null
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     var headers: List<String> = emptyList() // Changed from private to public
@@ -140,6 +141,8 @@ class SignalsAdapter(
                 textView.setOnClickListener {
                     if (adapter.isColumnSelected(headerName)) {
                         adapter.deactivateColumnSearch()
+                    } else {
+                        adapter.activateColumnSearch(headerName)
                     }
                 }
 
@@ -314,27 +317,38 @@ class SignalsAdapter(
                 val colWidth = colWidthRaw.coerceIn(adapter.minColumnWidthPx(context), adapter.maxColumnWidthPx(context))
                 val cellTextValue = if (i < values.size) values[i]?.toString() ?: "" else ""
 
+                val colIndex = i
                 val textView = TextView(context).apply {
                     layoutParams = LinearLayout.LayoutParams(colWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    text = cellTextValue
-                    val cellText = text
+                    // Текст и подсветка
+                    val cellText = cellTextValue
                     if (query.isNotEmpty()) {
-                        val raw = cellText?.toString()
+                        val raw = cellText
+                        // Подсвечиваем все ячейки с любым ненулевым совпадением
                         val score = SearchNormalizer.getMatchScore(raw, query)
                         val shouldHighlight = if (adapter.hasSelectedColumn()) {
-                            adapter.isColumnSelected(headerName) && score > 0
+                            // Если выбран столбец — по-прежнему подсвечиваем только его; но
+                            // если строка уже попала в выдачу — слабые совпадения в других ячейках тоже подсветим
+                            adapter.isColumnSelected(headerName) && score > 0 || score > 0
                         } else score > 0
                         if (shouldHighlight) {
-                            // Используем единый стиль подсветки и меняем только цвет через tint
+                            adapter.highlightSearchTerms(this, cellText, query)
+                        } else text = cellText
+                    } else {
+                        text = cellText
+                    }
+                    // Фоновая подсветка ячейки (градация по score)
+                    if (query.isNotEmpty()) {
+                        val score = SearchNormalizer.getMatchScore(cellText, query)
+                        val shouldHighlightBg = score > 0
+                        if (shouldHighlightBg) {
                             setBackgroundResource(R.drawable.cell_highlight)
                             val color = when {
-                                score >= 1000 -> 0xFF28A745.toInt() // зелёный
-                                score >= 500 -> 0xFFFF9800.toInt()  // оранжевый
-                                else -> 0xFFF44336.toInt()          // красный
+                                score >= 1000 -> 0xFF28A745.toInt()
+                                score >= 500 -> 0xFFFF9800.toInt()
+                                else -> 0xFFF44336.toInt()
                             }
-                            try {
-                                backgroundTintList = android.content.res.ColorStateList.valueOf(color)
-                            } catch (_: Throwable) {}
+                            try { backgroundTintList = android.content.res.ColorStateList.valueOf(color) } catch (_: Throwable) {}
                         } else {
                             setBackgroundResource(R.drawable.cell_border)
                             try { backgroundTintList = null } catch (_: Throwable) {}
@@ -347,6 +361,15 @@ class SignalsAdapter(
                     setPadding(context.dpToPx(4), context.dpToPx(4), context.dpToPx(4), context.dpToPx(4))
                     textSize = 12f
                     isSoundEffectsEnabled = false
+                }
+                // Клик по ячейке для редактирования (если передан обработчик и включён режим редактирования)
+                if (adapter.onCellClick != null && _isResizingMode) {
+                    textView.setOnClickListener {
+                        val rowIdx = bindingAdapterPosition - 1 // сдвиг из-за заголовка
+                        val headerName = if (colIndex < headers.size) headers[colIndex] else ""
+                        val value = cellTextValue
+                        adapter.onCellClick?.invoke(rowIdx.coerceAtLeast(0), colIndex, headerName, value, rowData)
+                    }
                 }
                 // Клик и подсветка для "Арматура" если есть PDF в колонке PDF_Схема_и_ID_арматуры
                 if (!isResizingMode && adapter.armatureColIndex >= 0 && i == adapter.armatureColIndex) {

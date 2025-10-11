@@ -58,6 +58,27 @@
             android:textSize="12sp"
             android:textColor="#666666" />
 
+        <ProgressBar
+            android:id="@+id/progressSync"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="120dp"
+            android:layout_height="10dp"
+            android:layout_marginStart="8dp"
+            android:indeterminate="false"
+            android:max="100"
+            android:progress="0"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvProgressPercent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="0%"
+            android:textSize="12sp"
+            android:textColor="#666666"
+            android:visibility="gone" />
+
     </LinearLayout>
 
     <!-- Вкладки -->

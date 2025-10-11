@@ -66,11 +66,16 @@ class MarkerOverlayView @JvmOverloads constructor(
     ) {
         // Пересчитываем в координаты битмапа
         pdfToBitmapScale = pdfToBmpScale
+        // Интерпретируем x,y как центр маркера
+        val cx = x * pdfToBitmapScale
+        val cy = y * pdfToBitmapScale
+        val halfW = (width * pdfToBitmapScale) * 0.5f
+        val halfH = (height * pdfToBitmapScale) * 0.5f
         rectBmp.set(
-            x * pdfToBitmapScale,
-            y * pdfToBitmapScale,
-            (x + width) * pdfToBitmapScale,
-            (y + height) * pdfToBitmapScale
+            cx - halfW,
+            cy - halfH,
+            cx + halfW,
+            cy + halfH
         )
         imageMatrixCopy = Matrix(currentImageMatrix)
         hasMarker = true
@@ -100,10 +105,13 @@ class MarkerOverlayView @JvmOverloads constructor(
         comment: String? = null
     ) {
         // Преобразуем координаты из страниц в пиксели текущего тайла (битмапа)
-        val leftBmp = (pageX - leftPage) * scaleX
-        val topBmp = (pageY - topPage) * scaleY
-        val rightBmp = (pageX + pageW - leftPage) * scaleX
-        val bottomBmp = (pageY + pageH - topPage) * scaleY
+        // Интерпретируем pageX,pageY как центр маркера
+        val halfWp = pageW * 0.5f
+        val halfHp = pageH * 0.5f
+        val leftBmp = ((pageX - halfWp) - leftPage) * scaleX
+        val topBmp = ((pageY - halfHp) - topPage) * scaleY
+        val rightBmp = ((pageX + halfWp) - leftPage) * scaleX
+        val bottomBmp = ((pageY + halfHp) - topPage) * scaleY
         rectBmp.set(leftBmp, topBmp, rightBmp, bottomBmp)
         imageMatrixCopy = Matrix(currentImageMatrix)
         hasMarker = true

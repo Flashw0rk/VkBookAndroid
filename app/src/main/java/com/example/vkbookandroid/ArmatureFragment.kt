@@ -586,7 +586,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             Log.e("ArmatureFragment", "Error scrolling to bottom", e)
         }
     }
-    
+
     fun filterData(searchText: String) {
         // Переведено на Flow-пайплайн: просто отправляем значение
         scrollToTopOnNextResults = true
@@ -1000,8 +1000,8 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 // ИСПРАВЛЕНИЕ: Сортируем результаты по релевантности (лучшие совпадения наверх)
                 val sortedResults = results.results.sortedByDescending { it.matchScore }
                 Log.d("ArmatureFragment", "Sorted search results by relevance: top score = ${sortedResults.firstOrNull()?.matchScore}")
-                // Сбрасываем возможный режим поиска по столбцу, чтобы не терять подсветку
-                try { adapter.deactivateColumnSearch() } catch (_: Throwable) {}
+                // Не сбрасываем режим поиска по столбцу при вводе текста.
+                // Он должен отключаться только повторным нажатием на заголовок.
                 
                 // Обновляем через DiffUtil и затем всегда скроллим к началу
                 adapter.updateSearchResults(sortedResults, currentSearchQuery)

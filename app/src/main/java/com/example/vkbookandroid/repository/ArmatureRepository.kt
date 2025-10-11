@@ -43,8 +43,26 @@ class ArmatureRepository(
                     return@withContext emptyMap()
                 }
                 
-                val jsonString = file.readText()
-                Log.d("ArmatureRepository", "Loaded JSON from filesDir: $jsonString")
+                val bytes = file.readBytes()
+                // Пытаемся сначала UTF-8, при признаках мандража кодировки пробуем CP1251
+                var jsonString = bytes.toString(Charsets.UTF_8)
+                val looksLikeMojibake = jsonString.contains('Р') && (jsonString.contains('Ð') || jsonString.contains("Р "))
+                if (looksLikeMojibake) {
+                    runCatching {
+                        val cp1251 = java.nio.charset.Charset.forName("windows-1251")
+                        val alt = String(bytes, cp1251)
+                        // Если альтернативная декодировка содержит кириллицу и меньше «Р/Ð», используем её
+                        val altHasCyr = alt.any { ch -> ch in '\u0400'..'\u04FF' }
+                        val utfHasCyr = jsonString.any { ch -> ch in '\u0400'..'\u04FF' }
+                        val altBadMarks = alt.count { it == 'Р' || it == 'Ð' }
+                        val utfBadMarks = jsonString.count { it == 'Р' || it == 'Ð' }
+                        if (altHasCyr && (!utfHasCyr || altBadMarks < utfBadMarks)) {
+                            jsonString = alt
+                            Log.w("ArmatureRepository", "Detected mojibake; applied CP1251 decode fallback")
+                        }
+                    }.onFailure { /* ignore */ }
+                }
+                Log.d("ArmatureRepository", "Loaded JSON from filesDir (head): ${jsonString.take(512)}${if (jsonString.length > 512) "..." else ""}")
                 
                 // Сначала пытаемся загрузить как старый формат (ваш формат)
                 Log.d("ArmatureRepository", "Attempting to parse as old format (user's format)...")

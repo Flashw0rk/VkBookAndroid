@@ -47,6 +47,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dataRefreshManager: DataRefreshManager
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
+    private lateinit var progressSync: android.widget.ProgressBar
+    private lateinit var tvProgressPercent: TextView
     
     // Состояние инициализации
     private var isInitializationComplete = false
@@ -124,6 +126,8 @@ class MainActivity : AppCompatActivity() {
         btnSync = findViewById(R.id.btnSync)
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
+        progressSync = findViewById(R.id.progressSync)
+        tvProgressPercent = findViewById(R.id.tvProgressPercent)
         
         // Загружаем настройки сервера ПЕРЕД созданием SyncService
         loadServerSettings()
@@ -342,13 +346,29 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startSync() {
         btnSync.isEnabled = false
+        try {
+            progressSync.visibility = android.view.View.VISIBLE
+            tvProgressPercent.visibility = android.view.View.VISIBLE
+            progressSync.progress = 0
+            tvProgressPercent.text = "0%"
+        } catch (_: Throwable) {}
         updateSyncStatus("Ручное обновление...")
         
         uiScope.launch {
             try {
+                val progress = com.example.vkbookandroid.service.SyncService.ProgressReporter { current: Int, total: Int, phase: String? ->
+                    val percent = if (total > 0) (current * 100 / total) else 0
+                    uiScope.launch(Dispatchers.Main) {
+                        try {
+                            progressSync.progress = percent.coerceIn(0, 100)
+                            tvProgressPercent.text = "${percent.coerceIn(0, 100)}%"
+                            phase?.let { updateSyncStatus(it) }
+                        } catch (_: Throwable) {}
+                    }
+                }
                 val result = withContext(Dispatchers.IO) {
-                    // Полная РУЧНАЯ синхронизация данных (координаты, Excel, PDF)
-                    syncService.syncAll()
+                    // Полная РУЧНАЯ синхронизация данных (координаты, Excel, PDF) с прогрессом
+                    syncService.syncAll(progress)
                 }
                 
                 when {
@@ -388,6 +408,10 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
                 btnSync.isEnabled = true
+                try { 
+                    progressSync.visibility = android.view.View.GONE
+                    tvProgressPercent.visibility = android.view.View.GONE
+                } catch (_: Throwable) {}
             }
         }
     }
@@ -637,6 +661,7 @@ class MainActivity : AppCompatActivity() {
                 0 -> "Сигналы БЩУ"
                 1 -> "Арматура"
                 2 -> "Схемы"
+                3 -> "Редактор"
                 else -> ""
             }
         }.attach()

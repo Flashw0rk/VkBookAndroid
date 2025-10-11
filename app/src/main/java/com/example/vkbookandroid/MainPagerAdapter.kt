@@ -9,13 +9,14 @@ class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activi
 
     private val fragments = mutableMapOf<Int, Fragment>()
 
-    override fun getItemCount(): Int = 3
+    override fun getItemCount(): Int = 4
 
     override fun createFragment(position: Int): Fragment {
         val fragment = when (position) {
             0 -> DataFragment()
             1 -> ArmatureFragment()
             2 -> SchemesFragment()
+            3 -> EditorFragment()
             else -> throw IllegalArgumentException("Invalid position $position")
         }
         fragments[position] = fragment

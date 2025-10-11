@@ -929,8 +929,9 @@ class PdfViewerActivity : AppCompatActivity() {
         val bmp = renderedBitmap ?: return
         // Масштаб строго из JSON (с ограничением)
         val scale = coords.zoom.toFloat().coerceIn(0.2f, 20f)
-        val centerXbmp = ((coords.x + coords.width / 2.0) * pdfToBitmapScale).toFloat()
-        val centerYbmp = ((coords.y + coords.height / 2.0) * pdfToBitmapScale).toFloat()
+        // Интерпретируем coords.x, coords.y как центр маркера
+        val centerXbmp = (coords.x * pdfToBitmapScale).toFloat()
+        val centerYbmp = (coords.y * pdfToBitmapScale).toFloat()
         iv.setScaleAndCenter(scale, centerXbmp, centerYbmp)
     }
     
@@ -940,8 +941,9 @@ class PdfViewerActivity : AppCompatActivity() {
         val bmp = renderedBitmap ?: return
         // Масштаб строго из JSON (с ограничением)
         val scale = marker.zoom.toFloat().coerceIn(0.2f, 20f)
-        val centerXbmp = ((marker.x + marker.size / 2.0) * pdfToBitmapScale).toFloat()
-        val centerYbmp = ((marker.y + marker.size / 2.0) * pdfToBitmapScale).toFloat()
+        // Интерпретируем marker.x, marker.y как центр маркера
+        val centerXbmp = (marker.x * pdfToBitmapScale).toFloat()
+        val centerYbmp = (marker.y * pdfToBitmapScale).toFloat()
         iv.setScaleAndCenter(scale, centerXbmp, centerYbmp)
     }
 
