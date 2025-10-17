@@ -1,6 +1,16 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+}
+
+// Загружаем конфигурацию keystore из local.properties
+val keystorePropertiesFile = rootProject.file("local.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -11,18 +21,20 @@ android {
         applicationId = "com.example.vkbookandroid"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
         create("release") {
-            storeFile = file("../vkbook-release-key.keystore")
-            storePassword = "vkbook123"
-            keyAlias = "vkbook_key"
-            keyPassword = "vkbook123"
+            // Читаем параметры из local.properties, используем значения по умолчанию если файла нет
+            val keystoreFile = keystoreProperties["KEYSTORE_FILE"] as String? ?: "../vkbook-release-key.keystore"
+            storeFile = file(keystoreFile)
+            storePassword = keystoreProperties["KEYSTORE_PASSWORD"] as String? ?: ""
+            keyAlias = keystoreProperties["KEY_ALIAS"] as String? ?: "vkbook_key"
+            keyPassword = keystoreProperties["KEY_PASSWORD"] as String? ?: ""
         }
     }
 
@@ -101,6 +113,9 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    
+    // Безопасное хранение данных
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
     // PDF Viewer (пока не используется)
     // implementation("com.github.barteksc:android-pdf-viewer:3.2.0-beta.1")

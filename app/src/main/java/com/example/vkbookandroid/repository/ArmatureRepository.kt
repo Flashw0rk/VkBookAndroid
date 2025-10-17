@@ -6,6 +6,7 @@ import com.example.vkbookandroid.model.ArmatureCoordsData
 import com.example.vkbookandroid.model.ArmatureMarker
 import com.example.vkbookandroid.model.FileInfo
 import com.example.vkbookandroid.network.ArmatureApiService
+import com.example.vkbookandroid.network.NetworkModule
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -152,9 +153,15 @@ class ArmatureRepository(
             try {
                 android.util.Log.d("ArmatureRepository", "Checking server health...")
                 val response = apiService?.getHealth()
-                val isSuccessful = response?.isSuccessful == true
-                android.util.Log.d("ArmatureRepository", "Server health check result: $isSuccessful, response code: ${response?.code()}")
-                if (!isSuccessful) {
+                val responseCode = response?.code() ?: 0
+                
+                // 429 (Rate Limit) означает что сервер доступен, просто много запросов
+                val isSuccessful = response?.isSuccessful == true || responseCode == 429
+                android.util.Log.d("ArmatureRepository", "Server health check result: $isSuccessful, response code: $responseCode")
+                
+                if (responseCode == 429) {
+                    android.util.Log.w("ArmatureRepository", "Server rate limit (429) - сервер доступен, но ограничивает запросы. Подождите несколько секунд.")
+                } else if (!isSuccessful) {
                     android.util.Log.e("ArmatureRepository", "Server health check failed: ${response?.errorBody()?.string()}")
                 }
                 isSuccessful
@@ -906,5 +913,12 @@ class ArmatureRepository(
         }
         
         return result
+    }
+    
+    /**
+     * Получить API сервис для прямого доступа к endpoints
+     */
+    fun getArmatureApiService(): ArmatureApiService {
+        return apiService ?: NetworkModule.getArmatureApiService()
     }
 }

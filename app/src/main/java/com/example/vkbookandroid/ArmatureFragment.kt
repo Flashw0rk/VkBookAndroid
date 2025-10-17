@@ -586,7 +586,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             Log.e("ArmatureFragment", "Error scrolling to bottom", e)
         }
     }
-
+    
     fun filterData(searchText: String) {
         // Переведено на Flow-пайплайн: просто отправляем значение
         scrollToTopOnNextResults = true

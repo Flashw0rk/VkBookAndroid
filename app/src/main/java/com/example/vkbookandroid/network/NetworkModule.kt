@@ -174,7 +174,9 @@ object NetworkModule {
                     level = HttpLoggingInterceptor.Level.BODY
                 })
                 .addInterceptor { chain ->
-                    val request = chain.request()
+                    val builder = chain.request().newBuilder()
+                        .addHeader("X-API-Key", "vkbook-2024-secret-key-abc123")
+                    val request = builder.build()
                     android.util.Log.d("NetworkModule", "Making request to: ${request.url}")
                     android.util.Log.d("NetworkModule", "Request method: ${request.method}")
                     android.util.Log.d("NetworkModule", "Request headers: ${request.headers}")
@@ -258,8 +260,9 @@ object NetworkModule {
                 val response = testOkHttpClient.newCall(request).execute()
                 android.util.Log.d("NetworkModule", "Direct HTTP response: ${response.code} - ${response.message}")
                 
-                if (response.isSuccessful) {
-                    android.util.Log.d("NetworkModule", "Connection test successful via direct HTTP request")
+                // 429 означает сервер доступен, просто rate limit
+                if (response.isSuccessful || response.code == 429) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via direct HTTP request (code: ${response.code})")
                     response.close()
                     return true
                 }
@@ -282,8 +285,8 @@ object NetworkModule {
                 // Сначала пробуем корневой endpoint
                 android.util.Log.d("NetworkModule", "Trying root endpoint: $url")
                 val rootResponse = testService.getRoot()
-                if (rootResponse.isSuccessful) {
-                    android.util.Log.d("NetworkModule", "Connection test successful via root endpoint")
+                if (rootResponse.isSuccessful || rootResponse.code() == 429) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via root endpoint (code: ${rootResponse.code()})")
                     return true
                 }
                 android.util.Log.d("NetworkModule", "Root endpoint response: ${rootResponse.code()} - ${rootResponse.message()}")
@@ -295,8 +298,8 @@ object NetworkModule {
             try {
                 android.util.Log.d("NetworkModule", "Trying health endpoint: ${url}actuator/health")
                 val healthResponse = testService.getHealth()
-                if (healthResponse.isSuccessful) {
-                    android.util.Log.d("NetworkModule", "Connection test successful via health endpoint")
+                if (healthResponse.isSuccessful || healthResponse.code() == 429) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via health endpoint (code: ${healthResponse.code()})")
                     return true
                 }
                 android.util.Log.d("NetworkModule", "Health endpoint response: ${healthResponse.code()} - ${healthResponse.message()}")
@@ -308,8 +311,8 @@ object NetworkModule {
             try {
                 android.util.Log.d("NetworkModule", "Trying info endpoint: ${url}actuator/info")
                 val infoResponse = testService.getInfo()
-                if (infoResponse.isSuccessful) {
-                    android.util.Log.d("NetworkModule", "Connection test successful via info endpoint")
+                if (infoResponse.isSuccessful || infoResponse.code() == 429) {
+                    android.util.Log.d("NetworkModule", "Connection test successful via info endpoint (code: ${infoResponse.code()})")
                     return true
                 }
                 android.util.Log.d("NetworkModule", "Info endpoint response: ${infoResponse.code()} - ${infoResponse.message()}")

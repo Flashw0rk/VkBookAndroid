@@ -49,9 +49,21 @@ class SignalsAdapter(
     private var showingSearchResults: Boolean = false
     private val adapterScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var onAfterSearchResultsApplied: (() -> Unit)? = null
+    
+    // Переиспользуемый Handler для оптимизации
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun setOnAfterSearchResultsApplied(listener: (() -> Unit)?) {
         onAfterSearchResultsApplied = listener
+    }
+    
+    // Вспомогательная функция для восстановления политики адаптера
+    private fun restoreAdapterStatePolicy() {
+        try {
+            mainHandler.postDelayed({
+                this.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
+            }, 150)
+        } catch (_: Throwable) {}
     }
 
     private fun isHidden(headerName: String): Boolean {
@@ -79,6 +91,12 @@ class SignalsAdapter(
         private var _initialWidth = 0
         private val longPressHandler = Handler(Looper.getMainLooper())
         private var pendingSelection: Runnable? = null
+        
+        // Очистка ресурсов
+        fun unbind() {
+            pendingSelection?.let { longPressHandler.removeCallbacks(it) }
+            pendingSelection = null
+        }
 
         fun bind(headers: List<String>, columnWidths: Map<String, Int>, totalRowWidth: Int, context: Context, isResizingMode: Boolean) {
             _isResizingMode = isResizingMode
@@ -123,12 +141,12 @@ class SignalsAdapter(
                                 adapter.activateColumnSearch(headerName)
                             }
                             longPressHandler.postDelayed(pendingSelection!!, 3000)
-                            true
+                            false // Не поглощаем, даем возможность onClick сработать
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             pendingSelection?.let { longPressHandler.removeCallbacks(it) }
                             pendingSelection = null
-                            // Если был совершен долгий тап и мы активировали колонку — поглощаем UP, чтобы клик не сработал
+                            // Если был долгий тап - поглощаем событие, иначе даем onClick сработать
                             if (longPressActivated) {
                                 longPressActivated = false
                                 return@setOnTouchListener true
@@ -139,10 +157,9 @@ class SignalsAdapter(
                     }
                 }
                 textView.setOnClickListener {
+                    // Деактивируем поиск по колонке при клике на выделенный заголовок
                     if (adapter.isColumnSelected(headerName)) {
                         adapter.deactivateColumnSearch()
-                    } else {
-                        adapter.activateColumnSearch(headerName)
                     }
                 }
 
@@ -365,10 +382,11 @@ class SignalsAdapter(
                 // Клик по ячейке для редактирования (если передан обработчик и включён режим редактирования)
                 if (adapter.onCellClick != null && _isResizingMode) {
                     textView.setOnClickListener {
-                        val rowIdx = bindingAdapterPosition - 1 // сдвиг из-за заголовка
+                        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Находим реальный индекс строки в данных адаптера
+                        val rowIdx = adapter.data.indexOf(rowData).coerceAtLeast(0)
                         val headerName = if (colIndex < headers.size) headers[colIndex] else ""
                         val value = cellTextValue
-                        adapter.onCellClick?.invoke(rowIdx.coerceAtLeast(0), colIndex, headerName, value, rowData)
+                        adapter.onCellClick?.invoke(rowIdx, colIndex, headerName, value, rowData)
                     }
                 }
                 // Клик и подсветка для "Арматура" если есть PDF в колонке PDF_Схема_и_ID_арматуры
@@ -673,120 +691,6 @@ class SignalsAdapter(
         notifyDataSetChanged()
     }
 
-    @Deprecated("Use updateSearchResults() instead")
-    private fun filterLegacy(searchText: String) {
-        val normalized = searchText.trim()
-        currentSearchQuery = normalized
-        
-        // ИСПРАВЛЕНИЕ: Детальное логирование для диагностики
-        Log.d("SignalsAdapter", "=== SMART SEARCH DEBUG START ===")
-        Log.d("SignalsAdapter", "Original search query: '$searchText'")
-        Log.d("SignalsAdapter", "Normalized search query: '$normalized'")
-        Log.d("SignalsAdapter", "Original data size: ${_originalData.size}")
-        Log.d("SignalsAdapter", "Headers: $headers")
-        Log.d("SignalsAdapter", "Selected column: $selectedColumnHeaderName")
-        
-        // Проверяем, что данные готовы для поиска
-        if (_originalData.isEmpty()) {
-            Log.w("SignalsAdapter", "Cannot perform search: _originalData is empty")
-            return
-        }
-        
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаемся, что headers не пустые
-        if (headers.isEmpty()) {
-            Log.w("SignalsAdapter", "Cannot perform search: headers are empty")
-            return
-        }
-        
-        if (normalized.isEmpty()) {
-            data = _originalData
-            notifyDataSetChanged()
-            Log.d("SignalsAdapter", "Search cleared, showing all ${data.size} items")
-            return
-        }
-        
-        // УМНЫЙ ПОИСК: Создаем варианты поискового запроса
-        val searchVariants = SearchNormalizer.createSearchVariants(normalized)
-        Log.d("SignalsAdapter", "Search variants: $searchVariants")
-        
-        // ИСПРАВЛЕНИЕ: Умный поиск с сортировкой по приоритету
-        val selectedHeader = selectedColumnHeaderName
-        val searchResults = if (!selectedHeader.isNullOrBlank()) {
-            // Поиск по конкретному столбцу с оценкой
-            val colIndex = headers.indexOfFirst { it.equals(selectedHeader, ignoreCase = true) }
-            if (colIndex >= 0) {
-                _originalData.mapNotNull { row ->
-                    val values = row.getAllProperties()
-                    val cell = if (colIndex < values.size) values[colIndex] else null
-                    val score = SearchNormalizer.getMatchScore(cell, normalized)
-                    if (score > 0) {
-                        Log.d("SignalsAdapter", "Found match in column '$selectedHeader': '$cell' (score: $score)")
-                        SearchResult(row, score, selectedHeader, cell)
-                    } else null
-                }.sorted() // Сортировка по приоритету (SearchResult implements Comparable)
-            } else {
-                Log.w("SignalsAdapter", "Column '$selectedHeader' not found")
-                emptyList<SearchResult>()
-            }
-        } else {
-            // Поиск по всем столбцам с оценкой
-            _originalData.mapNotNull { row ->
-                val values = row.getAllProperties()
-                var maxScore = 0
-                var bestMatch: String? = null
-                var bestColumn: String? = null
-                
-                values.forEachIndexed { index, value ->
-                    if (value != null) {
-                        val stringValue = value.toString()
-                        if (stringValue.trim().isNotEmpty()) {
-                            val score = SearchNormalizer.getMatchScore(stringValue, normalized)
-                            if (score > maxScore) {
-                                maxScore = score
-                                bestMatch = stringValue
-                                bestColumn = if (index < headers.size) headers[index] else null
-                            }
-                        }
-                    }
-                }
-                
-                if (maxScore > 0) {
-                    Log.d("SignalsAdapter", "Found match: '$bestMatch' in column '$bestColumn' (score: $maxScore) for query '$normalized'")
-                    SearchResult(row, maxScore, bestColumn, bestMatch)
-                } else null
-            }.sorted() // Сортировка по приоритету
-        }
-        
-        // Преобразуем SearchResult обратно в RowDataDynamic и сохраняем отсортированные данные
-        data = searchResults.map { it.data }
-        Log.d("SignalsAdapter", "Smart search '$normalized' completed: found ${data.size} items from ${_originalData.size} total")
-        
-        // ДИАГНОСТИКА: Показываем найденные результаты с оценками
-        if (searchResults.isNotEmpty()) {
-            Log.d("SignalsAdapter", "Found results (sorted by priority):")
-            searchResults.take(5).forEachIndexed { index, result ->
-                val values = result.data.getAllProperties()
-                Log.d("SignalsAdapter", "  Result $index (score: ${result.matchScore}): ${values.take(3).joinToString(", ")}")
-                Log.d("SignalsAdapter", "    Best match: '${result.matchedValue}' in column '${result.matchedColumn}'")
-            }
-        } else {
-            Log.w("SignalsAdapter", "No results found for query '$normalized'")
-            // ДИАГНОСТИКА: Проверим, есть ли похожие значения
-            val sampleValues = _originalData.take(5).flatMap { it.getAllProperties() }.filterNotNull().map { it.toString().trim() }.filter { it.isNotEmpty() }
-            Log.d("SignalsAdapter", "Sample values in data: ${sampleValues.take(10)}")
-            
-            // ДОПОЛНИТЕЛЬНАЯ ДИАГНОСТИКА: Проверим, есть ли значения, начинающиеся с искомого текста
-            val startsWithMatches = _originalData.flatMap { it.getAllProperties() }
-                .filterNotNull()
-                .map { it.toString().trim() }
-                .filter { it.isNotEmpty() && SearchNormalizer.startsWithSearchVariants(it, normalized) }
-            Log.d("SignalsAdapter", "Values starting with '$normalized': $startsWithMatches")
-        }
-        
-        Log.d("SignalsAdapter", "=== SMART SEARCH DEBUG END ===")
-        notifyDataSetChanged()
-    }
-
     fun getOriginalData(): List<RowDataDynamic> = _originalData
     
     /**
@@ -942,11 +846,7 @@ class SignalsAdapter(
                     } catch (_: Throwable) {}
                     try { onAfterSearchResultsApplied?.invoke() } catch (_: Throwable) {}
                     // Возвращаем разрешение на восстановление состояния после скролла к началу
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
                 
             } catch (e: Exception) {
@@ -957,11 +857,7 @@ class SignalsAdapter(
                     notifyDataSetChanged()
                     Log.d("SignalsAdapter", "Fallback: Search results updated with notifyDataSetChanged")
                     try { onAfterSearchResultsApplied?.invoke() } catch (_: Throwable) {}
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
             }
         }
@@ -999,11 +895,7 @@ class SignalsAdapter(
                     try {
                         if (data.isNotEmpty()) notifyItemRangeChanged(1, data.size)
                     } catch (_: Throwable) {}
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
                 
             } catch (e: Exception) {
@@ -1013,11 +905,7 @@ class SignalsAdapter(
                     data = _originalData
                     notifyDataSetChanged()
                     Log.d("SignalsAdapter", "Fallback: Cleared search results with notifyDataSetChanged")
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
             }
         }
@@ -1142,11 +1030,7 @@ class SignalsAdapter(
                     diffResult.dispatchUpdatesTo(this@SignalsAdapter)
                     Log.d("SignalsAdapter", "Filtered data updated with DiffUtil (preserve order)")
                     try { onAfterSearchResultsApplied?.invoke() } catch (_: Throwable) {}
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
             } catch (e: Exception) {
                 Log.e("SignalsAdapter", "Error updating filtered data", e)
@@ -1154,21 +1038,28 @@ class SignalsAdapter(
                     data = filtered
                     notifyDataSetChanged()
                     try { onAfterSearchResultsApplied?.invoke() } catch (_: Throwable) {}
-                    try {
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                            this@SignalsAdapter.stateRestorationPolicy = RecyclerView.Adapter.StateRestorationPolicy.ALLOW
-                        }, 150)
-                    } catch (_: Throwable) {}
+                    restoreAdapterStatePolicy()
                 }
             }
         }
     }
     
     /**
-     * НОВОЕ: Очистка ресурсов
+     * Очистка ViewHolder при переработке для предотвращения утечек памяти
+     */
+    override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
+        super.onViewRecycled(holder)
+        if (holder is HeaderViewHolder) {
+            holder.unbind()
+        }
+    }
+    
+    /**
+     * Очистка ресурсов для предотвращения утечек памяти
      */
     fun cleanup() {
         adapterScope.cancel()
+        mainHandler.removeCallbacksAndMessages(null) // Очищаем все отложенные задачи
         SearchNormalizer.clearCaches()
     }
 }
