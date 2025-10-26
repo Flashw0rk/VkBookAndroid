@@ -443,7 +443,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                 } else {
                     val headersForDefaults = initialColumnWidths.keys.toList()
                     val xdpi = resources.displayMetrics.xdpi
-                    val px35cm = ((3.5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     headersForDefaults.forEach { header ->
@@ -451,7 +451,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                         val w = when {
                             h.contains("место установки ключа") -> px4cm
                             h.contains("название позиции") || h.startsWith("бел") -> px5cm
-                            else -> px35cm
+                            else -> px3cm
                         }
                         currentColumnWidths[header] = w
                     }
