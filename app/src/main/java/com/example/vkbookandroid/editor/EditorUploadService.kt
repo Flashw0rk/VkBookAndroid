@@ -1,5 +1,6 @@
 package com.example.vkbookandroid.editor
 
+import android.util.Log
 import com.example.vkbookandroid.network.NetworkModule
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -33,7 +34,9 @@ class EditorUploadService(
         if (resp.isSuccessful) {
             retrofit2.Response.success("OK")
         } else {
-            val errBody = resp.errorBody() ?: okhttp3.ResponseBody.create(null, "")
+            val errorBodyStr = try { resp.errorBody()?.string() } catch (_: Exception) { null }
+            Log.e("EditorUploadService", "JSON upload failed: code=${resp.code()}, message=${resp.message()}, body=$errorBodyStr")
+            val errBody = errorBodyStr?.let { okhttp3.ResponseBody.create(null, it) } ?: okhttp3.ResponseBody.create(null, "")
             retrofit2.Response.error(resp.code(), errBody)
         }
     }.getOrNull()
@@ -53,7 +56,10 @@ class EditorUploadService(
         if (resp.isSuccessful) {
             retrofit2.Response.success("OK")
         } else {
-            val errBody = resp.errorBody() ?: okhttp3.ResponseBody.create(null, "")
+            // Логируем детали ошибки
+            val errorBodyStr = try { resp.errorBody()?.string() } catch (_: Exception) { null }
+            Log.e("EditorUploadService", "Excel upload failed: code=${resp.code()}, message=${resp.message()}, body=$errorBodyStr")
+            val errBody = errorBodyStr?.let { okhttp3.ResponseBody.create(null, it) } ?: okhttp3.ResponseBody.create(null, "")
             retrofit2.Response.error(resp.code(), errBody)
         }
     }.getOrNull()
@@ -80,6 +86,13 @@ class EditorUploadService(
                 } else {
                     lastCode = resp.code()
                     lastMsg = resp.message()
+                    // Логируем детали ошибки для диагностики
+                    try {
+                        val errorBodyStr = resp.errorBody()?.string()
+                        Log.e("EditorUploadService", "Upload failed for $type: code=${resp.code()}, message=${resp.message()}, body=$errorBodyStr")
+                    } catch (e: Exception) {
+                        Log.e("EditorUploadService", "Cannot read error body: ${e.message}")
+                    }
                     // 4xx — без ретраев, 5xx — ретраим
                     if (resp.code() in 400..499) break
                 }
