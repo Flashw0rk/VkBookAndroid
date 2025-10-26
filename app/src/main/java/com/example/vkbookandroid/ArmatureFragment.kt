@@ -306,7 +306,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 }
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
 
-                // БАЗА: ширины по умолчанию = 3 см до тех пор, пока пользователь их не изменит
+                // БАЗА: ширины по умолчанию = 3.5 см до тех пор, пока пользователь их не изменит
                 val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadArmatureColumnWidths(ctx)
                 currentColumnWidths = mutableMapOf()
                 val headersForDefaults = try { (cachedSession ?: pagingSession ?: sessionForInitial).getHeaders() } catch (_: Throwable) { emptyList() }
@@ -314,7 +314,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                     currentColumnWidths.putAll(savedColumnWidths)
                 } else {
                     val xdpi = resources.displayMetrics.xdpi
-                    val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px35cm = ((3.5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     headersForDefaults.forEach { header ->
@@ -322,7 +322,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                         val w = when {
                             h.contains("место установки ключа") -> px4cm
                             h.contains("название позиции") -> px5cm
-                            else -> px3cm
+                            else -> px35cm
                         }
                         currentColumnWidths[header] = w
                     }
