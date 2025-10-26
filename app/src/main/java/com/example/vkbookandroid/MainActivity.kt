@@ -55,6 +55,8 @@ class MainActivity : AppCompatActivity() {
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         // Обновляем настройки сервера после возврата из настроек
         loadServerSettings()
+        // Применяем настройки вкладок и корректируем UI
+        try { applyTabsVisibility() } catch (_: Throwable) {}
         
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ
         if (AutoSyncSettings.isSyncOnSettingsChangeEnabled(this@MainActivity)) {
@@ -194,8 +196,8 @@ class MainActivity : AppCompatActivity() {
             else -> {
                 // Если Fragment ещё не найден по тегу, попробуем через адаптер как запасной вариант
                 when (position) {
-                    0 -> (pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment)?.ensureDataLoaded()
-                    1 -> (pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment)?.ensureDataLoaded()
+                    0 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.ensureDataLoaded()
+                    1 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.ensureDataLoaded()
                 }
             }
         }
@@ -214,8 +216,8 @@ class MainActivity : AppCompatActivity() {
         (supportFragmentManager.findFragmentByTag("f0") as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
         (supportFragmentManager.findFragmentByTag("f1") as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
         // Фоллбек через адаптер
-        (pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
-        (pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
+        ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
+        ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
     }
     
     /**
@@ -239,7 +241,7 @@ class MainActivity : AppCompatActivity() {
                 // Вкладка "Сигналы БЩУ"
                 Log.d("MainActivity", "=== SEARCHING IN TAB 0: DataFragment (БЩУ сигналы) ===")
                 val fragment = supportFragmentManager.findFragmentByTag("f0") as? org.example.pult.android.DataFragment
-                    ?: (pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment)
+                    ?: ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)
                 if (fragment != null) {
                     Log.d("MainActivity", "Found DataFragment, applying search")
                     fragment.setSearchQueryExternal(sharedSearchQuery)
@@ -251,7 +253,7 @@ class MainActivity : AppCompatActivity() {
                 // Вкладка "Арматура"
                 Log.d("MainActivity", "=== SEARCHING IN TAB 1: ArmatureFragment (Арматура) ===")
                 val fragment = supportFragmentManager.findFragmentByTag("f1") as? com.example.vkbookandroid.ArmatureFragment
-                    ?: (pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment)
+                    ?: ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)
                 if (fragment != null) {
                     Log.d("MainActivity", "Found ArmatureFragment, applying search")
                     fragment.setSearchQueryExternal(sharedSearchQuery)
@@ -315,6 +317,8 @@ class MainActivity : AppCompatActivity() {
         val currentUrl = ServerSettingsActivity.getCurrentServerUrl(this)
         android.util.Log.d("MainActivity", "loadServerSettings: currentUrl=$currentUrl")
         NetworkModule.updateBaseUrl(currentUrl)
+        // После возврата из настроек применяем видимость вкладок
+        try { applyTabsVisibility() } catch (_: Throwable) {}
     }
     
     private fun checkConnectionOnStartup() {
@@ -356,6 +360,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 when {
+                    result.rateLimitReached -> {
+                        updateSyncStatus("Лимит запросов достигнут")
+                        Toast.makeText(this@MainActivity, "Достигнут лимит запросов к серверу", Toast.LENGTH_LONG).show()
+                    }
                     result.overallSuccess -> {
                         updateSyncStatus("Обновление завершено")
                         val updateSummary = result.getUpdateSummary()
@@ -636,8 +644,11 @@ class MainActivity : AppCompatActivity() {
         }
         
         // Связывание TabLayout с ViewPager2
+        val visible = loadTabsVisibility()
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = when (position) {
+            val adapter = (viewPager.adapter as? MainPagerAdapter)
+            val globalPos = adapter?.getGlobalPositionAt(position) ?: position
+            val label = when (globalPos) {
                 0 -> "Сигналы БЩУ"
                 1 -> "Арматура"
                 2 -> "Схемы"
@@ -645,7 +656,11 @@ class MainActivity : AppCompatActivity() {
                 4 -> "График"
                 else -> ""
             }
+            tab.text = label
         }.attach()
+
+        // Применяем видимость к TabLayout и ViewPager
+        applyTabsVisibility()
         
         // Принудительно подгружаем АКТУАЛЬНУЮ вкладку после первой разметки (после ротации сохранится текущая)
         viewPager.postOnAnimation {
@@ -671,6 +686,77 @@ class MainActivity : AppCompatActivity() {
         })
         
         Log.d("MainActivity", "ViewPager2 initialization completed")
+    }
+
+    private fun loadTabsVisibility(): Map<Int, Boolean> {
+        return try {
+            val prefs = getSharedPreferences("server_settings", MODE_PRIVATE)
+            val json = prefs.getString("tabs_visibility_json", null)
+            
+            // Если нет сохраненных настроек, возвращаем значения по умолчанию
+            if (json == null) {
+                val defaultMap = mutableMapOf<Int, Boolean>()
+                (0..4).forEach { defaultMap[it] = false }
+                // По умолчанию включены: Арматура (1), Схемы (2), График (4)
+                defaultMap[1] = true
+                defaultMap[2] = true
+                defaultMap[4] = true
+                return defaultMap
+            }
+            
+            val gson = com.google.gson.Gson()
+            if (json.trim().startsWith("[")) {
+                // формат: список включённых индексов
+                val listType = object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type
+                val list = gson.fromJson<List<Int>>(json, listType) ?: emptyList()
+                val map = mutableMapOf<Int, Boolean>()
+                (0..4).forEach { map[it] = list.contains(it) }
+                map
+            } else {
+                // формат: карта индексов -> bool (строки или числа)
+                return try {
+                    val mapStrType = object : com.google.gson.reflect.TypeToken<Map<String, Boolean>>() {}.type
+                    val m = gson.fromJson<Map<String, Boolean>>(json, mapStrType) ?: emptyMap()
+                    m.mapKeys { it.key.toIntOrNull() ?: -1 }.filterKeys { it in 0..4 }
+                } catch (_: Exception) {
+                    val mapIntType = object : com.google.gson.reflect.TypeToken<Map<Int, Boolean>>() {}.type
+                    gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
+                }
+            }
+        } catch (e: Exception) { 
+            // В случае ошибки возвращаем значения по умолчанию
+            val defaultMap = mutableMapOf<Int, Boolean>()
+            (0..4).forEach { defaultMap[it] = false }
+            defaultMap[1] = true  // Арматура
+            defaultMap[2] = true  // Схемы
+            defaultMap[4] = true  // График
+            defaultMap
+        }
+    }
+
+    private fun applyTabsVisibility() {
+        val visible = loadTabsVisibility()
+        if (!::tabLayout.isInitialized || !::viewPager.isInitialized) return
+        // Обновляем список позиций для адаптера
+        val newPositions = (0..4).filter { visible[it] != false }
+        (viewPager.adapter as? MainPagerAdapter)?.setVisiblePositions(newPositions)
+        // Перестраиваем TabLayout: скрываем вкладки без удаления (по глобальной позиции)
+        val adapter = (viewPager.adapter as? MainPagerAdapter)
+        for (i in 0 until tabLayout.tabCount) {
+            val v = tabLayout.getTabAt(i)?.view ?: continue
+            val global = adapter?.getGlobalPositionAt(i) ?: i
+            v.visibility = if (visible[global] != false) android.view.View.VISIBLE else android.view.View.GONE
+        }
+        // Если все вкладки скрыты — показываем пустой фон
+        if (newPositions.isEmpty()) {
+            viewPager.visibility = android.view.View.GONE
+        } else {
+            viewPager.visibility = android.view.View.VISIBLE
+            val currentGlobal = (viewPager.adapter as? MainPagerAdapter)?.getGlobalPositionAt(viewPager.currentItem) ?: 0
+            if (visible[currentGlobal] == false) {
+                viewPager.setCurrentItem(0, false)
+            }
+        }
     }
     
     /**
@@ -792,9 +878,9 @@ class MainActivity : AppCompatActivity() {
             // Диагностика файлов перед обновлением
             diagnoseFiles()
             
-            val dataFragment = pagerAdapter.getFragment(0) as? org.example.pult.android.DataFragment
-            val armatureFragment = pagerAdapter.getFragment(1) as? com.example.vkbookandroid.ArmatureFragment
-            val schemesFragment = pagerAdapter.getFragment(2) as? com.example.vkbookandroid.SchemesFragment
+            val dataFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
+            val armatureFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment
+            val schemesFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(2) as? com.example.vkbookandroid.SchemesFragment
             
             // Используем новый механизм обновления для фрагментов, поддерживающих RefreshableFragment
             dataFragment?.let { (it as RefreshableFragment).refreshData() }

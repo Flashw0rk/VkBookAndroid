@@ -1,14 +1,17 @@
 package com.example.vkbookandroid
 
 import android.content.Context
+import android.content.ClipData
 import android.graphics.Typeface
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
+import android.view.View.DragShadowBuilder
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.HorizontalScrollView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import org.example.pult.RowDataDynamic
@@ -23,6 +26,7 @@ import com.example.vkbookandroid.search.DataDiffCallback
 import com.example.vkbookandroid.search.DiffUtilHelper
 import androidx.recyclerview.widget.DiffUtil
 import kotlinx.coroutines.*
+import java.util.LinkedHashMap
 
 class SignalsAdapter(
     private var data: List<RowDataDynamic>,
@@ -31,10 +35,11 @@ class SignalsAdapter(
     private val onRowClick: ((RowDataDynamic) -> Unit)? = null,
     private val onArmatureCellClick: ((RowDataDynamic) -> Unit)? = null,
     private val hidePdfSchemeColumn: Boolean = true,
-    private val onCellClick: ((rowIndex: Int, columnIndex: Int, headerName: String, currentValue: String, rowData: RowDataDynamic) -> Unit)? = null
+    private val onCellClick: ((rowIndex: Int, columnIndex: Int, headerName: String, currentValue: String, rowData: RowDataDynamic) -> Unit)? = null,
+    private val onColumnReorder: ((List<String>) -> Unit)? = null
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    var headers: List<String> = emptyList() // Changed from private to public
+    var headers: MutableList<String> = mutableListOf() // allow reordering
     private var columnWidths: Map<String, Int> = emptyMap()
     private var _originalData: List<RowDataDynamic> = emptyList()
     var currentSearchQuery: String = ""
@@ -91,6 +96,13 @@ class SignalsAdapter(
         private var _initialWidth = 0
         private val longPressHandler = Handler(Looper.getMainLooper())
         private var pendingSelection: Runnable? = null
+        private var dragging = false
+        private var dragFromIndex = -1 // visible index among headerTextViews
+        private var dragTargetIndex = -1 // visible index
+        private var dragFromActualIndex = -1 // index in headers list
+        private var dragTargetActualIndex = -1 // index in headers list
+        private var autoScrollDir = 0 // -1 left, +1 right
+        private var autoScrollRunning = false
         
         // Очистка ресурсов
         fun unbind() {
@@ -129,7 +141,111 @@ class SignalsAdapter(
                 headerTextViews.add(textView)
                 headerContainer.addView(textView)
 
-                // Поиск по столбцу: долгий тап 3 секунды для активации, одиночный клик по выделенному — деактивировать
+                if (_isResizingMode) {
+                    // Режим редактирования: длинный тап по заголовку — перетаскивание для смены порядка
+                    textView.setOnLongClickListener {
+                        dragging = true
+                        dragFromIndex = headerTextViews.indexOf(textView)
+                        dragTargetIndex = dragFromIndex
+                        dragFromActualIndex = visibleIndices.getOrElse(dragFromIndex) { -1 }
+                        dragTargetActualIndex = dragFromActualIndex
+                        (itemView.parent as? ViewGroup)?.requestDisallowInterceptTouchEvent(true)
+                        // Запускаем системный drag с призрачной тенью
+                        try {
+                            val data = ClipData.newPlainText("header", headers.getOrNull(dragFromIndex) ?: "")
+                            textView.startDragAndDrop(data, DragShadowBuilder(textView), null, 0)
+                        } catch (_: Throwable) {
+                            try { textView.startDrag(null, DragShadowBuilder(textView), null, 0) } catch (_: Throwable) {}
+                        }
+                        true
+                    }
+                    headerContainer.setOnTouchListener { _, ev ->
+                        if (!dragging) return@setOnTouchListener false
+                        when (ev.action) {
+                            MotionEvent.ACTION_MOVE -> {
+                                // Определяем целевой индекс по позиции пальца относительно центров заголовков
+                                val target = run {
+                                    var idx = 0
+                                    var bestIdx = 0
+                                    var bestDist = Float.MAX_VALUE
+                                    headerTextViews.forEach { tv ->
+                                        val centerX = tv.x + tv.width / 2f
+                                        val d = kotlin.math.abs(ev.x - centerX)
+                                        if (d < bestDist) { bestDist = d; bestIdx = idx }
+                                        idx++
+                                    }
+                                    bestIdx
+                                }
+                                if (target in headerTextViews.indices) {
+                                    dragTargetIndex = target
+                                    dragTargetActualIndex = visibleIndices.getOrElse(dragTargetIndex) { -1 }
+                                }
+                                // Автопрокрутка при подходе к краям
+                                val threshold = (32 * itemView.resources.displayMetrics.density).toInt()
+                                val hscroll = findAncestorHScroll(headerContainer)
+                                val wantDir = when {
+                                    ev.x < threshold -> -1
+                                    ev.x > headerContainer.width - threshold -> +1
+                                    else -> 0
+                                }
+                                if (wantDir != autoScrollDir) {
+                                    autoScrollDir = wantDir
+                                    if (autoScrollDir == 0) stopAutoScroll() else startAutoScroll(hscroll)
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                dragging = false
+                                if (dragFromActualIndex >= 0 && dragTargetActualIndex >= 0 && dragTargetActualIndex != dragFromActualIndex) {
+                                    try { adapter.moveHeader(dragFromActualIndex, dragTargetActualIndex) } catch (_: Throwable) {}
+                                }
+                                dragFromIndex = -1
+                                dragTargetIndex = -1
+                                dragFromActualIndex = -1
+                                dragTargetActualIndex = -1
+                                stopAutoScroll()
+                                headerContainer.setOnTouchListener(null)
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+                    // Принимаем drop внутри контейнера для совместимости с системным drag
+                    headerContainer.setOnDragListener { _, event ->
+                        when (event.action) {
+                            android.view.DragEvent.ACTION_DRAG_LOCATION -> {
+                                // Подсчет целевого индекса по X в координатах контейнера
+                                val x = event.x
+                                var idx = 0
+                                var bestIdx = 0
+                                var bestDist = Float.MAX_VALUE
+                                headerTextViews.forEach { tv ->
+                                    val centerX = tv.x + tv.width / 2f
+                                    val d = kotlin.math.abs(x - centerX)
+                                    if (d < bestDist) { bestDist = d; bestIdx = idx }
+                                    idx++
+                                }
+                                dragTargetIndex = bestIdx
+                                dragTargetActualIndex = visibleIndices.getOrElse(dragTargetIndex) { -1 }
+                                true
+                            }
+                            android.view.DragEvent.ACTION_DROP, android.view.DragEvent.ACTION_DRAG_ENDED -> {
+                                if (dragFromActualIndex >= 0 && dragTargetActualIndex >= 0 && dragTargetActualIndex != dragFromActualIndex) {
+                                    try { adapter.moveHeader(dragFromActualIndex, dragTargetActualIndex) } catch (_: Throwable) {}
+                                }
+                                dragging = false
+                                dragFromIndex = -1
+                                dragTargetIndex = -1
+                                dragFromActualIndex = -1
+                                dragTargetActualIndex = -1
+                                stopAutoScroll()
+                                true
+                            }
+                            else -> true
+                        }
+                    }
+                } else {
+                    // Режим просмотра: долгий тап по заголовку включает поиск по столбцу
                 var longPressActivated = false
                 textView.setOnTouchListener { _, event ->
                     when (event.action) {
@@ -141,12 +257,11 @@ class SignalsAdapter(
                                 adapter.activateColumnSearch(headerName)
                             }
                             longPressHandler.postDelayed(pendingSelection!!, 3000)
-                            false // Не поглощаем, даем возможность onClick сработать
+                                false
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             pendingSelection?.let { longPressHandler.removeCallbacks(it) }
                             pendingSelection = null
-                            // Если был долгий тап - поглощаем событие, иначе даем onClick сработать
                             if (longPressActivated) {
                                 longPressActivated = false
                                 return@setOnTouchListener true
@@ -157,9 +272,9 @@ class SignalsAdapter(
                     }
                 }
                 textView.setOnClickListener {
-                    // Деактивируем поиск по колонке при клике на выделенный заголовок
                     if (adapter.isColumnSelected(headerName)) {
                         adapter.deactivateColumnSearch()
+                        }
                     }
                 }
 
@@ -287,6 +402,43 @@ class SignalsAdapter(
                 Log.d("HeaderViewHolder", "Header text: ${textView.text}, Final Height: ${textView.layoutParams.height}")
             }
             headerContainer.requestLayout()
+        }
+
+        private fun findAncestorHScroll(v: View): HorizontalScrollView? {
+            var parent = v.parent
+            while (parent is View) {
+                if (parent is HorizontalScrollView) return parent
+                parent = parent.parent
+            }
+            return null
+        }
+
+        private fun startAutoScroll(hscroll: HorizontalScrollView?) {
+            if (hscroll == null) return
+            if (autoScrollRunning) return
+            autoScrollRunning = true
+            val step = (16 * itemView.resources.displayMetrics.density).toInt().coerceAtLeast(8)
+            val runnable = object : Runnable {
+                override fun run() {
+                    if (!autoScrollRunning || autoScrollDir == 0) return
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= 9) {
+                            hscroll.smoothScrollBy(step * autoScrollDir, 0)
+                        } else {
+                            hscroll.scrollBy(step * autoScrollDir, 0)
+                        }
+                    } catch (_: Throwable) {}
+                    // повторяем часто для плавности
+                    longPressHandler.postDelayed(this, 16)
+                }
+            }
+            longPressHandler.post(runnable)
+        }
+
+        private fun stopAutoScroll() {
+            autoScrollRunning = false
+            autoScrollDir = 0
+            // mainHandler callbacks will naturally stop since we check autoScrollRunning
         }
 
         // Helper function to calculate total row width during resize
@@ -609,7 +761,7 @@ class SignalsAdapter(
     fun updateData(newData: List<RowDataDynamic>, newHeaders: List<String>, newColumnWidths: Map<String, Int>, isResizingMode: Boolean, updateOriginal: Boolean = false) { // Add isResizingMode
         Log.d("SignalsAdapter", "Updating data. New data size: ${newData.size}, Headers: ${newHeaders}, Column Widths: ${newColumnWidths}")
         data = newData
-        headers = newHeaders
+        headers = newHeaders.toMutableList()
         columnWidths = newColumnWidths
         armatureColIndex = headers.indexOfFirst { h ->
             h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
@@ -657,6 +809,48 @@ class SignalsAdapter(
         _isResizingMode = isResizingMode // Update resizing mode
         // TODO: Заменить на DiffUtil для лучшей производительности
         // Пока используем notifyDataSetChanged() для совместимости
+        notifyDataSetChanged()
+    }
+
+    // Drag & drop reordering (edit mode)
+    fun moveHeader(from: Int, to: Int) {
+        if (from == to) return
+        if (from !in headers.indices || to !in headers.indices) return
+        val h = headers.removeAt(from)
+        headers.add(to, h)
+        // Переставляем значения колонок для всех строк и пересобираем Map<Header,Value>
+        data = data.map { row ->
+            val oldValues = row.getAllProperties().toMutableList()
+            if (from in oldValues.indices && to in oldValues.indices) {
+                val v = oldValues.removeAt(from)
+                oldValues.add(to, v)
+            }
+            val map = LinkedHashMap<String, String>()
+            headers.forEachIndexed { idx, headerName ->
+                map[headerName] = oldValues.getOrNull(idx) ?: ""
+            }
+            RowDataDynamic(map)
+        }
+        notifyDataSetChanged()
+        try { onColumnReorder?.invoke(headers.toList()) } catch (_: Throwable) {}
+    }
+
+    fun applyColumnOrder(order: List<String>) {
+        if (order.isEmpty()) return
+        val current = headers.toList()
+        val newOrderIndices = order.mapNotNull { desired -> current.indexOfFirst { it == desired }.takeIf { it >= 0 } }
+        if (newOrderIndices.size != current.size) return // несовпадение наборов колонок — пропускаем
+        // Пересобираем заголовки и данные по новому порядку
+        headers = order.toMutableList()
+        data = data.map { row ->
+            val values = row.getAllProperties()
+            val map = LinkedHashMap<String, String>()
+            order.forEachIndexed { newPos, headerName ->
+                val oldIdx = newOrderIndices[newPos]
+                map[headerName] = values.getOrNull(oldIdx) ?: ""
+            }
+            RowDataDynamic(map)
+        }
         notifyDataSetChanged()
     }
 

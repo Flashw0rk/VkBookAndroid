@@ -12,11 +12,12 @@
         android:orientation="vertical"
         android:gravity="center_horizontal">
 
-        <!-- Заголовок -->
+        <!-- Заголовок с кликабельной буквой "Н" -->
         <TextView
+            android:id="@+id/tvSettingsTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Настройки сервера"
+            android:text="Настройки"
             android:textSize="24sp"
             android:textStyle="bold"
             android:textColor="@color/black"
@@ -251,6 +252,17 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="🔍 Диагностика сети"
+            android:textSize="16sp"
+            android:background="@drawable/button_secondary_background"
+            android:textColor="@color/white"
+            android:layout_marginBottom="8dp" />
+
+        <!-- Настройка вкладок -->
+        <Button
+            android:id="@+id/btnTabSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Настройка вкладок"
             android:textSize="16sp"
             android:background="@drawable/button_secondary_background"
             android:textColor="@color/white"

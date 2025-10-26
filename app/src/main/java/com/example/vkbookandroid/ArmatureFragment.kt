@@ -43,6 +43,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
     private lateinit var excelDataManager: AppExcelDataManager
     private lateinit var excelRepository: ExcelRepository
     private var currentColumnWidths: MutableMap<String, Int> = mutableMapOf()
+    private var currentColumnOrder: MutableList<String> = mutableListOf()
     private lateinit var searchView: SearchView
     private lateinit var toggleResizeModeButton: Button
     private lateinit var scrollToTopButton: android.widget.ImageButton
@@ -168,6 +169,11 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 putExtra("designation", designation)
             }
             startActivity(intent)
+        }, onColumnReorder = { newOrder ->
+            try {
+                currentColumnOrder = newOrder.toMutableList()
+                com.example.vkbookandroid.utils.ColumnOrderManager.saveArmatureColumnOrder(requireContext(), newOrder)
+            } catch (_: Throwable) {}
         })
         // Единый жесткий колбэк после применения результатов поиска — скролл к самому верху/влево
         adapter.setOnAfterSearchResultsApplied {
@@ -203,6 +209,24 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             })
         }
         recyclerView.adapter = adapter
+        // Drag & drop reorder in editing mode
+        val touchHelper = androidx.recyclerview.widget.ItemTouchHelper(object : androidx.recyclerview.widget.ItemTouchHelper.Callback() {
+            override fun getMovementFlags(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder): Int {
+                // Разрешаем перетаскивание только заголовка при режиме редактирования
+                val dragFlags = if (isResizingMode && recyclerView.getChildAdapterPosition(viewHolder.itemView) == 0) androidx.recyclerview.widget.ItemTouchHelper.LEFT or androidx.recyclerview.widget.ItemTouchHelper.RIGHT else 0
+                return makeMovementFlags(dragFlags, 0)
+            }
+            override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                // Перетаскивание внутри заголовка: вычисляем индекс колонки по X
+                if (!isResizingMode) return false
+                val header = rv.findViewHolderForAdapterPosition(0) as? com.example.vkbookandroid.SignalsAdapter.HeaderViewHolder ?: return false
+                // Упростим: не будем на лету менять — порядок задаётся через отдельный UI. Заглушка для совместимости
+                return false
+            }
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
+            override fun isLongPressDragEnabled(): Boolean = false
+        })
+        touchHelper.attachToRecyclerView(recyclerView)
         // Гарантируем первичную разметку и видимость после ротации
         view.post {
             recyclerView.adapter?.notifyDataSetChanged()
@@ -282,16 +306,26 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                 }
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
 
-                if (initialColumnWidths.isNotEmpty()) {
-                    val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadArmatureColumnWidths(ctx).toMutableMap()
-                    initialColumnWidths.forEach { (header, width) ->
-                        if (!savedColumnWidths.containsKey(header) || savedColumnWidths[header] == null) {
-                            savedColumnWidths[header] = width
-                        }
-                    }
-                    currentColumnWidths = savedColumnWidths
+                // БАЗА: ширины по умолчанию = 3 см до тех пор, пока пользователь их не изменит
+                val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadArmatureColumnWidths(ctx)
+                currentColumnWidths = mutableMapOf()
+                val headersForDefaults = try { (cachedSession ?: pagingSession ?: sessionForInitial).getHeaders() } catch (_: Throwable) { emptyList() }
+                if (savedColumnWidths.isNotEmpty()) {
+                    currentColumnWidths.putAll(savedColumnWidths)
                 } else {
-                    currentColumnWidths = mutableMapOf()
+                    val xdpi = resources.displayMetrics.xdpi
+                    val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    headersForDefaults.forEach { header ->
+                        val h = header?.lowercase() ?: ""
+                        val w = when {
+                            h.contains("место установки ключа") -> px4cm
+                            h.contains("название позиции") -> px5cm
+                            else -> px3cm
+                        }
+                        currentColumnWidths[header] = w
+                    }
                 }
 
                 // Load headers
@@ -324,6 +358,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
                     
                     lastHeaders = headers
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
+                    // Применяем сохранённый порядок колонок (без изменения ширин по умолчанию)
+                    com.example.vkbookandroid.utils.ColumnOrderManager.loadArmatureColumnOrder(requireContext()).takeIf { it.isNotEmpty() }?.let {
+                        adapter.applyColumnOrder(it)
+                    }
                     isDataLoaded = true
                     attachPaging()
                     

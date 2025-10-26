@@ -125,6 +125,10 @@ class SyncService(private val context: Context) {
                     Log.w(tag, "Failed to load armature coords from server")
                     false
                 }
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                Log.w(tag, "Rate limit reached while syncing armature coords")
+                result.rateLimitReached = true
+                false
             } catch (e: Exception) {
                 Log.e(tag, "Error syncing armature coords", e)
                 false
@@ -320,6 +324,10 @@ class SyncService(private val context: Context) {
                 }
                 
                 successCount > 0
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                Log.w(tag, "Rate limit reached while syncing Excel files")
+                result.rateLimitReached = true
+                false
             } catch (e: Exception) {
                 Log.e(tag, "=== EXCEL SYNC ERROR ===", e)
                 Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
@@ -429,6 +437,10 @@ class SyncService(private val context: Context) {
                 }
                 
                 successCount > 0
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                Log.w(tag, "Rate limit reached while syncing PDF files")
+                result.rateLimitReached = true
+                false
             } catch (e: Exception) {
                 Log.e(tag, "=== PDF SYNC ERROR ===", e)
                 Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
@@ -449,6 +461,10 @@ class SyncService(private val context: Context) {
             
             val result = SyncResult()
             
+            // Задержка перед началом синхронизации для стабилизации соединения
+            kotlinx.coroutines.delay(500)
+            Log.d(tag, "Initial delay 500ms before sync to stabilize connection")
+            
             // Проверяем соединение
             Log.d(tag, "Checking server connection...")
             result.serverConnected = checkServerConnection()
@@ -457,6 +473,10 @@ class SyncService(private val context: Context) {
                 return@withContext result
             }
             Log.d(tag, "Server connection: OK")
+            
+            // Задержка перед синхронизацией данных для избежания Rate Limit
+            kotlinx.coroutines.delay(500)
+            Log.d(tag, "Delay 500ms before data sync to avoid rate limit")
             
             // Синхронизируем данные
             Log.d(tag, "Starting armature coords sync...")
@@ -504,7 +524,8 @@ class SyncService(private val context: Context) {
         var pdfFilesSynced: Boolean = false,
         var overallSuccess: Boolean = false,
         var updatedFiles: MutableList<String> = mutableListOf(),
-        var errorMessages: MutableList<String> = mutableListOf()
+        var errorMessages: MutableList<String> = mutableListOf(),
+        var rateLimitReached: Boolean = false
     ) {
         override fun toString(): String {
             return "SyncResult(server=$serverConnected, coords=$armatureCoordsSynced, excel=$excelFilesSynced, pdf=$pdfFilesSynced, success=$overallSuccess, files=${updatedFiles.size})"

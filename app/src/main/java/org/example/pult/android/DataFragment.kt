@@ -109,7 +109,13 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                 }
             },
             onRowClick = null,
-            hidePdfSchemeColumn = false
+            hidePdfSchemeColumn = false,
+            onColumnReorder = { newOrder ->
+                try {
+                    currentColumnWidths = currentColumnWidths.toMutableMap()
+                    com.example.vkbookandroid.utils.ColumnOrderManager.saveBschuColumnOrder(requireContext(), newOrder)
+                } catch (_: Throwable) {}
+            }
         )
         adapter.setOnAfterSearchResultsApplied {
             // Жестко сбрасываем скролл: останавливаем текущий, обнуляем горизонтальный, затем вертикальный
@@ -429,22 +435,26 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
 
-                if (initialColumnWidths.isNotEmpty()) {
-                    val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadBschuColumnWidths(requireContext()).toMutableMap()
-                    
-                    // Merge saved widths with initial widths
-                    initialColumnWidths.forEach { (header, width) ->
-                        if (!savedColumnWidths.containsKey(header)) {
-                            savedColumnWidths[header] = width
-                        } else if (savedColumnWidths[header] == null) {
-                            savedColumnWidths[header] = width
-                        }
-                    }
-                    currentColumnWidths = savedColumnWidths
-                    Log.d("DataFragment", "Loaded and merged column widths: $currentColumnWidths")
+                // БАЗА: ширины по умолчанию = 3 см до тех пор, пока пользователь их не изменит
+                val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadBschuColumnWidths(requireContext())
+                currentColumnWidths = mutableMapOf()
+                if (savedColumnWidths.isNotEmpty()) {
+                    currentColumnWidths.putAll(savedColumnWidths)
                 } else {
-                    Log.w("DataFragment", "Initial column widths are empty.")
-                    currentColumnWidths = mutableMapOf() // Ensure it's not null/empty for adapter
+                    val headersForDefaults = initialColumnWidths.keys.toList()
+                    val xdpi = resources.displayMetrics.xdpi
+                    val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
+                    headersForDefaults.forEach { header ->
+                        val h = header?.lowercase() ?: ""
+                        val w = when {
+                            h.contains("место установки ключа") -> px4cm
+                            h.contains("название позиции") || h.startsWith("бел") -> px5cm
+                            else -> px3cm
+                        }
+                        currentColumnWidths[header] = w
+                    }
                 }
 
                 // Load headers
@@ -471,6 +481,10 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
                     
                     lastHeaders = headers
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
+                    // Применяем сохранённый порядок колонок (без изменения ширин по умолчанию)
+                    com.example.vkbookandroid.utils.ColumnOrderManager.loadBschuColumnOrder(requireContext()).takeIf { it.isNotEmpty() }?.let {
+                        adapter.applyColumnOrder(it)
+                    }
                     isDataLoaded = true
                     attachPaging()
                     

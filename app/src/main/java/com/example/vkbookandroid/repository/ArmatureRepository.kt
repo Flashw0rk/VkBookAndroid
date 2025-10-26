@@ -32,6 +32,16 @@ class ArmatureRepository(
     private val gson = Gson()
     
     /**
+     * Проверка на rate limit (429) и выброс исключения
+     */
+    private fun checkRateLimit(responseCode: Int?) {
+        if (responseCode == 429) {
+            Log.w("ArmatureRepository", "Server rate limit (429) - не делаем дополнительные запросы")
+            throw RateLimitException()
+        }
+    }
+    
+    /**
      * Загрузка маркеров из filesDir (основной источник после синхронизации).
      * Поддерживает два формата JSON: старый (Map<String, Map<String, ArmatureCoords>>) и новый (points).
      */
@@ -204,6 +214,9 @@ class ArmatureRepository(
                 } else {
                     Log.w("ArmatureRepository", "Failed to get armature coords: ${response?.code()}")
                     try { Log.w("ArmatureRepository", "Error body: ${response?.errorBody()?.string()}") } catch (_: Exception) {}
+                    
+                    // Если получили 429, бросаем исключение
+                    checkRateLimit(response?.code())
                 }
 
                 // ФОЛБЭК 1: универсальная загрузка по имени файла (включая path и абсолютный URL)
@@ -456,6 +469,9 @@ class ArmatureRepository(
                     } catch (e: Exception) {
                         Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
                     }
+                    
+                    // Если получили 429, бросаем исключение
+                    checkRateLimit(response?.code())
                 }
 
                 // ФОЛБЭК A: общий список файлов /api/files/list
@@ -547,6 +563,9 @@ class ArmatureRepository(
                     } catch (e: Exception) {
                         Log.e("ArmatureRepository", "Could not read error body: ${e.message}")
                     }
+                    
+                    // Если получили 429, бросаем исключение
+                    checkRateLimit(response?.code())
                 }
 
                 // ФОЛБЭК A: общий список файлов /api/files/list
