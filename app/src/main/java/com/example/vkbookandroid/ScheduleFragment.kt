@@ -46,6 +46,11 @@ class ScheduleFragment : Fragment() {
     // Кэш предрасчитанных сдвигов месяцев: Map<"Year-Month", Shift>
     private val monthShiftCache = mutableMapOf<String, Int>()
     
+    // НОВЫЕ ОПТИМИЗИРОВАННЫЕ КОМПОНЕНТЫ (добавлены для оптимизации производительности)
+    private val shiftCalculator = com.example.vkbookandroid.schedule.ShiftCalculator()
+    private val calendarDataGenerator = com.example.vkbookandroid.schedule.CalendarDataGenerator(shiftCalculator)
+    private val useOptimizedVersion = true // Флаг для переключения между версиями
+    
     // БАЗОВЫЙ паттерн смены (10 элементов) - основа для всех смен
     private val baseShiftPattern = arrayOf("3", "2", "4", "1", "Вх", "4", "1", "3", "2", "Вх")
     
