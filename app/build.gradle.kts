@@ -21,8 +21,8 @@ android {
         applicationId = "com.example.vkbookandroid"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "2.3"
+        versionCode = 1
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
