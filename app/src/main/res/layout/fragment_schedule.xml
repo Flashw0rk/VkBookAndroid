@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#f5f5f5">
+
+    <!-- Заголовок с навигацией по годам -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="4dp"
+        android:background="#ffffff"
+        android:elevation="2dp"
+        android:gravity="center_vertical">
+
+        <Button
+            android:id="@+id/btnPrevYear"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="◀"
+            android:textSize="16sp"
+            android:minWidth="36dp"
+            android:paddingStart="2.5mm"
+            android:paddingEnd="3.0mm"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
+            android:includeFontPadding="true"
+            android:gravity="center" />
+
+        <Button
+            android:id="@+id/btnToday"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="2mm"
+            android:text="Сегодня"
+            android:textSize="16sp"
+            android:minWidth="72dp"
+            android:paddingStart="1.9mm"
+            android:paddingEnd="12dp"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
+            android:includeFontPadding="true"
+            android:gravity="center" />
+
+
+        <TextView
+            android:id="@+id/yearTextView"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="0mm"
+            android:layout_marginEnd="2mm"
+            android:layout_weight="1"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="2025"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#333333" />
+
+        <Button
+            android:id="@+id/btnNextYear2"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="2mm"
+            android:text="▶"
+            android:textSize="16sp"
+            android:minWidth="36dp"
+            android:paddingStart="3.0mm"
+            android:paddingEnd="2.5mm"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
+            android:includeFontPadding="true"
+            android:gravity="center" />
+
+        <Button
+            android:id="@+id/btnZoomOut"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="2mm"
+            android:text="-"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:minWidth="36dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
+            android:includeFontPadding="true"
+            android:gravity="center" />
+
+        <Button
+            android:id="@+id/btnZoomIn"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="2mm"
+            android:text="+"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:minWidth="36dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
+            android:includeFontPadding="true"
+            android:gravity="center" />
+
+    </LinearLayout>
+
+    <!-- Информационная панель -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#e3f2fd">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="📅 График смен РУ ВК-50"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:textColor="#1976d2" />
+
+    </LinearLayout>
+
+    <!-- Обозначения -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:background="#f0f0f0">
+
+        <!-- Первая строка обозначений -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Обозначения:"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1,2,3,4,5 - смены"
+                android:textSize="12sp"
+                android:background="#c8e6c9"
+                android:padding="4dp"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Вх - выходной"
+                android:id="@+id/legendWeekend"
+                android:textSize="12sp"
+                android:background="#ffcdd2"
+                android:padding="4dp"
+                android:layout_marginEnd="8dp" />
+
+            <!-- Убрали подписи для заметок/напоминаний по требованию -->
+
+        </LinearLayout>
+
+        <!-- Удалена кнопка режима заметок по требованию -->
+
+    </LinearLayout>
+
+    <!-- Календарь с графиком смен -->
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <HorizontalScrollView
+            android:id="@+id/horizontalScrollView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:scrollbars="horizontal">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/calendarRecyclerView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:scrollbars="vertical"
+                android:clipToPadding="false"
+                android:padding="8dp" />
+
+        </HorizontalScrollView>
+
+    </androidx.core.widget.NestedScrollView>
+
+    <!-- Удалили подсказку про заметки -->
+
+</LinearLayout>
+

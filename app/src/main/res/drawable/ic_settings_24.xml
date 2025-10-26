@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Material Baseline Settings icon -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M19.43,12.98l1.77,-1.03 -1.77,-3.07 -2.06,0.85c-0.54,-0.41 -1.14,-0.73 -1.8,-0.94L14.5,4h-5l-0.3,2.79c-0.66,0.21 -1.26,0.53 -1.8,0.94L5.34,7.88 3.57,10.95l1.77,1.03c-0.04,0.33 -0.07,0.66 -0.07,1s0.03,0.67 0.07,1l-1.77,1.03 1.77,3.07 2.06,-0.85c0.54,0.41 1.14,0.73 1.8,0.94L9.5,20h5l0.3,-2.79c0.66,-0.21 1.26,-0.53 1.8,-0.94l2.06,0.85 1.77,-3.07 -1.77,-1.03c0.04,-0.33 0.07,-0.66 0.07,-1s-0.03,-0.67 -0.07,-1zM12,15.5c-1.93,0 -3.5,-1.57 -3.5,-3.5s1.57,-3.5 3.5,-3.5 3.5,1.57 3.5,3.5 -1.57,3.5 -3.5,3.5z"/>
+</vector>
+

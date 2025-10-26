@@ -1,0 +1,417 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/tvEditorStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Редактор: выберите PDF или JSON"
+        android:textSize="14sp"
+        android:textColor="#333333"
+        android:paddingBottom="12dp"/>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnOpen"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:text="Открыть"
+            android:textSize="12sp"/>
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Сохранить"
+            android:textSize="12sp"/>
+
+        <Button
+            android:id="@+id/btnUpload"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Отправить"
+            android:textSize="12sp"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:baselineAligned="false"
+        android:layout_marginTop="8dp">
+        <ToggleButton
+            android:id="@+id/toggleEditMode"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:textSize="12sp"
+            style="@style/Widget.MaterialComponents.Button"
+            android:background="@drawable/bg_zoom_button"
+            android:textColor="@android:color/white"
+            android:textOn="Редактирование: ВКЛ"
+            android:textOff="Редактирование: ВЫКЛ"/>
+        <ToggleButton
+            android:id="@+id/toggleShowAll"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:textSize="12sp"
+            style="@style/Widget.MaterialComponents.Button"
+            android:background="@drawable/bg_zoom_button"
+            android:textColor="@android:color/white"
+            android:textOn="Показать все: ВКЛ"
+            android:textOff="Показать все: ВЫКЛ"/>
+    </LinearLayout>
+
+    <!-- Раздел предпросмотра: PDF или текст JSON -->
+    <FrameLayout
+        android:id="@+id/previewContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp">
+
+        <com.example.vkbookandroid.ZoomableImageView
+            android:id="@+id/pdfZoomView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="matrix"
+            android:visibility="gone"/>
+
+        <com.example.vkbookandroid.EditorMarkerOverlayView
+            android:id="@+id/editorOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone"/>
+
+        <LinearLayout
+            android:id="@+id/jsonScroll"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:visibility="gone">
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                
+                <androidx.appcompat.widget.SearchView
+                    android:id="@+id/jsonSearchView"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@drawable/search_background"
+                    app:iconifiedByDefault="false"
+                    app:queryHint="Поиск" />
+                
+                <Button
+                    android:id="@+id/btnJsonPrev"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:text="◀"
+                    android:textSize="16sp"
+                    android:padding="0dp"
+                    android:visibility="gone"/>
+                
+                <TextView
+                    android:id="@+id/tvJsonSearchPos"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:gravity="center"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:textSize="12sp"
+                    android:visibility="gone"/>
+                
+                <Button
+                    android:id="@+id/btnJsonNext"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:text="▶"
+                    android:textSize="16sp"
+                    android:padding="0dp"
+                    android:visibility="gone"/>
+            </LinearLayout>
+            
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+                <EditText
+                    android:id="@+id/jsonEditor"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="JSON"
+                    android:minHeight="200dp"
+                    android:inputType="textMultiLine|textNoSuggestions"
+                    android:gravity="top|start"
+                    android:overScrollMode="always"
+                    android:scrollbars="vertical"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"/>
+            </ScrollView>
+        </LinearLayout>
+
+        <!-- Встроенный Excel-редактор -->
+        <LinearLayout
+            android:id="@+id/excelContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingBottom="8dp">
+                <Button
+                    android:id="@+id/btnExcelToggleResize"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="Редактировать" />
+                <Button
+                    android:id="@+id/btnExcelSave"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="Сохранить" />
+            </LinearLayout>
+
+            <androidx.appcompat.widget.SearchView
+                android:id="@+id/excelSearchView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/search_background"
+                app:iconifiedByDefault="false"
+                app:queryHint="Поиск" />
+
+            <HorizontalScrollView
+                android:id="@+id/excelHScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fillViewport="true">
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/excelRecyclerView"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:scrollbars="vertical" />
+            </HorizontalScrollView>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Нижняя панель: навигация PDF и выбор источника -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:baselineAligned="false"
+        android:gravity="top">
+
+        <Button
+            android:id="@+id/btnPrevPage"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Назад"
+            android:visibility="gone"/>
+
+        <TextView
+            android:id="@+id/tvPageInfo"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="-/-"
+            android:visibility="gone"/>
+
+        <TextView
+            android:id="@+id/tvScale"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="Масштаб: 1.00×"
+            android:visibility="gone"/>
+
+        <!-- Постоянный растягивающийся спейсер, чтобы кнопки зума были справа всегда -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1" />
+
+        <Button
+            android:id="@+id/btnZoomOut"
+            android:layout_width="54dp"
+            android:layout_height="33dp"
+            android:layout_marginStart="8dp"
+            android:text="-"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_zoom_button"
+            android:textAllCaps="false"
+            android:visibility="visible"/>
+
+        <Button
+            android:id="@+id/btnZoomIn"
+            android:layout_width="54dp"
+            android:layout_height="33dp"
+            android:layout_marginStart="4dp"
+            android:text="+"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_zoom_button"
+            android:textAllCaps="false"
+            android:visibility="visible"/>
+
+        <Button
+            android:id="@+id/btnNextPage"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Вперёд"
+            android:visibility="gone"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp">
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnUseOriginals"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_gravity="top"
+            android:layout_marginTop="-2dp"
+            android:text="Оригинал"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="none"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:background="@drawable/bg_mode_button" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnUseEdited"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="0dp"
+            android:layout_height="34dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:layout_gravity="top"
+            android:layout_marginTop="-2dp"
+            android:text="Редактор"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="none"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:background="@drawable/bg_mode_button" />
+
+        <!-- Спейсер, чтобы кнопки Undo/Redo были выровнены вправо под зум-кнопками -->
+        <View
+            android:layout_width="0dp"
+            android:layout_height="30dp"
+            android:layout_weight="1" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnUndo"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="54dp"
+            android:layout_height="33dp"
+            android:layout_marginStart="8dp"
+            android:text="↶"
+            android:gravity="center|top"
+            android:paddingTop="2dp"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_zoom_button" />
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRedo"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="54dp"
+            android:layout_height="33dp"
+            android:layout_marginStart="4dp"
+            android:text="↷"
+            android:gravity="center|top"
+            android:paddingTop="2dp"
+            android:includeFontPadding="false"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_zoom_button" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/logScroll"
+        android:layout_width="match_parent"
+        android:layout_height="120dp"
+        android:layout_marginTop="8dp">
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="#555555"
+            android:text=""/>
+    </ScrollView>
+
+</LinearLayout>
+
+
+

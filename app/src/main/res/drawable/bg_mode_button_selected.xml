@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Оранжевая рамка (усилена) -->
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="9dp" />
+            <stroke android:width="5dp" android:color="#FF6D00" />
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+    <!-- Фиолетовый фон внутри рамки с заметным отступом -->
+    <item android:top="4dp" android:bottom="4dp" android:left="4dp" android:right="4dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="#673AB7" />
+        </shape>
+    </item>
+</layer-list>
+
+
+
