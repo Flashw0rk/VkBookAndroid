@@ -484,6 +484,12 @@ class SyncService(private val context: Context) {
             result.armatureCoordsSynced = syncArmatureCoords(result)
             Log.d(tag, "Armature coords sync result: ${result.armatureCoordsSynced}")
             
+            // Если достигнут rate limit, прекращаем синхронизацию
+            if (result.rateLimitReached) {
+                Log.w(tag, "Rate limit reached during sync, stopping")
+                return@withContext result
+            }
+            
             // Задержка между типами файлов для избежания Rate Limit
             kotlinx.coroutines.delay(1000)
             Log.d(tag, "Delay 1s before Excel sync to avoid rate limit")
@@ -492,6 +498,12 @@ class SyncService(private val context: Context) {
             onProgress(66, "Загрузка Excel")
             result.excelFilesSynced = syncExcelFiles(result)
             Log.d(tag, "Excel files sync result: ${result.excelFilesSynced}")
+            
+            // Если достигнут rate limit, прекращаем синхронизацию
+            if (result.rateLimitReached) {
+                Log.w(tag, "Rate limit reached during sync, stopping")
+                return@withContext result
+            }
             
             // Задержка между типами файлов для избежания Rate Limit
             kotlinx.coroutines.delay(1000)
@@ -506,6 +518,7 @@ class SyncService(private val context: Context) {
             
             Log.d(tag, "=== FULL SYNC COMPLETED ===")
             Log.d(tag, "Overall success: ${result.overallSuccess}")
+            Log.d(tag, "Rate limit reached: ${result.rateLimitReached}")
             Log.d(tag, "Updated files count: ${result.updatedFiles.size}")
             Log.d(tag, "Updated files: ${result.updatedFiles}")
             Log.d(tag, "Sync result: $result")
