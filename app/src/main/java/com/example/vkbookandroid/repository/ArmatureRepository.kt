@@ -165,16 +165,22 @@ class ArmatureRepository(
                 val response = apiService?.getHealth()
                 val responseCode = response?.code() ?: 0
                 
-                // 429 (Rate Limit) означает что сервер доступен, просто много запросов
-                val isSuccessful = response?.isSuccessful == true || responseCode == 429
-                android.util.Log.d("ArmatureRepository", "Server health check result: $isSuccessful, response code: $responseCode")
-                
+                // Если получили 429, бросаем исключение для правильной обработки rate limit
                 if (responseCode == 429) {
                     android.util.Log.w("ArmatureRepository", "Server rate limit (429) - сервер доступен, но ограничивает запросы. Подождите несколько секунд.")
-                } else if (!isSuccessful) {
+                    throw RateLimitException()
+                }
+                
+                val isSuccessful = response?.isSuccessful == true
+                android.util.Log.d("ArmatureRepository", "Server health check result: $isSuccessful, response code: $responseCode")
+                
+                if (!isSuccessful) {
                     android.util.Log.e("ArmatureRepository", "Server health check failed: ${response?.errorBody()?.string()}")
                 }
                 isSuccessful
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                // Перебрасываем RateLimitException для обработки в SyncService
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("ArmatureRepository", "Server health check exception", e)
                 false

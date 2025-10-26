@@ -54,6 +54,10 @@ class SyncService(private val context: Context) {
                 
                 Log.d(tag, "=== SERVER CONNECTION CHECK COMPLETED ===")
                 isHealthy
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                Log.w(tag, "Rate limit reached during server connection check")
+                // При rate limit считаем сервер доступным, но это будет обработано в syncAll
+                return@withContext true
             } catch (e: Exception) {
                 Log.e(tag, "=== SERVER CONNECTION FAILED ===", e)
                 Log.e(tag, "Exception type: ${e.javaClass.simpleName}")
@@ -473,6 +477,16 @@ class SyncService(private val context: Context) {
                 return@withContext result
             }
             Log.d(tag, "Server connection: OK")
+            
+            // Проверяем, не был ли rate limit при проверке соединения
+            // Если да, то устанавливаем флаг и прекращаем синхронизацию
+            try {
+                getArmatureRepository().checkServerHealth()
+            } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                Log.w(tag, "Rate limit detected during health check, stopping sync")
+                result.rateLimitReached = true
+                return@withContext result
+            }
             
             // Задержка перед синхронизацией данных для избежания Rate Limit
             kotlinx.coroutines.delay(500)
