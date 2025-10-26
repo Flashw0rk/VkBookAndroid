@@ -642,6 +642,7 @@ class MainActivity : AppCompatActivity() {
                 1 -> "Арматура"
                 2 -> "Схемы"
                 3 -> "Редактор"
+                4 -> "График"
                 else -> ""
             }
         }.attach()
