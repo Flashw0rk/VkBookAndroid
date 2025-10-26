@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
+import com.example.vkbookandroid.schedule.ScheduleConstants
 import java.io.File
 import java.util.*
 
@@ -216,39 +217,8 @@ class ScheduleFragment : Fragment() {
      * @return Скорректированный сдвиг (0-5 для 31-дневных месяцев)
      */
     private fun getAdjustedShiftForDisplay(year: Int, monthIndex: Int, daysInMonth: Int): Int {
-        val calculatedShift = calculateMonthShift(year, monthIndex)
-        val patternValue = calculatedShift % 10 // Значение 0-9 в базовом паттерне (10 элементов)
-        
-        // Максимальная безопасная позиция = 36 - количество дней в месяце
-        // Для 31 дня: макс позиция = 5 (5 + 31 = 36)
-        // Для 30 дней: макс позиция = 6 (6 + 30 = 36)
-        // Для 29 дней: макс позиция = 7 (7 + 29 = 36)
-        // Для 28 дней: макс позиция = 8 (8 + 28 = 36)
-        val maxSafePosition = 36 - daysInMonth
-        
-        // ИСПРАВЛЕННАЯ ЛОГИКА: Проверяем patternValue напрямую
-        if (patternValue + daysInMonth <= 36) {
-            // Патерн помещается - используем его
-            // УБРАНО: Log.d для предотвращения спама в логах
-            return patternValue
-        }
-        
-        // Патерн НЕ помещается - ищем позицию в предыдущих циклах
-        // Возможные позиции: patternValue - 10, patternValue - 20, patternValue - 30, ...
-        var adjustedPosition = patternValue
-        while (adjustedPosition > maxSafePosition) {
-            adjustedPosition -= 10
-            if (adjustedPosition < 0) {
-                // Не нашли подходящую позицию, используем 0 (или maxSafePosition, если 0 не помещается)
-                val fallback = if (daysInMonth <= 36) 0 else maxSafePosition.coerceAtLeast(0)
-                Log.w(TAG, "Год $year, месяц $monthIndex: НЕ НАШЛИ позицию! patternValue=$patternValue, используем fallback=$fallback")
-                return fallback
-            }
-        }
-        
-        // Нашли подходящую позицию
-        // УБРАНО: Log.d для предотвращения спама в логах
-        return adjustedPosition
+        // ОПТИМИЗАЦИЯ: Используем новый класс ShiftCalculator с кэшированием
+        return shiftCalculator.getAdjustedShiftForDisplay(year, monthIndex, daysInMonth)
     }
     
     private fun generateScheduleData() {
@@ -280,17 +250,18 @@ class ScheduleFragment : Fragment() {
             
             // Позиция месяца в окне = позиция января + дни от января
             // График статичный, календарь последовательный от позиции јануари
-            val calculatedShift = calculateMonthShift(currentYear, monthIndex)
+            // ОПТИМИЗАЦИЯ: Используем shiftCalculator с кэшированием
+            val calculatedShift = shiftCalculator.calculateMonthShift(currentYear, monthIndex)
             val adjustedShift = calculatedShift - yearShiftOffset
             
             Log.d(TAG, "Месяц $monthName: calculated=$calculatedShift, adjusted=$adjustedShift (сдвиг -$yearShiftOffset)")
             
             // ПРАВИЛЬНАЯ НОРМАЛИЗАЦИЯ: ищем ближайшую к НАЧАЛУ позицию с нужным значением паттерна
-            val safeAdjustedShift = if (adjustedShift < 0 || adjustedShift + daysInMonths[monthIndex] > 36) {
+            val safeAdjustedShift = if (adjustedShift < 0 || adjustedShift + daysInMonths[monthIndex] > ScheduleConstants.CALENDAR_WIDTH) {
                 Log.w(TAG, "ВНИМАНИЕ: $monthName adjusted=$adjustedShift (calculated=$calculatedShift, offset=$yearShiftOffset)")
                 
                 // Вычисляем позицию в базовом паттерне (0-9)
-                val patternPosition = calculatedShift % 10
+                val patternPosition = calculatedShift % ScheduleConstants.PATTERN_SIZE
                 val patternValue = baseShiftPattern[patternPosition]
                 
                 Log.d(TAG, "  Ищем позицию для паттерна[$patternPosition]=\"$patternValue\"")
@@ -299,9 +270,9 @@ class ScheduleFragment : Fragment() {
                 // Формула индекса: indexAtPos = (yearShiftOffset + pos) % 10
                 val validPositions = mutableListOf<Int>()
                 
-                for (pos in 0 until 36) {
-                    val indexAtPos = (yearShiftOffset + pos) % 10
-                    if (indexAtPos == patternPosition && pos + daysInMonths[monthIndex] <= 36) {
+                for (pos in 0 until ScheduleConstants.CALENDAR_WIDTH) {
+                    val indexAtPos = (yearShiftOffset + pos) % ScheduleConstants.PATTERN_SIZE
+                    if (indexAtPos == patternPosition && pos + daysInMonths[monthIndex] <= ScheduleConstants.CALENDAR_WIDTH) {
                         validPositions.add(pos)
                     }
                 }
@@ -310,8 +281,8 @@ class ScheduleFragment : Fragment() {
                     Log.w(TAG, "  ⚠️ Нет позиций с совпадающим ИНДЕКСОМ ($patternPosition), ищем ЛЮБУЮ подходящую")
                     
                     // Ищем ЛЮБУЮ позицию, где месяц помещается (начиная с 0)
-                    val anyValidPosition = (0..5).firstOrNull { pos ->
-                        pos + daysInMonths[monthIndex] <= 36
+                    val anyValidPosition = (0..ScheduleConstants.MAX_SAFE_POSITION_FOR_31_DAYS).firstOrNull { pos ->
+                        pos + daysInMonths[monthIndex] <= ScheduleConstants.CALENDAR_WIDTH
                     }
                     
                     if (anyValidPosition != null) {
@@ -457,15 +428,15 @@ class ScheduleFragment : Fragment() {
             
             // Проверяем каждый месяц
             for (monthIndex in 0..11) {
-                val calculatedShift = calculateMonthShift(year, monthIndex)
+                val calculatedShift = shiftCalculator.calculateMonthShift(year, monthIndex)
                 val adjustedShift = calculatedShift - offset
-                val patternPosition = calculatedShift % 10
+                val patternPosition = calculatedShift % ScheduleConstants.PATTERN_SIZE
                 val patternValue = baseShiftPattern[patternPosition]
                 
                 // Отладка для ноября 2026
                 if (year == 2026 && monthIndex == 10) {
                     Log.d(TAG, "НОЯБРЬ 2026: offset=$offset, calculatedShift=$calculatedShift, adjustedShift=$adjustedShift, patternPosition=$patternPosition, patternValue=$patternValue")
-                    Log.d(TAG, "ПРОВЕРКА ПЕРЕХОДА: Октябрь shift=${calculateMonthShift(year, 9)}, дней в октябре=${daysInMonths[9]}, ожидаемый ноябрь=${(calculateMonthShift(year, 9) + daysInMonths[9]) % 10}")
+                    Log.d(TAG, "ПРОВЕРКА ПЕРЕХОДА: Октябрь shift=${shiftCalculator.calculateMonthShift(year, 9)}, дней в октябре=${daysInMonths[9]}, ожидаемый ноябрь=${(shiftCalculator.calculateMonthShift(year, 9) + daysInMonths[9]) % 10}")
                 }
                 
                 // Нормализуем отрицательные значения
@@ -476,7 +447,7 @@ class ScheduleFragment : Fragment() {
                 }
                 
                 // Проверка 1: Помещается ли месяц?
-                if (normalizedShift + daysInMonths[monthIndex] > 36) {
+                if (normalizedShift + daysInMonths[monthIndex] > ScheduleConstants.CALENDAR_WIDTH) {
                     allMonthsFit = false
                 }
                 
@@ -484,7 +455,7 @@ class ScheduleFragment : Fragment() {
                 // График сдвигается на offset, месяц начинается на normalizedShift
                 // Значение в графике на позиции normalizedShift = baseShiftPattern[(offset + normalizedShift) % 10]
                 // Это значение должно совпадать с patternValue (исходная позиция месяца)
-                val graphValue = baseShiftPattern[(offset + normalizedShift) % 10]
+                val graphValue = baseShiftPattern[(offset + normalizedShift) % ScheduleConstants.PATTERN_SIZE]
                 if (graphValue != patternValue) {
                     allMonthsMatchPattern = false
                 }
@@ -492,9 +463,9 @@ class ScheduleFragment : Fragment() {
                 // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Непрерывность паттерна между месяцами
                 // Проверяем, что переход от предыдущего месяца к текущему корректен
                 if (monthIndex > 0) {
-                    val prevMonthShift = calculateMonthShift(year, monthIndex - 1)
+                    val prevMonthShift = shiftCalculator.calculateMonthShift(year, monthIndex - 1)
                     val prevMonthDays = daysInMonths[monthIndex - 1]
-                    val expectedCurrentShift = (prevMonthShift + prevMonthDays) % 10
+                    val expectedCurrentShift = (prevMonthShift + prevMonthDays) % ScheduleConstants.PATTERN_SIZE
                     
                     if (calculatedShift != expectedCurrentShift) {
                         Log.w(TAG, "ОШИБКА НЕПРЕРЫВНОСТИ: Месяц $monthIndex, ожидался shift=$expectedCurrentShift, получен=$calculatedShift")
@@ -504,9 +475,9 @@ class ScheduleFragment : Fragment() {
                 
                 // СПЕЦИАЛЬНАЯ ПРОВЕРКА ДЛЯ НОЯБРЯ 2026: Проверяем непрерывность паттерна
                 if (year == 2026 && monthIndex == 10) { // Ноябрь 2026
-                    val octoberShift = calculateMonthShift(year, 9)
+                    val octoberShift = shiftCalculator.calculateMonthShift(year, 9)
                     val octoberDays = daysInMonths[9]
-                    val expectedNovemberShift = (octoberShift + octoberDays) % 10
+                    val expectedNovemberShift = (octoberShift + octoberDays) % ScheduleConstants.PATTERN_SIZE
                     
                     if (calculatedShift != expectedNovemberShift) {
                         Log.e(TAG, "КРИТИЧЕСКАЯ ОШИБКА НЕПРЕРЫВНОСТИ ДЛЯ НОЯБРЯ 2026:")
