@@ -65,6 +65,10 @@ class EditorUploadService(
     }.getOrNull()
 
     override suspend fun uploadAll(json: File?, excel: File?, parallel: Boolean): UploadReport {
+        // Задержка перед началом отправки для стабилизации соединения
+        delay(500)
+        Log.d("EditorUploadService", "Initial delay 500ms before upload to stabilize connection")
+        
         suspend fun <T> retryingUpload(
             type: String,
             block: suspend () -> Response<T>?
@@ -116,7 +120,13 @@ class EditorUploadService(
                 Pair(results[0], results[1])
             }
         } else {
-            Pair(jsonTask(), excelTask())
+            // Последовательная отправка с задержкой между файлами
+            val jsonResult = jsonTask()
+            if (jsonResult != null && excel != null) {
+                delay(1000) // Задержка 1с между JSON и Excel при последовательной отправке
+                Log.d("EditorUploadService", "Delay 1s between JSON and Excel upload")
+            }
+            Pair(jsonResult, excelTask())
         }
 
         val overall = when {

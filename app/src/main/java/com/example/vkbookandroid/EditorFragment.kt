@@ -1743,7 +1743,7 @@ class EditorFragment : Fragment() {
         btnUpload.isEnabled = false
         tvStatus.text = "Отправка на сервер..."
         viewLifecycleOwner.lifecycleScope.launch {
-            val report = uploader.uploadAll(jsonFile, excelFile, parallel = true)
+            val report = uploader.uploadAll(jsonFile, excelFile, parallel = false)
             btnUpload.isEnabled = true
             tvStatus.text = "Отправка завершена: ${report.toSummary()}"
             logMsg(tvStatus.text.toString())
