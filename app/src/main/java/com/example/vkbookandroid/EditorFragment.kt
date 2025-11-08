@@ -204,6 +204,9 @@ class EditorFragment : Fragment() {
         useEditedSource = false
         applyModeOutline()
         btnSave.isEnabled = false
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
 
         btnOpen.setOnClickListener { openFromSelectedSource() }
         btnSave.setOnClickListener {
@@ -491,10 +494,97 @@ class EditorFragment : Fragment() {
         excelAdapter?.updateData(excelData, excelHeaders, excelColumnWidths, excelIsResizingMode)
     }
 
+    /**
+     * Публичный метод для применения темы (вызывается из MainActivity при смене скина)
+     */
+    fun applyTheme() {
+        if (!isAdded || view == null) {
+            android.util.Log.w("EditorFragment", "applyTheme() вызван но фрагмент не готов")
+            return
+        }
+        
+        android.util.Log.d("EditorFragment", "Применяем тему к редактору")
+        
+        // Применяем фон
+        view?.setBackgroundColor(
+            if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+            } else {
+                android.graphics.Color.parseColor("#FAFAFA")
+            }
+        )
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
+        
+        // Применяем тему к кнопкам режима
+        applyModeOutline()
+    }
+    
+    /**
+     * Гарантирует что данные загружены (для совместимости с MainActivity.ensureTabLoaded)
+     */
+    fun ensureDataLoaded() {
+        // EditorFragment не требует предзагрузки данных
+        // Данные загружаются только при открытии файла пользователем
+        android.util.Log.d("EditorFragment", "ensureDataLoaded() вызван (нет предзагрузки)")
+    }
+    
+    private fun applyThemeToButtons() {
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - восстанавливаем фиолетовые кнопки
+            listOf(btnZoomIn, btnZoomOut, btnUndo, btnRedo).forEach { button ->
+                button.setBackgroundResource(R.drawable.bg_zoom_button)
+                button.setTextColor(android.graphics.Color.WHITE)
+            }
+            listOf(toggleEditMode, toggleShowAll).forEach { toggle ->
+                toggle.setBackgroundResource(R.drawable.bg_zoom_button)
+                toggle.setTextColor(android.graphics.Color.WHITE)
+            }
+            return
+        }
+        
+        // Применяем тему ко всем кнопкам
+        listOf(btnZoomIn, btnZoomOut, btnUndo, btnRedo).forEach { button ->
+            // Сбрасываем Material tint который перекрывает background
+            (button as? com.google.android.material.button.MaterialButton)?.apply {
+                backgroundTintList = null
+                strokeColor = null
+                rippleColor = null
+            }
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { button.background = it }
+            button.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+        }
+        
+        // Применяем тему к toggle кнопкам
+        listOf(toggleEditMode, toggleShowAll).forEach { toggle ->
+            // Сбрасываем Material tint
+            (toggle as? com.google.android.material.button.MaterialButton)?.apply {
+                backgroundTintList = null
+                strokeColor = null
+                rippleColor = null
+            }
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { toggle.background = it }
+            toggle.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+        }
+    }
+    
     private fun applyModeOutline() {
-        // Возвращаем надёжную схему: selected background drawable с толстой оранжевой рамкой
-        val normalBg = resources.getDrawable(R.drawable.bg_mode_button, null)
-        val selectedBg = resources.getDrawable(R.drawable.bg_mode_button_selected, null)
+        // Применяем тему к кнопкам режима
+        val normalBg = if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            com.example.vkbookandroid.theme.AppTheme.createButtonDrawable(com.example.vkbookandroid.theme.AppTheme.getButtonColor())
+        } else {
+            resources.getDrawable(R.drawable.bg_mode_button, null)
+        }
+        
+        val selectedBg = if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            com.example.vkbookandroid.theme.AppTheme.createGradientButtonDrawable() 
+                ?: com.example.vkbookandroid.theme.AppTheme.createButtonDrawable(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor())
+        } else {
+            resources.getDrawable(R.drawable.bg_mode_button_selected, null)
+        }
 
         (btnUseOriginals as? MaterialButton)?.apply {
             try { foreground = null } catch (_: Throwable) {}

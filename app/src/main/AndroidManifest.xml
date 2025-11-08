@@ -51,6 +51,12 @@
             android:label="Настройки сервера" />
 
         <activity
+            android:name=".settings.SettingsTabsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VkBookAndroid"
+            android:label="Настройки" />
+
+        <activity
             android:name=".AboutActivity"
             android:exported="false"
             android:theme="@style/Theme.VkBookAndroid"

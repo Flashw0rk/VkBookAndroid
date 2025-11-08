@@ -17,8 +17,12 @@ import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import java.io.File
@@ -27,7 +31,7 @@ import java.util.*
 /**
  * Фрагмент для отображения графика смен на год
  */
-class ScheduleFragment : Fragment() {
+class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
     
     private lateinit var calendarRecyclerView: RecyclerView
     private lateinit var horizontalScrollView: HorizontalScrollView
@@ -45,6 +49,7 @@ class ScheduleFragment : Fragment() {
     
     // Кэш предрасчитанных сдвигов месяцев: Map<"Year-Month", Shift>
     private val monthShiftCache = mutableMapOf<String, Int>()
+    private val yearShiftCache = mutableMapOf<Int, Int>() // ОПТИМИЗАЦИЯ: Кэш для findOptimalYearShift
     
     // НОВЫЕ ОПТИМИЗИРОВАННЫЕ КОМПОНЕНТЫ (добавлены для оптимизации производительности)
     private val shiftCalculator = com.example.vkbookandroid.schedule.ShiftCalculator()
@@ -85,6 +90,8 @@ class ScheduleFragment : Fragment() {
     
     companion object {
         private const val TAG = "ScheduleFragment"
+        private const val PREFS_NAME = "ScheduleFragmentPrefs"
+        private const val KEY_ZOOM_FACTOR = "zoom_factor"
     }
     
     override fun onCreateView(
@@ -94,33 +101,21 @@ class ScheduleFragment : Fragment() {
     ): View? {
         val view = inflater.inflate(R.layout.fragment_schedule, container, false)
         
-        // 🧪 ТЕСТИРОВАНИЕ ООП КОМПОНЕНТОВ (не влияет на работу приложения)
-        view.post {
-            com.example.vkbookandroid.schedule.ScheduleTestHelper.runAllTests()
-        }
-        
-        // 🧪 ТЕСТИРОВАНИЕ НЕПРЕРЫВНОСТИ ПАТТЕРНА (не влияет на работу приложения)
-        view.post {
-            Log.d(TAG, "Запуск тестов непрерывности паттерна...")
-            com.example.vkbookandroid.schedule.PatternContinuityTestHelper.runFullTests()
-        }
-        
-        // 🧪 СПЕЦИФИЧЕСКИЙ ТЕСТ ДЛЯ НОЯБРЯ 2026 (не влияет на работу приложения)
-        view.post {
-            Log.d(TAG, "Запуск специфического теста для ноября 2026...")
-            com.example.vkbookandroid.schedule.November2026SpecificTest.runAllNovember2026Tests()
-        }
-        
-        // 🔍 АНАЛИЗ ПАТТЕРНА НОЯБРЯ 2026 (не влияет на работу приложения)
-        view.post {
-            Log.d(TAG, "Запуск анализа паттерна ноября 2026...")
-            com.example.vkbookandroid.schedule.November2026PatternAnalyzer.runFullAnalysis()
-        }
-        
-        // 🔍 АНАЛИЗ ПЕРЕХОДОВ К НОЯБРЮ 2026 (не влияет на работу приложения)
-        view.post {
-            Log.d(TAG, "Запуск анализа переходов к ноябрю 2026...")
-            com.example.vkbookandroid.schedule.November2026TransitionAnalyzer.runFullTransitionAnalysis()
+        // 🧪 ТЕСТИРОВАНИЕ - только в debug режиме и асинхронно
+        if (com.example.vkbookandroid.BuildConfig.DEBUG) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    Log.d(TAG, "Запуск тестов в фоновом потоке...")
+                    com.example.vkbookandroid.schedule.ScheduleTestHelper.runAllTests()
+                    com.example.vkbookandroid.schedule.PatternContinuityTestHelper.runFullTests()
+                    com.example.vkbookandroid.schedule.November2026SpecificTest.runAllNovember2026Tests()
+                    com.example.vkbookandroid.schedule.November2026PatternAnalyzer.runFullAnalysis()
+                    com.example.vkbookandroid.schedule.November2026TransitionAnalyzer.runFullTransitionAnalysis()
+                    Log.d(TAG, "Все тесты завершены")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка при выполнении тестов", e)
+                }
+            }
         }
         
         // Инициализация views
@@ -133,47 +128,82 @@ class ScheduleFragment : Fragment() {
         btnZoomIn = view.findViewById(R.id.btnZoomIn)
         btnZoomOut = view.findViewById(R.id.btnZoomOut)
         
-        // Apply sharp diagonal weekend legend background (bottom-left to top-right)
-        view.findViewById<TextView?>(R.id.legendWeekend)?.let { legend ->
-            val saturdayColor = Color.parseColor("#FFE082")
-            val sundayColor = Color.parseColor("#FFCDD2")
-            legend.background = DiagonalSplitDrawable(saturdayColor, sundayColor)
-        }
-        
+        loadZoomFactor()
         setupViews()
         setupRecyclerView()
         updateYearDisplay()
-        generateScheduleData()
         
-        // Центрируем на текущей дате при открытии
-        view.post { scrollToToday() }
+        // Применяем сохраненный масштаб
+        scheduleAdapter.setZoomFactor(zoomFactor)
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
+        
+        // ОПТИМИЗАЦИЯ: Генерация данных перенесена в onResume() для ленивой загрузки
         
         return view
+    }
+    
+    private var isScheduleDataGenerated = false
+    
+    override fun onResume() {
+        super.onResume()
+        
+        // Регистрируем фрагмент в ThemeManager
+        com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
+        
+        // Генерируем данные только при первом показе фрагмента
+        if (!isScheduleDataGenerated) {
+            // КРИТИЧНО: Выполняем тяжелые вычисления асинхронно, чтобы не блокировать UI
+            lifecycleScope.launch(Dispatchers.Default) {
+                generateScheduleData()
+                withContext(Dispatchers.Main) {
+                    isScheduleDataGenerated = true
+                    // Центрируем на текущей дате
+                    view?.post { scrollToToday() }
+                }
+            }
+        }
+    }
+    
+    override fun isFragmentReady(): Boolean {
+        return ::scheduleAdapter.isInitialized && view != null
     }
     
     private fun setupViews() {
         btnPrevYear.setOnClickListener {
             currentYear--
             updateYearDisplay()
-            generateScheduleData()
+            // Асинхронная генерация данных
+            lifecycleScope.launch(Dispatchers.Default) {
+                generateScheduleData()
+            }
         }
         
         btnNextYear2.setOnClickListener {
             currentYear++
             updateYearDisplay()
-            generateScheduleData()
+            // Асинхронная генерация данных
+            lifecycleScope.launch(Dispatchers.Default) {
+                generateScheduleData()
+            }
         }
         
         btnToday.setOnClickListener {
             currentYear = Calendar.getInstance().get(Calendar.YEAR)
             updateYearDisplay()
-            generateScheduleData()
-            // Выделяем сегодняшний столбец
-            selectedDayInMonth = todayDay
-            selectedMonthIndex = todayMonth
-            scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
-            scheduleAdapter.notifyDataSetChanged()
-            view?.post { scrollToToday() }
+            // Асинхронная генерация данных
+            lifecycleScope.launch(Dispatchers.Default) {
+                generateScheduleData()
+                withContext(Dispatchers.Main) {
+                    // Выделяем сегодняшний столбец
+                    selectedDayInMonth = todayDay
+                    selectedMonthIndex = todayMonth
+                    scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
+                    scheduleAdapter.notifyDataSetChanged()
+                    view?.post { scrollToToday() }
+                }
+            }
         }
 
         btnZoomIn.setOnClickListener { adjustZoom(+0.1f) }
@@ -186,9 +216,45 @@ class ScheduleFragment : Fragment() {
         val newZoom = (zoomFactor + delta).coerceIn(0.6f, 2.0f)
         if (newZoom == zoomFactor) return
         zoomFactor = newZoom
+        saveZoomFactor()
         scheduleAdapter.setZoomFactor(zoomFactor)
         scheduleAdapter.notifyDataSetChanged()
         view?.post { scrollToToday() }
+    }
+    
+    private fun loadZoomFactor() {
+        val prefs = requireContext().getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        zoomFactor = prefs.getFloat(KEY_ZOOM_FACTOR, 1.0f)
+    }
+    
+    private fun saveZoomFactor() {
+        val prefs = requireContext().getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        prefs.edit().putFloat(KEY_ZOOM_FACTOR, zoomFactor).apply()
+    }
+    
+    private fun applyThemeToButtons() {
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - восстанавливаем оригинальные фиолетовые кнопки
+            listOf(btnZoomIn, btnZoomOut, btnPrevYear, btnNextYear2, btnToday).forEach { button ->
+                // ИСПРАВЛЕНИЕ: Используем setBackgroundResource вместо backgroundTintList
+                button.setBackgroundResource(R.drawable.bg_zoom_button)
+                button.setTextColor(android.graphics.Color.WHITE)
+            }
+            return
+        }
+        
+        // Применяем тему ко всем кнопкам (другие темы)
+        listOf(btnZoomIn, btnZoomOut, btnPrevYear, btnNextYear2, btnToday).forEach { button ->
+            // Сбрасываем Material tint
+            (button as? com.google.android.material.button.MaterialButton)?.apply {
+                backgroundTintList = null
+                strokeColor = null
+                rippleColor = null
+            }
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { button.background = it }
+            button.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+        }
     }
     
     private fun setupRecyclerView() {
@@ -204,6 +270,101 @@ class ScheduleFragment : Fragment() {
     
     private fun updateYearDisplay() {
         yearTextView.text = currentYear.toString()
+    }
+    
+    /**
+     * Применить тему к ScheduleFragment (график смен)
+     */
+    override fun applyTheme() {
+        Log.d(TAG, "=== applyTheme() вызван ===")
+        
+        val v = view
+        if (v == null) {
+            Log.w(TAG, "applyTheme() вызван, но view == null")
+            return
+        }
+        
+        Log.d(TAG, "view готов, применяем тему: ${com.example.vkbookandroid.theme.AppTheme.getCurrentThemeId()}")
+        
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - восстанавливаем оригинальный вид
+            Log.d(TAG, "Применяем КЛАССИЧЕСКУЮ тему")
+            v.background = null
+            v.setBackgroundColor(Color.parseColor("#FAFAFA"))
+        } else {
+            // Сначала применяем цвет фона (быстро)
+            val bgColor = com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+            Log.d(TAG, "Применяем цвет фона: #${Integer.toHexString(bgColor)}")
+            v.setBackgroundColor(bgColor)
+            
+            // Затем асинхронно загружаем фоновое изображение (если есть)
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    Log.d(TAG, "Загружаем фоновое изображение...")
+                    val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
+                    
+                    if (bgDrawable != null && isAdded) {
+                        withContext(Dispatchers.Main) {
+                            if (isAdded && v.isAttachedToWindow) {
+                                Log.d(TAG, "Применяем фоновое изображение")
+                                v.background = bgDrawable
+                            } else {
+                                Log.w(TAG, "View не готов для фонового изображения: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
+                            }
+                        }
+                    } else {
+                        Log.d(TAG, "Фоновое изображение отсутствует или фрагмент не добавлен")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка загрузки фонового изображения", e)
+                }
+            }
+        }
+        
+        // Применяем тему к кнопкам (для всех тем)
+        Log.d(TAG, "Применяем тему к кнопкам")
+        applyThemeToButtons()
+        
+        // Применяем цвет к заголовку года
+        if (::yearTextView.isInitialized) {
+            val textColor = com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
+            Log.d(TAG, "Применяем цвет текста к заголовку: #${Integer.toHexString(textColor)}")
+            yearTextView.setTextColor(textColor)
+        }
+        
+        // Обновляем адаптер ТОЛЬКО ОДИН РАЗ
+        if (::scheduleAdapter.isInitialized) {
+            Log.d(TAG, "Обновляем адаптер")
+            scheduleAdapter.notifyDataSetChanged()
+        }
+        
+        Log.d(TAG, "=== applyTheme() завершен ===")
+    }
+    
+    /**
+     * Гарантирует что данные загружены (для совместимости с MainActivity.ensureTabLoaded)
+     */
+    fun ensureDataLoaded() {
+        // ЗАЩИТА: Проверяем что view готов
+        if (view == null || !::scheduleAdapter.isInitialized) {
+            android.util.Log.w("ScheduleFragment", "ensureDataLoaded() вызван но view не готов, откладываем загрузку")
+            // Отложим загрузку до onResume()
+            return
+        }
+        
+        // Если данные ещё не сгенерированы, генерируем их
+        if (!isScheduleDataGenerated) {
+            android.util.Log.d("ScheduleFragment", "ensureDataLoaded() запускает генерацию данных")
+            lifecycleScope.launch(Dispatchers.Default) {
+                generateScheduleData()
+                withContext(Dispatchers.Main) {
+                    isScheduleDataGenerated = true
+                    view?.post { scrollToToday() }
+                }
+            }
+        } else {
+            android.util.Log.d("ScheduleFragment", "ensureDataLoaded() данные уже загружены")
+        }
     }
     
     /**
@@ -251,7 +412,7 @@ class ScheduleFragment : Fragment() {
         return adjustedPosition
     }
     
-    private fun generateScheduleData() {
+    private suspend fun generateScheduleData() {
         val scheduleData = mutableListOf<ScheduleRow>()
         
         val months = arrayOf(
@@ -396,17 +557,20 @@ class ScheduleFragment : Fragment() {
             )
         }
         
-        scheduleAdapter.updateData(scheduleData)
-        
-        // Подсветка "сегодня" только в текущем году
-        if (currentYear == todayYear) {
-            selectedDayInMonth = todayDay
-            selectedMonthIndex = todayMonth
-            scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
-        } else {
-            scheduleAdapter.setSelectedDay(-1, -1)
+        // КРИТИЧНО: Обновление UI должно происходить в главном потоке
+        withContext(Dispatchers.Main) {
+            scheduleAdapter.updateData(scheduleData)
+            
+            // Подсветка "сегодня" только в текущем году
+            if (currentYear == todayYear) {
+                selectedDayInMonth = todayDay
+                selectedMonthIndex = todayMonth
+                scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
+            } else {
+                scheduleAdapter.setSelectedDay(-1, -1)
+            }
+            scheduleAdapter.notifyDataSetChanged()
         }
-        scheduleAdapter.notifyDataSetChanged()
     }
     
     private fun isLeapYear(year: Int): Boolean {
@@ -423,6 +587,12 @@ class ScheduleFragment : Fragment() {
      * ЗАЩИТА ОТ ЗАВИСАНИЯ: максимум 40 попыток, после чего выдается ошибка
      */
     private fun findOptimalYearShift(year: Int, daysInMonths: IntArray): Int {
+        // ОПТИМИЗАЦИЯ: Проверяем кэш
+        yearShiftCache[year]?.let {
+            Log.d(TAG, "═══ Используем кэшированный сдвиг для $year года: $it ═══")
+            return it
+        }
+        
         Log.d(TAG, "═══ Поиск оптимального сдвига для $year года ═══")
         
         var bestOffset = 0
@@ -555,6 +725,9 @@ class ScheduleFragment : Fragment() {
                 }
             }
         }
+        
+        // ОПТИМИЗАЦИЯ: Сохраняем результат в кэш
+        yearShiftCache[year] = bestOffset
         
         return bestOffset
     }
@@ -1321,16 +1494,71 @@ class ScheduleCalendarAdapter(
             val baseLabelTextSizeSp = 12f
             rowNameTextView.textSize = baseLabelTextSizeSp * zoomFactor
             rowNameRightTextView?.textSize = baseLabelTextSizeSp * zoomFactor
-            if (row.isMonthRow) {
-                rowNameTextView.setBackgroundColor(ContextCompat.getColor(itemView.context, android.R.color.holo_blue_light))
-                rowNameTextView.setTextColor(Color.WHITE)
-                rowNameRightTextView?.setBackgroundColor(ContextCompat.getColor(itemView.context, android.R.color.holo_blue_light))
-                rowNameRightTextView?.setTextColor(Color.WHITE)
+            // КРИТИЧНО: Для классической темы - исходные цвета!
+            if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                // Классическая тема - ИСХОДНЫЕ цвета
+                if (row.isMonthRow) {
+                    rowNameTextView.setBackgroundColor(ContextCompat.getColor(itemView.context, android.R.color.holo_blue_light))
+                    rowNameTextView.setTextColor(Color.WHITE)
+                    rowNameRightTextView?.setBackgroundColor(ContextCompat.getColor(itemView.context, android.R.color.holo_blue_light))
+                    rowNameRightTextView?.setTextColor(Color.WHITE)
+                } else {
+                    rowNameTextView.setBackgroundColor(Color.LTGRAY)
+                    rowNameTextView.setTextColor(Color.BLACK)
+                    rowNameRightTextView?.setBackgroundColor(Color.LTGRAY)
+                    rowNameRightTextView?.setTextColor(Color.BLACK)
+                }
             } else {
-                rowNameTextView.setBackgroundColor(Color.LTGRAY)
-                rowNameTextView.setTextColor(Color.BLACK)
-                rowNameRightTextView?.setBackgroundColor(Color.LTGRAY)
-                rowNameRightTextView?.setTextColor(Color.BLACK)
+                // Другие темы - цвета из AppTheme
+                if (row.isMonthRow) {
+                    if (com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()) {
+                        val bg = Color.parseColor("#25C4D6")
+                        rowNameTextView.setBackgroundColor(bg)
+                        rowNameRightTextView?.setBackgroundColor(bg)
+                        val textColor = Color.parseColor("#013852")
+                        rowNameTextView.setTextColor(textColor)
+                        rowNameRightTextView?.setTextColor(textColor)
+                    } else if (com.example.vkbookandroid.theme.AppTheme.isRosatomTheme()) {
+                        val bg = Color.parseColor("#0091D5")
+                        rowNameTextView.setBackgroundColor(bg)
+                        rowNameRightTextView?.setBackgroundColor(bg)
+                        val textColor = Color.parseColor("#FFFFFF")
+                        rowNameTextView.setTextColor(textColor)
+                        rowNameRightTextView?.setTextColor(textColor)
+                    } else {
+                        val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor())
+                        if (drawable != null) {
+                            rowNameTextView.background = drawable
+                            rowNameRightTextView?.background = drawable
+                        } else {
+                            rowNameTextView.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor())
+                            rowNameRightTextView?.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor())
+                        }
+                        rowNameTextView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+                        rowNameRightTextView?.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+                    }
+                } else {
+                    if (com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()) {
+                        val bg = Color.parseColor("#25AFCF")
+                        val textColor = Color.parseColor("#01334B")
+                        rowNameTextView.setBackgroundColor(bg)
+                        rowNameTextView.setTextColor(textColor)
+                        rowNameRightTextView?.setBackgroundColor(bg)
+                        rowNameRightTextView?.setTextColor(textColor)
+                    } else if (com.example.vkbookandroid.theme.AppTheme.isRosatomTheme()) {
+                        val bg = Color.parseColor("#03A9F4")
+                        val textColor = Color.parseColor("#FFFFFF")
+                        rowNameTextView.setBackgroundColor(bg)
+                        rowNameTextView.setTextColor(textColor)
+                        rowNameRightTextView?.setBackgroundColor(bg)
+                        rowNameRightTextView?.setTextColor(textColor)
+                    } else {
+                        rowNameTextView.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getCardBackgroundColor())
+                        rowNameTextView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                        rowNameRightTextView?.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getCardBackgroundColor())
+                        rowNameRightTextView?.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                    }
+                }
             }
             rowNameRightTextView?.text = rowNameTextView.text
             
@@ -1352,6 +1580,9 @@ class ScheduleCalendarAdapter(
             selectedMonthIndex: Int
         ): View {
             val dayView = TextView(itemView.context)
+            val isThemeApplied = com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()
+            val isNuclearTheme = isThemeApplied && com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()
+            val isRosatomTheme = isThemeApplied && com.example.vkbookandroid.theme.AppTheme.isRosatomTheme()
             val cellWidth = (50 * zoomFactor * itemView.context.resources.displayMetrics.density).toInt()
             val layoutParams = LinearLayout.LayoutParams(cellWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
             layoutParams.setMargins(0, 0, 0, 0)
@@ -1364,7 +1595,21 @@ class ScheduleCalendarAdapter(
             dayView.gravity = android.view.Gravity.CENTER
             
             val gd = GradientDrawable()
-            gd.setColor(Color.LTGRAY)
+            // КРИТИЧНО: Для классической темы - исходные цвета!
+            val defaultCellColor = when {
+                !isThemeApplied -> Color.LTGRAY
+                isNuclearTheme -> Color.parseColor("#08264A")
+                isRosatomTheme -> Color.parseColor("#B3E5FC")
+                else -> com.example.vkbookandroid.theme.AppTheme.getCardBackgroundColor()
+            }
+            gd.setColor(defaultCellColor)
+            val defaultTextColor = when {
+                !isThemeApplied -> Color.BLACK
+                isNuclearTheme -> Color.parseColor("#E0F2FF")
+                isRosatomTheme -> Color.parseColor("#003D5C")
+                else -> com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
+            }
+            dayView.setTextColor(defaultTextColor)
             
             val isSelectedColumn = when {
                 selectedColumnIndex >= 0 -> dayIndex == selectedColumnIndex
@@ -1380,19 +1625,63 @@ class ScheduleCalendarAdapter(
             
             if (row.isMonthRow) {
                 var isTodayCell = false
-                gd.setColor(Color.LTGRAY)
-                dayView.setTextColor(Color.BLACK)
+                gd.setColor(defaultCellColor)
                 
                 // Подсветка выходных
                 if (day.isNotEmpty() && day.toIntOrNull() != null) {
                     val calendar = Calendar.getInstance()
                     calendar.set(Calendar.getInstance().get(Calendar.YEAR), row.monthIndex, day.toInt())
                     val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
-                    when (dayOfWeek) {
-                        Calendar.SATURDAY -> { gd.setColor(Color.parseColor("#FFE082")); dayView.setTextColor(Color.BLACK) }
-                        Calendar.SUNDAY -> { gd.setColor(Color.parseColor("#FFCDD2")); dayView.setTextColor(Color.BLACK) }
-                        else -> { gd.setColor(Color.WHITE); dayView.setTextColor(Color.BLACK) }
+                    
+                    // КРИТИЧНО: Для классической темы - исходные цвета выходных!
+                    if (!isThemeApplied) {
+                        when (dayOfWeek) {
+                            Calendar.SATURDAY -> { gd.setColor(Color.parseColor("#FFE082")); dayView.setTextColor(Color.BLACK) }
+                            Calendar.SUNDAY -> { gd.setColor(Color.parseColor("#FFCDD2")); dayView.setTextColor(Color.BLACK) }
+                            else -> { gd.setColor(Color.WHITE); dayView.setTextColor(Color.BLACK) }
+                        }
+                    } else {
+                        // Другие темы - приглушенные цвета выходных
+                        when (dayOfWeek) {
+                            Calendar.SATURDAY -> {
+                                if (isNuclearTheme) {
+                                    gd.setColor(Color.parseColor("#34B2F2"))
+                                    dayView.setTextColor(Color.parseColor("#022A3E"))
+                                } else if (isRosatomTheme) {
+                                    gd.setColor(Color.parseColor("#81D4FA"))
+                                    dayView.setTextColor(Color.parseColor("#003D5C"))
+                                } else {
+                                    gd.setColor(com.example.vkbookandroid.theme.AppTheme.lighten(com.example.vkbookandroid.theme.AppTheme.getAccentColor(), 0.7f))
+                                    dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                                }
+                            }
+                            Calendar.SUNDAY -> {
+                                if (isNuclearTheme) {
+                                    gd.setColor(Color.parseColor("#208EE7"))
+                                    dayView.setTextColor(Color.parseColor("#011E34"))
+                                } else if (isRosatomTheme) {
+                                    gd.setColor(Color.parseColor("#4FC3F7"))
+                                    dayView.setTextColor(Color.parseColor("#003D5C"))
+                                } else {
+                                    gd.setColor(com.example.vkbookandroid.theme.AppTheme.lighten(com.example.vkbookandroid.theme.AppTheme.getRosatomOrangeColor(), 0.7f))
+                                    dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                                }
+                            }
+                            else -> {
+                                if (isNuclearTheme) {
+                                    gd.setColor(Color.parseColor("#49C9D4"))
+                                    dayView.setTextColor(Color.parseColor("#013349"))
+                                } else if (isRosatomTheme) {
+                                    gd.setColor(Color.parseColor("#B3E5FC"))
+                                    dayView.setTextColor(Color.parseColor("#003D5C"))
+                                } else {
+                                    gd.setColor(com.example.vkbookandroid.theme.AppTheme.getCardBackgroundColor())
+                                    dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                                }
+                            }
+                        }
                     }
+                    
                     // Оранжевый фон для сегодняшней даты
                     val today = Calendar.getInstance()
                     val todayDay = today.get(Calendar.DAY_OF_MONTH)
@@ -1400,8 +1689,24 @@ class ScheduleCalendarAdapter(
                     val todayYear = today.get(Calendar.YEAR)
                     val monthNames = arrayOf("Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь")
                     if (day == todayDay.toString() && row.name == monthNames[todayMonth] && Calendar.getInstance().get(Calendar.YEAR) == todayYear) {
-                        gd.setColor(Color.parseColor("#FF6B35"))
-                        dayView.setTextColor(Color.WHITE)
+                        // КРИТИЧНО: Для классической темы - исходный цвет сегодня!
+                        if (!isThemeApplied) {
+                            gd.setColor(Color.parseColor("#FF6B35"))
+                            dayView.setTextColor(Color.WHITE)
+                        } else {
+                            val todayColor = when {
+                                isNuclearTheme -> Color.parseColor("#1FA85E")
+                                isRosatomTheme -> Color.parseColor("#FF6B35")
+                                else -> com.example.vkbookandroid.theme.AppTheme.getAccentColor()
+                            }
+                            gd.setColor(todayColor)
+                            val todayTextColor = when {
+                                isNuclearTheme -> Color.parseColor("#001B33")
+                                isRosatomTheme -> Color.parseColor("#FFFFFF")
+                                else -> com.example.vkbookandroid.theme.AppTheme.getButtonTextColor()
+                            }
+                            dayView.setTextColor(todayTextColor)
+                        }
                         dayView.setTypeface(null, android.graphics.Typeface.BOLD)
                         isTodayCell = true
                     }
@@ -1415,18 +1720,67 @@ class ScheduleCalendarAdapter(
                     }
                 }
             } else {
-                when (day) {
-                    "Вх" -> { gd.setColor(Color.GRAY); dayView.setTextColor(Color.WHITE) }
-                    "1", "2", "3", "4", "5" -> { gd.setColor(ContextCompat.getColor(itemView.context, android.R.color.holo_green_light)); dayView.setTextColor(Color.BLACK) }
+                // КРИТИЧНО: Для классической темы - исходные цвета смен!
+                if (!isThemeApplied) {
+                    when (day) {
+                        "Вх" -> { gd.setColor(Color.GRAY); dayView.setTextColor(Color.WHITE) }
+                        "1", "2", "3", "4", "5" -> { gd.setColor(ContextCompat.getColor(itemView.context, android.R.color.holo_green_light)); dayView.setTextColor(Color.BLACK) }
+                    }
+                } else {
+                    // Другие темы - цвета из AppTheme
+                    if (isNuclearTheme) {
+                        when (day) {
+                            "Вх" -> {
+                                gd.setColor(Color.parseColor("#032145"))
+                                dayView.setTextColor(Color.parseColor("#8BD4FF"))
+                            }
+                            "1", "2", "3", "4", "5" -> {
+                                gd.setColor(Color.parseColor("#145BA5"))
+                                dayView.setTextColor(Color.parseColor("#E5F4FF"))
+                            }
+                        }
+                    } else if (isRosatomTheme) {
+                        when (day) {
+                            "Вх" -> {
+                                gd.setColor(Color.parseColor("#90A4AE"))
+                                dayView.setTextColor(Color.parseColor("#FFFFFF"))
+                            }
+                            "1", "2", "3", "4", "5" -> {
+                                gd.setColor(Color.parseColor("#0091D5"))
+                                dayView.setTextColor(Color.parseColor("#FFFFFF"))
+                            }
+                        }
+                    } else {
+                        when (day) {
+                            "Вх" -> { 
+                                gd.setColor(com.example.vkbookandroid.theme.AppTheme.darken(com.example.vkbookandroid.theme.AppTheme.getTextSecondaryColor(), 0.2f))
+                                dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+                            }
+                            "1", "2", "3", "4", "5" -> { 
+                                gd.setColor(com.example.vkbookandroid.theme.AppTheme.lighten(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor(), 0.5f))
+                                dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+                            }
+                        }
+                    }
                 }
             }
             
             if (isSelectedColumn) {
-                val orange = Color.parseColor("#FF6B35")
-                // Убираем светло-оранжевую заливку столбца, оставляем только рамку
-                gd.setStroke(4, orange)
+                val highlightColor = when {
+                    isNuclearTheme -> Color.parseColor("#7CF7FF")
+                    isRosatomTheme -> Color.parseColor("#FF6B35")
+                    else -> Color.parseColor("#FF6B35")
+                }
+                val strokeWidth = if (isNuclearTheme) 5 else 4
+                gd.setStroke(strokeWidth, highlightColor)
             } else {
-                gd.setStroke(1, Color.parseColor("#666666"))
+                val borderColor = when {
+                    !isThemeApplied -> Color.parseColor("#666666")
+                    isNuclearTheme -> com.example.vkbookandroid.theme.AppTheme.getBorderColorStrong()
+                    else -> Color.parseColor("#666666")
+                }
+                val strokeWidth = if (isNuclearTheme) 3 else 1
+                gd.setStroke(strokeWidth, borderColor)
             }
             dayView.background = gd
             return dayView

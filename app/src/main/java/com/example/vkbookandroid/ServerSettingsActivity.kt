@@ -32,6 +32,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import java.security.MessageDigest
 
 /**
  * Activity для настройки параметров сервера
@@ -68,11 +69,30 @@ class ServerSettingsActivity : AppCompatActivity() {
         private const val KEY_CUSTOM_URL = "custom_url"
         private const val KEY_TABS_VISIBILITY = "tabs_visibility_json"
         private const val KEY_EDITOR_ACCESS = "editor_access_enabled"
-        private const val ADMIN_PASSWORD = "Admin6459"
+        private const val ADMIN_PASSWORD_HASH = "7773b8d2211efb5d382d36f4ea8bc5dd12af0ab8e52ab96783c3b2be8002d786"
+        private const val SALT = "VkBook2024"
         
         const val MODE_INTERNET = "internet"
         const val MODE_CUSTOM = "custom"
         
+
+        /**
+         * Проверить пароль администратора
+         */
+        private fun verifyPassword(inputPassword: String): Boolean {
+            val normalized = inputPassword.trim()
+            val hash = calculateSHA256(normalized + SALT)
+            return hash == ADMIN_PASSWORD_HASH
+        }
+        
+        /**
+         * Вычислить SHA-256 хеш строки
+         */
+        private fun calculateSHA256(input: String): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(input.toByteArray())
+            return hashBytes.joinToString("") { "%02x".format(it) }
+        }
 
         /**
          * Получить текущий URL сервера из настроек
@@ -144,7 +164,7 @@ class ServerSettingsActivity : AppCompatActivity() {
         
         setupAutoSyncUI()
         
-        // Настройка обработчика долгого нажатия на заголовок
+        // Настройка обработчика долгого нажатия на букву "Н" в заголовке
         setupTitleLongPressHandler()
     }
     
@@ -301,25 +321,28 @@ class ServerSettingsActivity : AppCompatActivity() {
         var longPressStartTime = 0L
         var isLongPressing = false
         
-        tvSettingsTitle.setOnTouchListener { _, event ->
+        tvSettingsTitle.setOnTouchListener { view, event ->
             when (event.action) {
                 android.view.MotionEvent.ACTION_DOWN -> {
-                    longPressStartTime = System.currentTimeMillis()
-                    isLongPressing = true
-                    
-                    // Запускаем таймер на 5 секунд
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        if (isLongPressing && System.currentTimeMillis() - longPressStartTime >= 5000) {
-                            // Если редактор уже разблокирован, отключаем его
-                            if (hasEditorAccess()) {
-                                toggleEditorAccess()
-                            } else {
-                                // Если заблокирован, показываем диалог пароля
-                                showPasswordDialog()
+                    // Проверяем, нажали ли на букву "Н" в слове "Настройки"
+                    if (isClickOnLetterN(view, event)) {
+                        longPressStartTime = System.currentTimeMillis()
+                        isLongPressing = true
+                        
+                        // Запускаем таймер на 5 секунд
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            if (isLongPressing && System.currentTimeMillis() - longPressStartTime >= 5000) {
+                                // Если редактор уже разблокирован, отключаем его
+                                if (hasEditorAccess()) {
+                                    toggleEditorAccess()
+                                } else {
+                                    // Если заблокирован, показываем диалог пароля
+                                    showPasswordDialog()
+                                }
+                                isLongPressing = false
                             }
-                            isLongPressing = false
-                        }
-                    }, 5000)
+                        }, 5000)
+                    }
                 }
                 android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                     isLongPressing = false
@@ -327,6 +350,34 @@ class ServerSettingsActivity : AppCompatActivity() {
             }
             false
         }
+    }
+    
+    /**
+     * Проверяет, нажали ли на букву "Н" в слове "Настройки"
+     */
+    private fun isClickOnLetterN(view: android.view.View, event: android.view.MotionEvent): Boolean {
+        val textView = view as TextView
+        val text = textView.text.toString()
+        
+        // Ищем позицию буквы "Н" в тексте
+        val letterNIndex = text.indexOf("Н")
+        if (letterNIndex == -1) return false
+        
+        // Получаем layout текста
+        val layout = textView.layout ?: return false
+        
+        // Получаем координаты буквы "Н"
+        val line = layout.getLineForOffset(letterNIndex)
+        val startX = layout.getPrimaryHorizontal(letterNIndex)
+        val endX = layout.getPrimaryHorizontal(letterNIndex + 1)
+        val startY = layout.getLineTop(line).toFloat()
+        val endY = layout.getLineBottom(line).toFloat()
+        
+        // Проверяем, попадает ли точка нажатия в область буквы "Н"
+        val clickX = event.x
+        val clickY = event.y
+        
+        return clickX >= startX && clickX <= endX && clickY >= startY && clickY <= endY
     }
     
     private fun showPasswordDialog() {
@@ -337,8 +388,8 @@ class ServerSettingsActivity : AppCompatActivity() {
             .setTitle("Введите пароль")
             .setView(editText)
             .setPositiveButton("OK") { _, _ ->
-                val password = editText.text.toString()
-                if (password == ADMIN_PASSWORD) {
+                val password = editText.text.toString().trim()
+                if (verifyPassword(password)) {
                     sharedPrefs.edit().putBoolean(KEY_EDITOR_ACCESS, true).apply()
                     Toast.makeText(this, "Доступ к редактору разблокирован", Toast.LENGTH_SHORT).show()
                 } else {
@@ -386,10 +437,11 @@ class ServerSettingsActivity : AppCompatActivity() {
         }
         
         tabs.add("График" to 4)
+        tabs.add("График проверок" to 5)
         
         val current = loadTabsVisibility()
         val names = tabs.map { it.first }.toTypedArray()
-        val checked = tabs.map { current[it.second] ?: true }.toBooleanArray()
+        val checked = tabs.map { current[it.second] ?: false }.toBooleanArray()
 
         AlertDialog.Builder(this)
             .setTitle("Настройка вкладок")
@@ -420,13 +472,7 @@ class ServerSettingsActivity : AppCompatActivity() {
             
             // Если нет сохраненных настроек, возвращаем значения по умолчанию
             if (json == null) {
-                val defaultMap = mutableMapOf<Int, Boolean>()
-                (0..4).forEach { defaultMap[it] = false }
-                // По умолчанию включены: Арматура (1), Схемы (2), График (4)
-                defaultMap[1] = true
-                defaultMap[2] = true
-                defaultMap[4] = true
-                return defaultMap
+                return defaultTabsVisibility()
             }
             
             val gson = com.google.gson.Gson()
@@ -434,29 +480,40 @@ class ServerSettingsActivity : AppCompatActivity() {
             if (json.trim().startsWith("[")) {
                 val listType = object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type
                 val list = gson.fromJson<List<Int>>(json, listType) ?: emptyList()
-                val map = mutableMapOf<Int, Boolean>()
-                (0..4).forEach { map[it] = list.contains(it) }
+                val map = defaultTabsVisibility().toMutableMap()
+                (0..5).forEach { map[it] = list.contains(it) }
                 map
             } else {
                 // Попытка 2: карта с ключами-строками или числами
                 return try {
                     val mapStrType = object : com.google.gson.reflect.TypeToken<Map<String, Boolean>>() {}.type
                     val m = gson.fromJson<Map<String, Boolean>>(json, mapStrType) ?: emptyMap()
-                    m.mapKeys { it.key.toIntOrNull() ?: -1 }.filterKeys { it in 0..4 }
+                    val result = defaultTabsVisibility().toMutableMap()
+                    m.forEach { (key, value) ->
+                        val intKey = key.toIntOrNull()
+                        if (intKey != null && intKey in 0..5) result[intKey] = value ?: false
+                    }
+                    result
                 } catch (_: Exception) {
                     val mapIntType = object : com.google.gson.reflect.TypeToken<Map<Int, Boolean>>() {}.type
-                    gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
+                    val parsed = gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
+                    val result = defaultTabsVisibility().toMutableMap()
+                    parsed.forEach { (key, value) -> if (key in 0..5) result[key] = value ?: false }
+                    result
                 }
             }
         } catch (e: Exception) { 
-            // В случае ошибки возвращаем значения по умолчанию
-            val defaultMap = mutableMapOf<Int, Boolean>()
-            (0..4).forEach { defaultMap[it] = false }
-            defaultMap[1] = true  // Арматура
-            defaultMap[2] = true  // Схемы
-            defaultMap[4] = true  // График
-            defaultMap
+            defaultTabsVisibility()
         }
+    }
+
+    private fun defaultTabsVisibility(): MutableMap<Int, Boolean> {
+        val defaultMap = mutableMapOf<Int, Boolean>()
+        (0..5).forEach { defaultMap[it] = false }
+        defaultMap[1] = true
+        defaultMap[2] = true
+        defaultMap[4] = true
+        return defaultMap
     }
     
     private fun saveSettings() {

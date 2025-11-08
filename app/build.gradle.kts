@@ -25,6 +25,18 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // API ключ из local.properties для безопасности
+        val apiKey = keystoreProperties["API_KEY"] as String? ?: "vkbook-2024-secret-key-abc123"
+        buildConfigField("String", "API_KEY", "\"$apiKey\"")
+        
+        // Базовый URL сервера (HTTP пока сервер не поддерживает HTTPS)
+        val serverUrl = keystoreProperties["SERVER_URL"] as String? ?: "http://158.160.157.7/"
+        buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
+        
+        // Флаг для принудительного использования HTTPS (когда сервер будет готов)
+        val forceHttps = keystoreProperties["FORCE_HTTPS"] as String? ?: "false"
+        buildConfigField("boolean", "FORCE_HTTPS", forceHttps)
     }
 
     signingConfigs {
@@ -41,12 +53,17 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            isShrinkResources = false
+            isDebuggable = false // Отключаем debug режим в release
             signingConfig = signingConfigs.getByName("release")
         }
+        debug {
+            isDebuggable = true
+        }
+    }
+    
+    buildFeatures {
+        buildConfig = true
     }
     
     // Отключаем линтер для быстрой сборки

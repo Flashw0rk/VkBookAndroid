@@ -12,7 +12,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import java.io.File
 
-class SchemesFragment : Fragment(), RefreshableFragment {
+class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
 
     private lateinit var buttonPickPdf: Button
     private lateinit var textSchemeTitle: TextView
@@ -38,6 +38,72 @@ class SchemesFragment : Fragment(), RefreshableFragment {
         buttonPickPdf.setOnClickListener { openAssetSchemePicker() }
         // Отключаем звуки кликов у всего дерева фрагмента
         view.isSoundEffectsEnabled = false
+        
+        // Применяем тему к кнопке
+        applyThemeToButtons()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        
+        // Регистрируем фрагмент в ThemeManager
+        com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
+    }
+    
+    override fun isFragmentReady(): Boolean {
+        return ::buttonPickPdf.isInitialized && view != null
+    }
+    
+    /**
+     * Публичный метод для применения темы (вызывается из MainActivity при смене скина)
+     */
+    override fun applyTheme() {
+        if (!isAdded || view == null) {
+            android.util.Log.w("SchemesFragment", "applyTheme() вызван но фрагмент не готов")
+            return
+        }
+        
+        android.util.Log.d("SchemesFragment", "Применяем тему к схемам")
+        
+        // Применяем фон
+        view?.setBackgroundColor(
+            if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+            } else {
+                android.graphics.Color.parseColor("#FAFAFA")
+            }
+        )
+        
+        // Применяем тему к кнопке
+        applyThemeToButtons()
+    }
+    
+    private fun applyThemeToButtons() {
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - оставляем как есть
+            return
+        }
+        
+        // ИСПРАВЛЕНИЕ: Делаем кнопку темнее ФОНОВОГО цвета на 30% для лучшей видимости
+        buttonPickPdf.backgroundTintList = null
+        
+        val bgColor = com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+        val darkerColor = darkenColor(bgColor, 0.3f) // Затемняем на 30%
+        
+        val drawable = android.graphics.drawable.GradientDrawable()
+        drawable.shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+        drawable.cornerRadius = com.example.vkbookandroid.theme.AppTheme.getButtonCornerRadius()
+        drawable.setColor(darkerColor)
+        
+        buttonPickPdf.background = drawable
+        buttonPickPdf.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+    }
+    
+    private fun darkenColor(color: Int, factor: Float): Int {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(color, hsv)
+        hsv[2] *= (1f - factor) // Уменьшаем яркость
+        return android.graphics.Color.HSVToColor(hsv)
     }
 
     private fun openAssetSchemePicker() {

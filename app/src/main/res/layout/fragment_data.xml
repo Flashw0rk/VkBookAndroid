@@ -36,7 +36,6 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Редактировать"
-                    android:backgroundTint="#0d47a1"
                     android:textColor="@android:color/white"
                     android:soundEffectsEnabled="false"
                     android:layout_marginEnd="16dp" />

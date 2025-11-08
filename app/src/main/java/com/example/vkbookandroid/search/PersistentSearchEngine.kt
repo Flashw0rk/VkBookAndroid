@@ -68,24 +68,35 @@ class PersistentSearchEngine(private val context: Context) {
      */
     fun buildIndex(data: List<RowDataDynamic>, headers: List<String>, dataVersion: Long) {
         // 1) Строим postings в памяти (token -> MutableSet<Int>)
-        val map = LinkedHashMap<String, MutableSet<Int>>(16_384)
+        // ОПТИМИЗАЦИЯ: Увеличили начальную емкость для уменьшения rehashing
+        val map = LinkedHashMap<String, MutableSet<Int>>(32_768)
         val headersLower = headers.map { it.lowercase() }
+        
+        // ОПТИМИЗАЦИЯ: Предварительно определяем PDF-колонки
+        val pdfColumnIndices = headersLower.mapIndexedNotNull { index, header ->
+            if (header.contains("pdf")) index else null
+        }.toSet()
+        
+        // ОПТИМИЗАЦИЯ: Используем более эффективный цикл
+        val tokenSplitRegex = Regex("\\s+")
         for (i in data.indices) {
             val row = data[i]
             val props = row.getAllProperties()
+            
             // Нормализуем и токенизируем: сохраняем '-' и '/'; разбиваем по пробелам
-            props.forEachIndexed { colIndex, cell ->
-                val headerName = headersLower.getOrNull(colIndex) ?: ""
-                // Полностью исключаем PDF-колонку из индексации
-                if (headerName.contains("pdf")) return@forEachIndexed
+            for (colIndex in props.indices) {
+                // Пропускаем PDF-колонки
+                if (colIndex in pdfColumnIndices) continue
+                
+                val cell = props[colIndex]
                 val norm = SearchNormalizer.normalizeCellValue(cell)
-                if (norm.isNotEmpty()) {
-                    norm.split(Regex("\\s+")).forEach { rawToken ->
-                        val token = rawToken.lowercase()
-                        if (token.isNotEmpty()) {
-                            val set = map.getOrPut(token) { LinkedHashSet() }
-                            set.add(i)
-                        }
+                if (norm.isEmpty()) continue
+                
+                // ОПТИМИЗАЦИЯ: Разбиваем и добавляем токены в одном проходе
+                norm.split(tokenSplitRegex).forEach { rawToken ->
+                    val token = rawToken.lowercase()
+                    if (token.isNotEmpty()) {
+                        map.getOrPut(token) { LinkedHashSet() }.add(i)
                     }
                 }
             }

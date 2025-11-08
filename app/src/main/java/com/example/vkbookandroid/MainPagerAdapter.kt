@@ -8,21 +8,24 @@ import org.example.pult.android.DataFragment
 class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activity) {
 
     private val fragments = mutableMapOf<Int, Fragment>()
-    private var visiblePositions: MutableList<Int> = mutableListOf(0, 1, 2, 3, 4)
+    private var visiblePositions: MutableList<Int> = mutableListOf(0, 1, 2, 3, 4, 5)
 
     override fun getItemCount(): Int = visiblePositions.size
 
     override fun createFragment(position: Int): Fragment {
         val globalPos = visiblePositions[position]
+        android.util.Log.d("MainPagerAdapter", "createFragment called: position=$position, globalPos=$globalPos")
         val fragment = when (globalPos) {
             0 -> DataFragment()
             1 -> ArmatureFragment()
             2 -> SchemesFragment()
             3 -> EditorFragment()
             4 -> ScheduleFragment()
+            5 -> ChecksScheduleFragment()
             else -> throw IllegalArgumentException("Invalid position $globalPos")
         }
         fragments[globalPos] = fragment
+        android.util.Log.d("MainPagerAdapter", "Fragment created for globalPos=$globalPos: ${fragment.javaClass.simpleName}")
         return fragment
     }
 
@@ -35,8 +38,10 @@ class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activi
     }
 
     fun setVisiblePositions(newPositions: List<Int>) {
+        android.util.Log.d("MainPagerAdapter", "setVisiblePositions called: $newPositions")
         visiblePositions.clear()
         visiblePositions.addAll(newPositions)
+        android.util.Log.d("MainPagerAdapter", "New visible positions: $visiblePositions")
         notifyDataSetChanged()
     }
 

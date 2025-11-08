@@ -5,11 +5,6 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <!-- Узкая верхняя полоса интерфейса ~2 мм -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="7dp"
-        android:background="#673AB7" />
 
     <!-- Панель синхронизации -->
     <LinearLayout
@@ -89,8 +84,8 @@
         android:paddingTop="8dp"
         android:minHeight="56dp"
         android:soundEffectsEnabled="false"
-        app:tabMode="fixed"
-        app:tabGravity="fill">
+        app:tabMode="scrollable"
+        app:tabGravity="start">
     </com.google.android.material.tabs.TabLayout>
 
     <!-- Контейнер для фрагментов -->

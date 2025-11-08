@@ -123,10 +123,15 @@ class UpdatesFileService(private val context: Context) {
             val targetDir = getTargetDirectory(filename)
             val targetFile = File(targetDir, filename)
             
+            Log.d(tag, "Target directory: ${targetDir.absolutePath}")
+            Log.d(tag, "Target file: ${targetFile.absolutePath}")
+            
             // Создаем папку, если не существует
             if (!targetDir.exists()) {
-                targetDir.mkdirs()
-                Log.d(tag, "Created directory: ${targetDir.absolutePath}")
+                val created = targetDir.mkdirs()
+                Log.d(tag, "Created directory: ${targetDir.absolutePath} (success=$created)")
+            } else {
+                Log.d(tag, "Target directory already exists")
             }
             
             // Пробуем скачать из updates
@@ -136,26 +141,37 @@ class UpdatesFileService(private val context: Context) {
                 // Сохраняем файл
                 FileOutputStream(targetFile).use { outputStream ->
                     responseBody.byteStream().use { inputStream ->
-                        inputStream.copyTo(outputStream)
+                        val bytes = inputStream.copyTo(outputStream)
+                        Log.d(tag, "Wrote $bytes bytes to file")
                     }
                 }
                 
-                Log.d(tag, "File saved: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                Log.d(tag, "✅ File saved: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                
+                // Специальное логирование для "График проверок.xlsx"
+                if (filename.contains("График проверок", ignoreCase = true)) {
+                    Log.d(tag, "🎯 ГРАФИК ПРОВЕРОК successfully downloaded!")
+                    Log.d(tag, "   Path: ${targetFile.absolutePath}")
+                    Log.d(tag, "   Size: ${targetFile.length()} bytes")
+                    Log.d(tag, "   Exists: ${targetFile.exists()}")
+                    Log.d(tag, "   Readable: ${targetFile.canRead()}")
+                }
                 
                 // Проверяем целостность
                 if (targetFile.exists() && targetFile.length() > 0) {
-                    Log.d(tag, "File integrity OK: $filename")
+                    Log.d(tag, "✅ File integrity OK: $filename")
                     true
                 } else {
-                    Log.e(tag, "File integrity check failed: $filename")
+                    Log.e(tag, "❌ File integrity check failed: $filename")
                     false
                 }
             } else {
-                Log.e(tag, "Failed to download file: $filename")
+                Log.e(tag, "❌ Failed to download file: $filename")
                 false
             }
         } catch (e: Exception) {
-            Log.e(tag, "Error downloading file: $filename", e)
+            Log.e(tag, "💥 Error downloading file: $filename", e)
+            e.printStackTrace()
             false
         }
     }

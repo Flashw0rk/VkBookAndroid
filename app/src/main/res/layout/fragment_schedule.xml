@@ -85,11 +85,8 @@
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
-            android:includeFontPadding="true"
+            android:padding="0dp"
+            android:includeFontPadding="false"
             android:gravity="center" />
 
         <Button
@@ -102,11 +99,8 @@
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
-            android:includeFontPadding="true"
+            android:padding="0dp"
+            android:includeFontPadding="false"
             android:gravity="center" />
 
     </LinearLayout>
@@ -128,55 +122,6 @@
             android:textStyle="bold"
             android:gravity="center"
             android:textColor="#1976d2" />
-
-    </LinearLayout>
-
-    <!-- Обозначения -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="8dp"
-        android:background="#f0f0f0">
-
-        <!-- Первая строка обозначений -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Обозначения:"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="1,2,3,4,5 - смены"
-                android:textSize="12sp"
-                android:background="#c8e6c9"
-                android:padding="4dp"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Вх - выходной"
-                android:id="@+id/legendWeekend"
-                android:textSize="12sp"
-                android:background="#ffcdd2"
-                android:padding="4dp"
-                android:layout_marginEnd="8dp" />
-
-            <!-- Убрали подписи для заметок/напоминаний по требованию -->
-
-        </LinearLayout>
-
-        <!-- Удалена кнопка режима заметок по требованию -->
 
     </LinearLayout>
 
