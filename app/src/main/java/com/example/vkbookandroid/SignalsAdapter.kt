@@ -816,21 +816,43 @@ class SignalsAdapter(
     fun moveHeader(from: Int, to: Int) {
         if (from == to) return
         if (from !in headers.indices || to !in headers.indices) return
+        
+        // Перемещаем только заголовки
         val h = headers.removeAt(from)
         headers.add(to, h)
-        // Переставляем значения колонок для всех строк и пересобираем Map<Header,Value>
+        
+        // ИСПРАВЛЕНИЕ: Для каждой строки создаем новый Map с новым порядком заголовков,
+        // но СОХРАНЯЯ исходное соответствие "заголовок -> значение"
         data = data.map { row ->
-            val oldValues = row.getAllProperties().toMutableList()
-            if (from in oldValues.indices && to in oldValues.indices) {
-                val v = oldValues.removeAt(from)
-                oldValues.add(to, v)
+            val oldMap = row.asMap()  // Получаем исходный Map с парами "заголовок -> значение"
+            val newMap = LinkedHashMap<String, String>()
+            headers.forEach { headerName ->
+                // Берем значение по ключу (названию заголовка), а не по индексу!
+                newMap[headerName] = oldMap[headerName] ?: ""
             }
-            val map = LinkedHashMap<String, String>()
-            headers.forEachIndexed { idx, headerName ->
-                map[headerName] = oldValues.getOrNull(idx) ?: ""
-            }
-            RowDataDynamic(map)
+            RowDataDynamic(newMap)
         }
+        
+        // ИСПРАВЛЕНИЕ: Также обновляем _originalData, чтобы сохранить изменения
+        _originalData = _originalData.map { row ->
+            val oldMap = row.asMap()
+            val newMap = LinkedHashMap<String, String>()
+            headers.forEach { headerName ->
+                newMap[headerName] = oldMap[headerName] ?: ""
+            }
+            RowDataDynamic(newMap)
+        }
+        
+        // КРИТИЧНО: Обновляем индексы колонок после перестановки!
+        armatureColIndex = headers.indexOfFirst { h ->
+            h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
+        }
+        pdfSchemeColIndex = headers.indexOfFirst { h ->
+            h.equals("PDF_Схема_и_ID_арматуры", ignoreCase = true) || h.equals("PDF_Схема", ignoreCase = true)
+        }
+        
+        Log.d("SignalsAdapter", "Moved column from=$from to=$to, armatureColIndex=$armatureColIndex, pdfSchemeColIndex=$pdfSchemeColIndex")
+        
         notifyDataSetChanged()
         try { onColumnReorder?.invoke(headers.toList()) } catch (_: Throwable) {}
     }
@@ -838,19 +860,43 @@ class SignalsAdapter(
     fun applyColumnOrder(order: List<String>) {
         if (order.isEmpty()) return
         val current = headers.toList()
-        val newOrderIndices = order.mapNotNull { desired -> current.indexOfFirst { it == desired }.takeIf { it >= 0 } }
-        if (newOrderIndices.size != current.size) return // несовпадение наборов колонок — пропускаем
-        // Пересобираем заголовки и данные по новому порядку
+        
+        // Проверяем, что все колонки из order существуют в current
+        val allExist = order.all { desired -> current.any { it == desired } }
+        if (!allExist || order.size != current.size) return // несовпадение наборов колонок — пропускаем
+        
+        // ИСПРАВЛЕНИЕ: Пересобираем заголовки и данные, сохраняя соответствие "заголовок -> значение"
         headers = order.toMutableList()
         data = data.map { row ->
-            val values = row.getAllProperties()
-            val map = LinkedHashMap<String, String>()
-            order.forEachIndexed { newPos, headerName ->
-                val oldIdx = newOrderIndices[newPos]
-                map[headerName] = values.getOrNull(oldIdx) ?: ""
+            val oldMap = row.asMap()  // Получаем исходный Map с парами "заголовок -> значение"
+            val newMap = LinkedHashMap<String, String>()
+            order.forEach { headerName ->
+                // Берем значение по ключу (названию заголовка), а не по индексу!
+                newMap[headerName] = oldMap[headerName] ?: ""
             }
-            RowDataDynamic(map)
+            RowDataDynamic(newMap)
         }
+        
+        // ИСПРАВЛЕНИЕ: Также обновляем _originalData, чтобы сохранить изменения
+        _originalData = _originalData.map { row ->
+            val oldMap = row.asMap()
+            val newMap = LinkedHashMap<String, String>()
+            order.forEach { headerName ->
+                newMap[headerName] = oldMap[headerName] ?: ""
+            }
+            RowDataDynamic(newMap)
+        }
+        
+        // Обновляем индексы колонок после изменения порядка
+        armatureColIndex = headers.indexOfFirst { h ->
+            h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
+        }
+        pdfSchemeColIndex = headers.indexOfFirst { h ->
+            h.equals("PDF_Схема_и_ID_арматуры", ignoreCase = true) || h.equals("PDF_Схема", ignoreCase = true)
+        }
+        
+        Log.d("SignalsAdapter", "Applied column order: $order, armatureColIndex=$armatureColIndex, pdfSchemeColIndex=$pdfSchemeColIndex")
+        
         notifyDataSetChanged()
     }
 
