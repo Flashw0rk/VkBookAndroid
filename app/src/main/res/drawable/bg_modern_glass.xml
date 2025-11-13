@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Стеклянная: геометрические формы -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Светло-циановый градиент -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#E0F7FA"
+                android:centerColor="#B2EBF2"
+                android:endColor="#80DEEA" />
+        </shape>
+    </item>
+    
+    <!-- Геометрические фигуры (стеклянный эффект) -->
+    <!-- Большой круг (верхний правый) -->
+    <item
+        android:top="0dp"
+        android:left="400dp"
+        android:right="-100dp"
+        android:bottom="600dp">
+        <shape android:shape="oval">
+            <solid android:color="#00BCD420" />
+            <stroke
+                android:width="3dp"
+                android:color="#00838F30" />
+        </shape>
+    </item>
+    
+    <!-- Треугольник стилизованный (центр) -->
+    <item
+        android:top="300dp"
+        android:left="200dp"
+        android:right="200dp"
+        android:bottom="400dp">
+        <rotate
+            android:fromDegrees="30"
+            android:pivotX="50%"
+            android:pivotY="50%">
+            <shape android:shape="rectangle">
+                <solid android:color="#0097A715" />
+                <corners android:radius="20dp" />
+            </shape>
+        </rotate>
+    </item>
+    
+    <!-- Квадрат (нижний левый) -->
+    <item
+        android:top="650dp"
+        android:left="50dp"
+        android:right="500dp"
+        android:bottom="50dp">
+        <shape android:shape="rectangle">
+            <solid android:color="#26C6DA20" />
+            <corners android:radius="40dp" />
+        </shape>
+    </item>
+    
+</layer-list>
+
