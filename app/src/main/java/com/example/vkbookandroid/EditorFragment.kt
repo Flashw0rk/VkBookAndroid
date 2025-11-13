@@ -20,7 +20,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import com.google.gson.GsonBuilder
-import com.google.gson.reflect.TypeToken
 import android.content.res.ColorStateList
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -306,7 +305,7 @@ class EditorFragment : Fragment() {
             tvScale.visibility = View.VISIBLE
             btnZoomIn.visibility = View.VISIBLE
             btnZoomOut.visibility = View.VISIBLE
-            tvScale.text = String.format(Locale.getDefault(), "Масштаб: %.2f×", scale)
+            tvScale.text = String.format("Масштаб: %.2f×", scale)
         }
         pdfZoomView.onMatrixChanged = { m ->
             editorOverlay.setPdfMapping(pdfToBitmapScale, m)
@@ -1244,21 +1243,7 @@ class EditorFragment : Fragment() {
         if (pdfName.isNullOrBlank()) { tvStatus.text = "Нет открытого PDF"; return }
         val baseEdited = storage.loadJson(true)
         val base = if (baseEdited.isNotEmpty()) baseEdited else storage.loadJson(false)
-        val perPdf = when (val existing = base[pdfName]) {
-            is MutableMap<*, *> -> {
-                @Suppress("UNCHECKED_CAST")
-                existing as? MutableMap<String, Any?> ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
-            }
-            is Map<*, *> -> {
-                mutableMapOf<String, Any?>().apply {
-                    existing.forEach { (key, value) ->
-                        val keyStr = key as? String ?: return@forEach
-                        this[keyStr] = value
-                    }
-                }.also { base[pdfName] = it }
-            }
-            else -> mutableMapOf<String, Any?>().also { base[pdfName] = it }
-        }
+        val perPdf = (base[pdfName] as? MutableMap<String, Any?>) ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
         val list = editorOverlay.getMarkers()
         var added = 0
         var updated = 0
@@ -1450,8 +1435,8 @@ class EditorFragment : Fragment() {
         if (!file.exists()) return mutableMapOf()
         val text = file.readText()
         return try {
-            val type = object : TypeToken<MutableMap<String, Any?>>() {}.type
-            gson.fromJson<MutableMap<String, Any?>>(text, type) ?: mutableMapOf()
+            @Suppress("UNCHECKED_CAST")
+            gson.fromJson(text, Map::class.java) as? MutableMap<String, Any?> ?: mutableMapOf()
         } catch (_: Exception) { mutableMapOf() }
     }
 
@@ -1481,9 +1466,7 @@ class EditorFragment : Fragment() {
                         // Валидация JSON
                         try {
                             gson.fromJson(editedJson, Map::class.java)
-                            targetFile.parentFile?.let { parent ->
-                                if (!parent.exists()) parent.mkdirs()
-                            }
+                            if (!targetFile.parentFile.exists()) targetFile.parentFile.mkdirs()
                             targetFile.writeText(editedJson)
                             savedItems.add("JSON в editor_out")
                             Log.d("EditorFragment", "JSON saved to editor_out: ${targetFile.absolutePath}")
@@ -1586,21 +1569,7 @@ class EditorFragment : Fragment() {
             val baseEdited = storage.loadJson(true)
             val baseOriginal = storage.loadJson(false)
             val base = if (baseEdited.isNotEmpty()) baseEdited else baseOriginal
-            val perPdf = when (val existing = base[pdfName]) {
-                is MutableMap<*, *> -> {
-                    @Suppress("UNCHECKED_CAST")
-                    existing as? MutableMap<String, Any?> ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
-                }
-                is Map<*, *> -> {
-                    mutableMapOf<String, Any?>().apply {
-                        existing.forEach { (key, value) ->
-                            val keyStr = key as? String ?: return@forEach
-                            this[keyStr] = value
-                        }
-                    }.also { base[pdfName] = it }
-                }
-                else -> mutableMapOf<String, Any?>().also { base[pdfName] = it }
-            }
+            val perPdf = (base[pdfName] as? MutableMap<String, Any?>) ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
             val list = editorOverlay.getMarkers()
             // Удаления
             if (deletedIds.isNotEmpty()) {

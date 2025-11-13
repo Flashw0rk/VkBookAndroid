@@ -9,7 +9,6 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.example.pult.RowDataDynamic
 import java.io.File
 import java.io.InputStream
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import java.util.concurrent.locks.ReentrantLock
@@ -245,9 +244,15 @@ class ExcelCacheManager(private val context: Context) {
                 Log.d("ExcelCacheManager", "First row num: ${sheet.firstRowNum}")
                 Log.d("ExcelCacheManager", "Last row num: ${sheet.lastRowNum}")
                 
+                val headers = mutableListOf<String>()
                 val headerRow = sheet.getRow(0)
-                    ?: throw IllegalArgumentException("Header row is null in sheet '$sheetName'")
-                val headers = headerRow.map { ExcelPagingSession.Companion.getCellValueAsString(it, wb) }
+                if (headerRow == null) {
+                    Log.e("ExcelCacheManager", "Header row (row 0) is null in sheet '$sheetName'")
+                    throw IllegalArgumentException("Header row is null in sheet '$sheetName'")
+                }
+                if (headerRow != null) {
+                    for (cell in headerRow) headers.add(ExcelPagingSession.Companion.getCellValueAsString(cell, wb))
+                }
                 
                 // Убеждаемся, что директория существует перед записью файлов
                 if (!tmpDir.exists()) {
@@ -258,12 +263,14 @@ class ExcelCacheManager(private val context: Context) {
                 headersFile(tmpDir).writeText(gson.toJson(headers))
 
                 val widths = LinkedHashMap<String, Int>()
-                for (cell in headerRow) {
-                    val colIndex = cell.columnIndex
-                    val columnName = ExcelPagingSession.Companion.getCellValueAsString(cell, wb)
-                    val excelWidth = sheet.getColumnWidth(colIndex)
-                    val pixelWidth = (excelWidth * 40.0 / 256).toInt()
-                    widths[columnName] = maxOf(200, pixelWidth)
+                if (headerRow != null) {
+                    for (cell in headerRow) {
+                        val colIndex = cell.columnIndex
+                        val columnName = ExcelPagingSession.Companion.getCellValueAsString(cell, wb)
+                        val excelWidth = sheet.getColumnWidth(colIndex)
+                        val pixelWidth = (excelWidth * 40.0 / 256).toInt()
+                        widths[columnName] = maxOf(200, pixelWidth)
+                    }
                 }
                 widthsFile(tmpDir).writeText(gson.toJson(widths))
 
@@ -294,7 +301,7 @@ class ExcelCacheManager(private val context: Context) {
                         }
                         taken++
                     }
-                    val pageFile = File(pages, String.format(Locale.getDefault(), "page_%05d.json", pageIndex))
+                    val pageFile = File(pages, String.format("page_%05d.json", pageIndex))
                     
                     // Убеждаемся, что директория pages существует
                     if (!pages.exists()) {
