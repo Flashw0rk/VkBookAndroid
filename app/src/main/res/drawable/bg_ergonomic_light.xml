@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Эргономичная светлая: мягкие природные тона (НЕ кислотные!) -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Мягкий зеленоватый градиент без посторонних оттенков -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#F0F8F0"
+                android:centerColor="#E2F1E2"
+                android:endColor="#D2E9D2" />
+        </shape>
+    </item>
+    
+    <!-- Декоративные мягкие круги (очень приглушенные) -->
+    <item
+        android:top="100dp"
+        android:left="400dp"
+        android:right="100dp"
+        android:bottom="600dp">
+        <shape android:shape="oval">
+            <solid android:color="#C8E6C910" />
+        </shape>
+    </item>
+    
+    <item
+        android:top="500dp"
+        android:left="100dp"
+        android:right="400dp"
+        android:bottom="200dp">
+        <shape android:shape="oval">
+            <solid android:color="#A5D6A710" />
+        </shape>
+    </item>
+    
+    <!-- Мягкая волна внизу -->
+</layer-list>
+

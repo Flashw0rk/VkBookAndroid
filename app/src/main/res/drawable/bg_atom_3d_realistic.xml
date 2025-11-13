@@ -1,0 +1,383 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Реалистичная 3D картинка атома: темно-синий космос с эффектом боке -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- ========== ФОН: Темно-синий градиент (слева светлее, справа темнее) ========== -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#2962FF"
+                android:centerColor="#1A237E"
+                android:endColor="#000B1F" />
+        </shape>
+    </item>
+    
+    <!-- ========== ЭФФЕКТ БОКЕ: Светящиеся частицы ========== -->
+    
+    <!-- СЛЕВА: Маленькие белые частицы (дальние) -->
+    <item android:top="60dp" android:left="35dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF50" />
+            <size android:width="6dp" android:height="6dp" />
+        </shape>
+    </item>
+    
+    <item android:top="150dp" android:left="70dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF45" />
+            <size android:width="7dp" android:height="7dp" />
+        </shape>
+    </item>
+    
+    <item android:top="280dp" android:left="50dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF55" />
+            <size android:width="5dp" android:height="5dp" />
+        </shape>
+    </item>
+    
+    <item android:top="420dp" android:left="90dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF40" />
+            <size android:width="8dp" android:height="8dp" />
+        </shape>
+    </item>
+    
+    <item android:top="550dp" android:left="60dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF48" />
+            <size android:width="6dp" android:height="6dp" />
+        </shape>
+    </item>
+    
+    <!-- СПРАВА: Большие голубые частицы (ближние) -->
+    <item android:top="100dp" android:left="580dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="15"
+                android:startColor="#82B1FF90"
+                android:endColor="#2979FF30" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <item android:top="280dp" android:left="620dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="20"
+                android:startColor="#64B5F6A0"
+                android:endColor="#1976D240" />
+            <size android:width="40dp" android:height="40dp" />
+        </shape>
+    </item>
+    
+    <item android:top="480dp" android:left="590dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="12"
+                android:startColor="#4FC3F785"
+                android:endColor="#0288D135" />
+            <size android:width="24dp" android:height="24dp" />
+        </shape>
+    </item>
+    
+    <!-- ========== СВЕТЯЩИЕСЯ ОРБИТАЛЬНЫЕ СЛЕДЫ (эллиптические) ========== -->
+    
+    <!-- Орбита 1 (диагональная 1) -->
+    <item
+        android:top="180dp"
+        android:bottom="180dp"
+        android:left="200dp"
+        android:right="200dp">
+        <rotate
+            android:fromDegrees="45"
+            android:pivotX="50%"
+            android:pivotY="50%">
+            <shape android:shape="oval">
+                <stroke
+                    android:width="3dp"
+                    android:color="#82B1FF50" />
+                <solid android:color="#00000000" />
+            </shape>
+        </rotate>
+    </item>
+    
+    <!-- Орбита 2 (диагональная 2) -->
+    <item
+        android:top="180dp"
+        android:bottom="180dp"
+        android:left="200dp"
+        android:right="200dp">
+        <rotate
+            android:fromDegrees="-45"
+            android:pivotX="50%"
+            android:pivotY="50%">
+            <shape android:shape="oval">
+                <stroke
+                    android:width="3dp"
+                    android:color="#64B5F650" />
+                <solid android:color="#00000000" />
+            </shape>
+        </rotate>
+    </item>
+    
+    <!-- Орбита 3 (горизонтальная) -->
+    <item
+        android:top="220dp"
+        android:bottom="220dp"
+        android:left="180dp"
+        android:right="180dp">
+        <shape android:shape="oval">
+            <stroke
+                android:width="2dp"
+                android:color="#4FC3F750" />
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+    
+    <!-- ========== ЯДРО АТОМА: Кластер полупрозрачных сфер ========== -->
+    
+    <!-- Сфера 1 (центр, самая большая) -->
+    <item
+        android:top="340dp"
+        android:bottom="340dp"
+        android:left="330dp"
+        android:right="330dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.3"
+                android:centerY="0.3"
+                android:gradientRadius="15"
+                android:startColor="#E1F5FE90"
+                android:centerColor="#B3E5FC70"
+                android:endColor="#81D4FA50" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 2 (слева от центра) -->
+    <item
+        android:top="355dp"
+        android:bottom="355dp"
+        android:left="310dp"
+        android:right="350dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.4"
+                android:centerY="0.4"
+                android:gradientRadius="12"
+                android:startColor="#E1F5FE80"
+                android:endColor="#81D4FA40" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 3 (справа от центра) -->
+    <item
+        android:top="355dp"
+        android:bottom="355dp"
+        android:left="350dp"
+        android:right="310dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.3"
+                android:centerY="0.3"
+                android:gradientRadius="12"
+                android:startColor="#B3E5FC85"
+                android:endColor="#4FC3F745" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 4 (сверху) -->
+    <item
+        android:top="328dp"
+        android:bottom="368dp"
+        android:left="335dp"
+        android:right="335dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.2"
+                android:gradientRadius="13"
+                android:startColor="#E1F5FE88"
+                android:endColor="#64B5F648" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 5 (снизу) -->
+    <item
+        android:top="368dp"
+        android:bottom="328dp"
+        android:left="335dp"
+        android:right="335dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.7"
+                android:gradientRadius="13"
+                android:startColor="#B3E5FC82"
+                android:endColor="#42A5F542" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 6 (слева сверху) -->
+    <item
+        android:top="335dp"
+        android:bottom="345dp"
+        android:left="315dp"
+        android:right="355dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.3"
+                android:centerY="0.3"
+                android:gradientRadius="10"
+                android:startColor="#E1F5FE75"
+                android:endColor="#64B5F640" />
+            <size android:width="25dp" android:height="25dp" />
+        </shape>
+    </item>
+    
+    <!-- Сфера 7 (справа снизу) -->
+    <item
+        android:top="345dp"
+        android:bottom="335dp"
+        android:left="355dp"
+        android:right="315dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.6"
+                android:centerY="0.6"
+                android:gradientRadius="10"
+                android:startColor="#B3E5FC78"
+                android:endColor="#4FC3F742" />
+            <size android:width="25dp" android:height="25dp" />
+        </shape>
+    </item>
+    
+    <!-- ========== ЭЛЕКТРОНЫ: Темно-синие непрозрачные сферы ========== -->
+    
+    <!-- Электрон 1 (на орбите вверху справа) -->
+    <item
+        android:top="140dp"
+        android:bottom="560dp"
+        android:left="450dp"
+        android:right="250dp">
+        <shape android:shape="oval">
+            <solid android:color="#1565C0" />
+            <size android:width="18dp" android:height="18dp" />
+        </shape>
+    </item>
+    
+    <!-- Электрон 2 (на орбите внизу слева) -->
+    <item
+        android:top="520dp"
+        android:bottom="180dp"
+        android:left="220dp"
+        android:right="480dp">
+        <shape android:shape="oval">
+            <solid android:color="#0D47A1" />
+            <size android:width="18dp" android:height="18dp" />
+        </shape>
+    </item>
+    
+    <!-- Электрон 3 (на орбите справа) -->
+    <item
+        android:top="360dp"
+        android:bottom="340dp"
+        android:left="520dp"
+        android:right="180dp">
+        <shape android:shape="oval">
+            <solid android:color="#1976D2" />
+            <size android:width="18dp" android:height="18dp" />
+        </shape>
+    </item>
+    
+    <!-- ========== СВЕТЯЩИЕСЯ СЛЕДЫ ЗА ЭЛЕКТРОНАМИ ========== -->
+    
+    <!-- След 1 (белые частицы) -->
+    <item android:top="138dp" android:left="430dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF70" />
+            <size android:width="4dp" android:height="4dp" />
+        </shape>
+    </item>
+    
+    <item android:top="142dp" android:left="420dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF60" />
+            <size android:width="3dp" android:height="3dp" />
+        </shape>
+    </item>
+    
+    <!-- След 2 (голубые частицы) -->
+    <item android:top="518dp" android:left="235dp">
+        <shape android:shape="oval">
+            <solid android:color="#82B1FF70" />
+            <size android:width="4dp" android:height="4dp" />
+        </shape>
+    </item>
+    
+    <item android:top="522dp" android:left="225dp">
+        <shape android:shape="oval">
+            <solid android:color="#64B5F660" />
+            <size android:width="3dp" android:height="3dp" />
+        </shape>
+    </item>
+    
+    <!-- След 3 (белые частицы) -->
+    <item android:top="358dp" android:left="500dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF75" />
+            <size android:width="4dp" android:height="4dp" />
+        </shape>
+    </item>
+    
+    <item android:top="362dp" android:left="490dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFF65" />
+            <size android:width="3dp" android:height="3dp" />
+        </shape>
+    </item>
+    
+    <!-- Полупрозрачный слой для читаемости текста (очень тонкий) -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#0D47A105" />
+        </shape>
+    </item>
+    
+</layer-list>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

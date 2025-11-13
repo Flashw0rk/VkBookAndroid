@@ -24,7 +24,8 @@
             android:minWidth="36dp"
             android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnToday"
@@ -36,7 +37,8 @@
             android:minWidth="72dp"
             android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
 
         <TextView
@@ -64,7 +66,8 @@
             android:minWidth="36dp"
             android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnZoomOut"
@@ -78,7 +81,8 @@
             android:minWidth="36dp"
             android:minHeight="0dp"
             android:includeFontPadding="false"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnZoomIn"
@@ -92,7 +96,8 @@
             android:minWidth="36dp"
             android:minHeight="0dp"
             android:includeFontPadding="false"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
     </LinearLayout>
 
