@@ -5,18 +5,19 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.speech.RecognizerIntent
 import android.widget.Toast
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
 import androidx.fragment.app.Fragment
-import java.util.*
+import java.util.Locale
 
 /**
  * Помощник для голосового поиска
  * Обрабатывает запуск распознавания речи и получение результатов
  */
-class VoiceSearchHelper(private val fragment: Fragment) {
-    
-    companion object {
-        private const val VOICE_SEARCH_REQUEST_CODE = 1001
-    }
+class VoiceSearchHelper(
+    private val fragment: Fragment,
+    private val launcher: ActivityResultLauncher<Intent>
+) {
     
     /**
      * Запуск голосового поиска
@@ -37,7 +38,7 @@ class VoiceSearchHelper(private val fragment: Fragment) {
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000)
             }
             
-            fragment.startActivityForResult(intent, VOICE_SEARCH_REQUEST_CODE)
+            launcher.launch(intent)
             
         } catch (e: ActivityNotFoundException) {
             // Голосовой поиск недоступен
@@ -51,12 +52,9 @@ class VoiceSearchHelper(private val fragment: Fragment) {
     /**
      * Обработка результата голосового поиска
      */
-    fun handleVoiceSearchResult(requestCode: Int, resultCode: Int, data: Intent?): String? {
-        if (requestCode != VOICE_SEARCH_REQUEST_CODE) {
-            return null
-        }
-        
-        return when (resultCode) {
+    fun handleVoiceSearchResult(result: ActivityResult): String? {
+        val data = result.data
+        return when (result.resultCode) {
             Activity.RESULT_OK -> {
                 // Успешное распознавание
                 val results = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)

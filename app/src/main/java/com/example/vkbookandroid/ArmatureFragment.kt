@@ -1,6 +1,7 @@
 package com.example.vkbookandroid
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -9,31 +10,35 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.SearchView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.vkbookandroid.search.EnhancedSearchView
+import com.example.vkbookandroid.search.SearchManager
+import com.example.vkbookandroid.search.VoiceSearchHelper
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import com.example.vkbookandroid.search.SearchManager
-import com.example.vkbookandroid.search.EnhancedSearchView
-import com.example.vkbookandroid.search.VoiceSearchHelper
-import android.content.Intent
-import androidx.lifecycle.Observer
 
 class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
     
@@ -67,6 +72,15 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     private lateinit var searchManager: SearchManager
     private lateinit var enhancedSearchView: EnhancedSearchView
     private lateinit var voiceSearchHelper: VoiceSearchHelper
+    private val voiceSearchLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result: ActivityResult ->
+            if (::voiceSearchHelper.isInitialized) {
+                val recognizedText = voiceSearchHelper.handleVoiceSearchResult(result)
+                if (!recognizedText.isNullOrBlank() && ::searchView.isInitialized) {
+                    searchView.setQuery(recognizedText, true)
+                }
+            }
+        }
     private var currentSearchQuery: String = ""
     private var scrollToTopOnNextResults: Boolean = false
     private var nextRequestId: Int = 0
@@ -298,7 +312,9 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     }
     
     override fun isFragmentReady(): Boolean {
-        return ::adapter.isInitialized && ::toggleResizeModeButton.isInitialized && view != null
+        // ИСПРАВЛЕНИЕ: Для применения темы достаточно наличия view
+        // Адаптер и кнопки могут быть не инициализированы
+        return view != null && isAdded
     }
     
     private fun loadArmatureData() {
@@ -514,6 +530,14 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             
             toggleResizeModeButton.background = drawable
             toggleResizeModeButton.setTextColor(android.graphics.Color.WHITE)
+            
+            // Арматура: увеличиваем на 2dp (0.5мм)
+            val px = toggleResizeModeButton.context.resources.displayMetrics.density
+            val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+            val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+            toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+            toggleResizeModeButton.minHeight = 0
+            toggleResizeModeButton.minWidth = 0
             return
         }
         
@@ -540,6 +564,14 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         val textColor = com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
         android.util.Log.d("ArmatureFragment", "Цвет текста кнопки: #${Integer.toHexString(textColor)}")
         toggleResizeModeButton.setTextColor(textColor)
+        
+        // Арматура: увеличиваем на 2dp (0.5мм)
+        val px = toggleResizeModeButton.context.resources.displayMetrics.density
+        val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+        val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+        toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+        toggleResizeModeButton.minHeight = 0
+        toggleResizeModeButton.minWidth = 0
         
         android.util.Log.d("ArmatureFragment", "Кнопка обновлена!")
     }
@@ -707,6 +739,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         queryFlow.value = searchText
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun setupSearchFlow() {
         lifecycleScope.launch {
             queryFlow
@@ -1137,7 +1170,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             searchManager = SearchManager(requireContext())
             
             // Инициализируем VoiceSearchHelper
-            voiceSearchHelper = VoiceSearchHelper(this)
+            voiceSearchHelper = VoiceSearchHelper(this, voiceSearchLauncher)
             
             // Настраиваем наблюдатели
             setupSearchObservers()
@@ -1335,19 +1368,6 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             if (isDataReadyForSearch()) {
                 adapter.clearSearchResultsOptimized()
             }
-        }
-    }
-    
-    /**
-     * Обработка результата голосового поиска
-     */
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        
-        val recognizedText = voiceSearchHelper.handleVoiceSearchResult(requestCode, resultCode, data)
-        if (recognizedText != null) {
-            // Устанавливаем распознанный текст в поисковое поле
-            searchView.setQuery(recognizedText, true)
         }
     }
     

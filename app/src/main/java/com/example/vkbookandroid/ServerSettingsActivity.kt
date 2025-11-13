@@ -21,6 +21,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.network.collectWifiDiagnostics
 import com.example.vkbookandroid.utils.AutoSyncSettings
 import java.net.InetAddress
 import java.net.Socket
@@ -744,14 +745,11 @@ class ServerSettingsActivity : AppCompatActivity() {
                 // 5. Информация о сети
                 results.add("")
                 results.add("5️⃣ Информация о сети:")
-                try {
-                    val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-                    val wifiInfo = wifiManager.connectionInfo
-                    val ssid = wifiInfo.ssid?.replace("\"", "") ?: "Неизвестно"
-                    results.add("   📶 Wi-Fi сеть: $ssid")
-                    results.add("   📡 IP устройства: ${getLocalIpAddress()}")
-                } catch (e: Exception) {
-                    results.add("   ❌ Ошибка получения сетевой информации: ${e.message}")
+                val wifiDetails = applicationContext.collectWifiDiagnostics()
+                val ssid = wifiDetails.ssid ?: "Неизвестно"
+                results.add("   📶 Wi-Fi сеть: $ssid")
+                wifiDetails.ipAddress?.let { ip ->
+                    results.add("   📡 IP устройства: $ip")
                 }
                 
                 // 6. Анализ и рекомендации
@@ -800,18 +798,6 @@ class ServerSettingsActivity : AppCompatActivity() {
                 if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
             } else defaultUrl
             else -> defaultUrl
-        }
-    }
-    
-    private fun getLocalIpAddress(): String {
-        return try {
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            val wifiInfo = wifiManager.connectionInfo
-            val dhcpInfo = wifiManager.dhcpInfo
-            val ipAddress = dhcpInfo.ipAddress
-            "${(ipAddress and 0xff)}.${(ipAddress shr 8 and 0xff)}.${(ipAddress shr 16 and 0xff)}.${(ipAddress shr 24 and 0xff)}"
-        } catch (e: Exception) {
-            "Неизвестно"
         }
     }
     
