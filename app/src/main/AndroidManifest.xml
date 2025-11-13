@@ -28,14 +28,21 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <activity
-            android:name=".MainActivity"
+            android:name=".SplashActivity"
             android:exported="true"
-            android:windowSoftInputMode="stateUnchanged|adjustResize">
+            android:theme="@style/Theme.VkBookAndroid.Splash">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+        
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VkBookAndroid"
+            android:windowSoftInputMode="stateUnchanged|adjustResize">
         </activity>
         
         <activity
@@ -49,6 +56,12 @@
             android:exported="false"
             android:theme="@style/Theme.VkBookAndroid"
             android:label="Настройки сервера" />
+
+        <activity
+            android:name=".settings.SettingsTabsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.VkBookAndroid"
+            android:label="Настройки" />
 
         <activity
             android:name=".AboutActivity"

@@ -61,7 +61,6 @@
             android:layout_weight="1"
             android:textSize="12sp"
             style="@style/Widget.MaterialComponents.Button"
-            android:background="@drawable/bg_zoom_button"
             android:textColor="@android:color/white"
             android:textOn="Редактирование: ВКЛ"
             android:textOff="Редактирование: ВЫКЛ"/>
@@ -73,7 +72,6 @@
             android:layout_weight="1"
             android:textSize="12sp"
             style="@style/Widget.MaterialComponents.Button"
-            android:background="@drawable/bg_zoom_button"
             android:textColor="@android:color/white"
             android:textOn="Показать все: ВКЛ"
             android:textOff="Показать все: ВЫКЛ"/>
@@ -187,6 +185,9 @@
                     android:layout_width="0dp"
                     android:layout_height="40dp"
                     android:layout_weight="1"
+                    android:padding="6dp"
+                    android:minHeight="0dp"
+                    android:minWidth="0dp"
                     android:text="Редактировать" />
                 <Button
                     android:id="@+id/btnExcelSave"
@@ -278,7 +279,6 @@
             android:textColor="@android:color/white"
             android:textSize="20sp"
             android:textStyle="bold"
-            android:background="@drawable/bg_zoom_button"
             android:textAllCaps="false"
             android:visibility="visible"/>
 
@@ -296,7 +296,6 @@
             android:textColor="@android:color/white"
             android:textSize="20sp"
             android:textStyle="bold"
-            android:background="@drawable/bg_zoom_button"
             android:textAllCaps="false"
             android:visibility="visible"/>
 
@@ -334,7 +333,7 @@
             android:minWidth="0dp"
             android:padding="0dp"
             android:textColor="@android:color/white"
-            android:background="@drawable/bg_mode_button" />
+            />
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnUseEdited"
             style="@style/Widget.MaterialComponents.Button"
@@ -354,7 +353,7 @@
             android:minWidth="0dp"
             android:padding="0dp"
             android:textColor="@android:color/white"
-            android:background="@drawable/bg_mode_button" />
+            />
 
         <!-- Спейсер, чтобы кнопки Undo/Redo были выровнены вправо под зум-кнопками -->
         <View
@@ -377,7 +376,7 @@
             android:textColor="@android:color/white"
             android:textSize="20sp"
             android:textStyle="bold"
-            android:background="@drawable/bg_zoom_button" />
+            />
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnRedo"
             style="@style/Widget.MaterialComponents.Button"
@@ -394,7 +393,7 @@
             android:textColor="@android:color/white"
             android:textSize="20sp"
             android:textStyle="bold"
-            android:background="@drawable/bg_zoom_button" />
+            />
     </LinearLayout>
 
     <ScrollView

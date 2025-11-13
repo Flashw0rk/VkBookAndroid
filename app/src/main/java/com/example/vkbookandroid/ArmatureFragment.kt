@@ -1,6 +1,7 @@
 package com.example.vkbookandroid
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -9,33 +10,37 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.Toast
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.SearchView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.example.vkbookandroid.search.EnhancedSearchView
+import com.example.vkbookandroid.search.SearchManager
+import com.example.vkbookandroid.search.VoiceSearchHelper
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import com.example.vkbookandroid.search.SearchManager
-import com.example.vkbookandroid.search.EnhancedSearchView
-import com.example.vkbookandroid.search.VoiceSearchHelper
-import android.content.Intent
-import androidx.lifecycle.Observer
 
-class ArmatureFragment : Fragment(), RefreshableFragment {
+class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
     
     private lateinit var recyclerView: RecyclerView
     private var emptyView: android.widget.TextView? = null
@@ -67,10 +72,22 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
     private lateinit var searchManager: SearchManager
     private lateinit var enhancedSearchView: EnhancedSearchView
     private lateinit var voiceSearchHelper: VoiceSearchHelper
+    private val voiceSearchLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result: ActivityResult ->
+            if (::voiceSearchHelper.isInitialized) {
+                val recognizedText = voiceSearchHelper.handleVoiceSearchResult(result)
+                if (!recognizedText.isNullOrBlank() && ::searchView.isInitialized) {
+                    searchView.setQuery(recognizedText, true)
+                }
+            }
+        }
     private var currentSearchQuery: String = ""
     private var scrollToTopOnNextResults: Boolean = false
     private var nextRequestId: Int = 0
     private var activeRequestId: Int = -1
+    
+    // Флаг для предотвращения множественных загрузок фона
+    private var isLoadingBackground: Boolean = false
     
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -82,6 +99,9 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
     
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        
+        // Применяем тему к фрагменту
+        applyTheme()
         
         recyclerView = view.findViewById(R.id.recyclerView)
         emptyView = view.findViewById(R.id.empty_view)
@@ -264,12 +284,19 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
         setupScrollButtons()
         attachWidthAutoScaler()
         
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
+        
         // Загружаем данные сразу при создании фрагмента
         ensureDataLoaded()
     }
 
     override fun onResume() {
         super.onResume()
+        
+        // Регистрируем фрагмент в ThemeManager
+        com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
+        
         if (isVisible) ensureDataLoaded()
         // После ротации иногда список не перерисовывается до переключения вкладки — форсируем ребайндинг
         recyclerView.post {
@@ -282,6 +309,12 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             recyclerView.visibility = View.VISIBLE
             emptyView?.visibility = View.GONE
         }
+    }
+    
+    override fun isFragmentReady(): Boolean {
+        // ИСПРАВЛЕНИЕ: Для применения темы достаточно наличия view
+        // Адаптер и кнопки могут быть не инициализированы
+        return view != null && isAdded
     }
     
     private fun loadArmatureData() {
@@ -475,6 +508,81 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
         })
     }
 
+    private fun applyThemeToButtons() {
+        android.util.Log.d("ArmatureFragment", "=== applyThemeToButtons() вызван ===")
+        
+        // Проверяем, инициализирована ли кнопка
+        if (!::toggleResizeModeButton.isInitialized) {
+            android.util.Log.w("ArmatureFragment", "toggleResizeModeButton НЕ инициализирована!")
+            return
+        }
+        
+        android.util.Log.d("ArmatureFragment", "Кнопка инициализирована, применяем тему")
+        
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - темно-синий цвет, овальная форма
+            toggleResizeModeButton.backgroundTintList = null
+            
+            val drawable = android.graphics.drawable.GradientDrawable()
+            drawable.shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            drawable.cornerRadius = 100f * toggleResizeModeButton.context.resources.displayMetrics.density // Овальная
+            drawable.setColor(android.graphics.Color.parseColor("#0d47a1")) // Темно-синий
+            
+            toggleResizeModeButton.background = drawable
+            toggleResizeModeButton.setTextColor(android.graphics.Color.WHITE)
+            
+            // Арматура: увеличиваем на 2dp (0.5мм)
+            val px = toggleResizeModeButton.context.resources.displayMetrics.density
+            val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+            val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+            toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+            toggleResizeModeButton.minHeight = 0
+            toggleResizeModeButton.minWidth = 0
+            return
+        }
+        
+        // Применяем тему к кнопке переключения режима
+        // Делаем кнопку темнее ФОНОВОГО цвета на 30% для лучшей видимости
+        toggleResizeModeButton.backgroundTintList = null
+        
+        // ИСПРАВЛЕНИЕ: Используем ФОНОВЫЙ цвет темы и затемняем его на 30%
+        val bgColor = com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+        android.util.Log.d("ArmatureFragment", "Фоновый цвет: #${Integer.toHexString(bgColor)}")
+        
+        val darkerColor = darkenColor(bgColor, 0.3f) // Затемняем на 30%
+        android.util.Log.d("ArmatureFragment", "Затемненный цвет кнопки: #${Integer.toHexString(darkerColor)}")
+        
+        val drawable = android.graphics.drawable.GradientDrawable()
+        drawable.shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+        drawable.cornerRadius = com.example.vkbookandroid.theme.AppTheme.getButtonCornerRadius()
+        drawable.setColor(darkerColor)
+        
+        // КРИТИЧНО: Сбрасываем backgroundTintList ПОСЛЕ создания drawable
+        toggleResizeModeButton.backgroundTintList = null
+        toggleResizeModeButton.background = drawable
+        
+        val textColor = com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
+        android.util.Log.d("ArmatureFragment", "Цвет текста кнопки: #${Integer.toHexString(textColor)}")
+        toggleResizeModeButton.setTextColor(textColor)
+        
+        // Арматура: увеличиваем на 2dp (0.5мм)
+        val px = toggleResizeModeButton.context.resources.displayMetrics.density
+        val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+        val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+        toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+        toggleResizeModeButton.minHeight = 0
+        toggleResizeModeButton.minWidth = 0
+        
+        android.util.Log.d("ArmatureFragment", "Кнопка обновлена!")
+    }
+    
+    private fun darkenColor(color: Int, factor: Float): Int {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(color, hsv)
+        hsv[2] *= (1f - factor) // Уменьшаем яркость
+        return android.graphics.Color.HSVToColor(hsv)
+    }
+    
     private fun attachWidthAutoScaler() {
         recyclerView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             val container = recyclerView.parent as? View ?: return@addOnLayoutChangeListener
@@ -631,6 +739,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
         queryFlow.value = searchText
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun setupSearchFlow() {
         lifecycleScope.launch {
             queryFlow
@@ -784,6 +893,19 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
 
     fun ensureDataLoaded() {
         Log.d("ArmatureFragment", "ensureDataLoaded called: isDataLoaded=$isDataLoaded, isAdded=$isAdded, isVisible=$isVisible")
+        
+        // ЗАЩИТА: Проверяем что view готов
+        if (view == null || !::recyclerView.isInitialized) {
+            Log.w("ArmatureFragment", "ensureDataLoaded() вызван но view не готов, откладываем загрузку")
+            // Отложим загрузку до момента когда view будет готов
+            view?.post {
+                if (::recyclerView.isInitialized && !isDataLoaded) {
+                    loadArmatureData()
+                }
+            }
+            return
+        }
+        
         if (!isDataLoaded) {
             // Проверяем, завершена ли инициализация приложения
             val mainActivity = activity as? com.example.vkbookandroid.MainActivity
@@ -804,6 +926,86 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
     }
     
     // Реализация интерфейса RefreshableFragment
+    /**
+     * Применить тему к фрагменту
+     */
+    override fun applyTheme() {
+        view?.let { v ->
+            // Находим Toolbar
+            val toolbar = v.findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
+            
+            if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                // КЛАССИЧЕСКАЯ ТЕМА - исходные цвета!
+                toolbar?.setBackgroundColor(android.graphics.Color.parseColor("#1976d2"))
+                toolbar?.setTitleTextColor(android.graphics.Color.WHITE)
+                // Фон - БЕЛЫЙ (как был изначально)!
+                v.setBackgroundColor(android.graphics.Color.WHITE)
+                if (::recyclerView.isInitialized) {
+                    recyclerView.setBackgroundColor(android.graphics.Color.WHITE)
+                }
+                // Применяем тему к кнопкам (восстанавливаем оригинальные цвета)
+                applyThemeToButtons()
+                return
+            }
+            
+            // ДРУГИЕ ТЕМЫ - применяем стили
+            // Применяем Toolbar - используем ФОНОВЫЙ цвет темы (светло-зеленый для эргономичной)
+            toolbar?.let {
+                it.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+                it.setTitleTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+            }
+            
+            // Сначала применяем цвет фона (быстро)
+            v.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+            if (::recyclerView.isInitialized) {
+                recyclerView.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+            }
+            
+            // Затем асинхронно загружаем фоновое изображение (если есть)
+            // ЗАЩИТА: предотвращаем множественные одновременные загрузки
+            if (!isLoadingBackground) {
+                isLoadingBackground = true
+                android.util.Log.d("ArmatureFragment", "Начинаем загрузку фонового изображения...")
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
+                        android.util.Log.d("ArmatureFragment", "Фоновое изображение загружено: ${bgDrawable != null}")
+                        
+                        if (bgDrawable != null && isAdded) {
+                            withContext(Dispatchers.Main) {
+                                if (isAdded && v.isAttachedToWindow) {
+                                    android.util.Log.d("ArmatureFragment", "Применяем фоновое изображение к view")
+                                    v.background = bgDrawable
+                                    if (::recyclerView.isInitialized && recyclerView.isAttachedToWindow) {
+                                        recyclerView.background = bgDrawable.constantState?.newDrawable()?.mutate()
+                                    }
+                                } else {
+                                    android.util.Log.w("ArmatureFragment", "View не готов: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
+                                }
+                            }
+                        } else {
+                            android.util.Log.d("ArmatureFragment", "Фоновое изображение отсутствует или фрагмент не добавлен")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("ArmatureFragment", "Ошибка загрузки фонового изображения", e)
+                    } finally {
+                        isLoadingBackground = false
+                    }
+                }
+            } else {
+                android.util.Log.d("ArmatureFragment", "Загрузка фона уже в процессе, пропускаем")
+            }
+            
+            // Применяем тему к кнопкам
+            applyThemeToButtons()
+            
+            // Обновляем адаптер ТОЛЬКО ОДИН РАЗ!
+            if (::adapter.isInitialized) {
+                adapter.notifyDataSetChanged()
+            }
+        }
+    }
+    
     override fun refreshData() {
         Log.d("ArmatureFragment", "refreshData() called - forcing data reload")
         
@@ -968,7 +1170,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             searchManager = SearchManager(requireContext())
             
             // Инициализируем VoiceSearchHelper
-            voiceSearchHelper = VoiceSearchHelper(this)
+            voiceSearchHelper = VoiceSearchHelper(this, voiceSearchLauncher)
             
             // Настраиваем наблюдатели
             setupSearchObservers()
@@ -1166,19 +1368,6 @@ class ArmatureFragment : Fragment(), RefreshableFragment {
             if (isDataReadyForSearch()) {
                 adapter.clearSearchResultsOptimized()
             }
-        }
-    }
-    
-    /**
-     * Обработка результата голосового поиска
-     */
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        
-        val recognizedText = voiceSearchHelper.handleVoiceSearchResult(requestCode, resultCode, data)
-        if (recognizedText != null) {
-            // Устанавливаем распознанный текст в поисковое поле
-            searchView.setQuery(recognizedText, true)
         }
     }
     

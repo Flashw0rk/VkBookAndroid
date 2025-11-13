@@ -18,7 +18,7 @@
         <androidx.appcompat.widget.Toolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
+            android:layout_height="48dp"
             android:background="#1976d2"
             android:soundEffectsEnabled="false"
             app:title="VK-book Android"
@@ -35,8 +35,10 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Редактировать"
-                    android:backgroundTint="#0d47a1"
                     android:textColor="@android:color/white"
+                    android:padding="6dp"
+                    android:minHeight="0dp"
+                    android:minWidth="0dp"
                     android:soundEffectsEnabled="false"
                     android:layout_marginEnd="16dp" />
 

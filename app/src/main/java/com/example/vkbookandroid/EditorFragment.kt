@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import com.google.gson.GsonBuilder
+import com.google.gson.reflect.TypeToken
 import android.content.res.ColorStateList
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -204,6 +205,9 @@ class EditorFragment : Fragment() {
         useEditedSource = false
         applyModeOutline()
         btnSave.isEnabled = false
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
 
         btnOpen.setOnClickListener { openFromSelectedSource() }
         btnSave.setOnClickListener {
@@ -302,7 +306,7 @@ class EditorFragment : Fragment() {
             tvScale.visibility = View.VISIBLE
             btnZoomIn.visibility = View.VISIBLE
             btnZoomOut.visibility = View.VISIBLE
-            tvScale.text = String.format("Масштаб: %.2f×", scale)
+            tvScale.text = String.format(Locale.getDefault(), "Масштаб: %.2f×", scale)
         }
         pdfZoomView.onMatrixChanged = { m ->
             editorOverlay.setPdfMapping(pdfToBitmapScale, m)
@@ -491,10 +495,97 @@ class EditorFragment : Fragment() {
         excelAdapter?.updateData(excelData, excelHeaders, excelColumnWidths, excelIsResizingMode)
     }
 
+    /**
+     * Публичный метод для применения темы (вызывается из MainActivity при смене скина)
+     */
+    fun applyTheme() {
+        if (!isAdded || view == null) {
+            android.util.Log.w("EditorFragment", "applyTheme() вызван но фрагмент не готов")
+            return
+        }
+        
+        android.util.Log.d("EditorFragment", "Применяем тему к редактору")
+        
+        // Применяем фон
+        view?.setBackgroundColor(
+            if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+            } else {
+                android.graphics.Color.parseColor("#FAFAFA")
+            }
+        )
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
+        
+        // Применяем тему к кнопкам режима
+        applyModeOutline()
+    }
+    
+    /**
+     * Гарантирует что данные загружены (для совместимости с MainActivity.ensureTabLoaded)
+     */
+    fun ensureDataLoaded() {
+        // EditorFragment не требует предзагрузки данных
+        // Данные загружаются только при открытии файла пользователем
+        android.util.Log.d("EditorFragment", "ensureDataLoaded() вызван (нет предзагрузки)")
+    }
+    
+    private fun applyThemeToButtons() {
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - восстанавливаем фиолетовые кнопки
+            listOf(btnZoomIn, btnZoomOut, btnUndo, btnRedo).forEach { button ->
+                button.setBackgroundResource(R.drawable.bg_zoom_button)
+                button.setTextColor(android.graphics.Color.WHITE)
+            }
+            listOf(toggleEditMode, toggleShowAll).forEach { toggle ->
+                toggle.setBackgroundResource(R.drawable.bg_zoom_button)
+                toggle.setTextColor(android.graphics.Color.WHITE)
+            }
+            return
+        }
+        
+        // Применяем тему ко всем кнопкам
+        listOf(btnZoomIn, btnZoomOut, btnUndo, btnRedo).forEach { button ->
+            // Сбрасываем Material tint который перекрывает background
+            (button as? com.google.android.material.button.MaterialButton)?.apply {
+                backgroundTintList = null
+                strokeColor = null
+                rippleColor = null
+            }
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { button.background = it }
+            button.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+        }
+        
+        // Применяем тему к toggle кнопкам
+        listOf(toggleEditMode, toggleShowAll).forEach { toggle ->
+            // Сбрасываем Material tint
+            (toggle as? com.google.android.material.button.MaterialButton)?.apply {
+                backgroundTintList = null
+                strokeColor = null
+                rippleColor = null
+            }
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { toggle.background = it }
+            toggle.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
+        }
+    }
+    
     private fun applyModeOutline() {
-        // Возвращаем надёжную схему: selected background drawable с толстой оранжевой рамкой
-        val normalBg = resources.getDrawable(R.drawable.bg_mode_button, null)
-        val selectedBg = resources.getDrawable(R.drawable.bg_mode_button_selected, null)
+        // Применяем тему к кнопкам режима
+        val normalBg = if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            com.example.vkbookandroid.theme.AppTheme.createButtonDrawable(com.example.vkbookandroid.theme.AppTheme.getButtonColor())
+        } else {
+            resources.getDrawable(R.drawable.bg_mode_button, null)
+        }
+        
+        val selectedBg = if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            com.example.vkbookandroid.theme.AppTheme.createGradientButtonDrawable() 
+                ?: com.example.vkbookandroid.theme.AppTheme.createButtonDrawable(com.example.vkbookandroid.theme.AppTheme.getPrimaryColor())
+        } else {
+            resources.getDrawable(R.drawable.bg_mode_button_selected, null)
+        }
 
         (btnUseOriginals as? MaterialButton)?.apply {
             try { foreground = null } catch (_: Throwable) {}
@@ -1153,7 +1244,21 @@ class EditorFragment : Fragment() {
         if (pdfName.isNullOrBlank()) { tvStatus.text = "Нет открытого PDF"; return }
         val baseEdited = storage.loadJson(true)
         val base = if (baseEdited.isNotEmpty()) baseEdited else storage.loadJson(false)
-        val perPdf = (base[pdfName] as? MutableMap<String, Any?>) ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
+        val perPdf = when (val existing = base[pdfName]) {
+            is MutableMap<*, *> -> {
+                @Suppress("UNCHECKED_CAST")
+                existing as? MutableMap<String, Any?> ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
+            }
+            is Map<*, *> -> {
+                mutableMapOf<String, Any?>().apply {
+                    existing.forEach { (key, value) ->
+                        val keyStr = key as? String ?: return@forEach
+                        this[keyStr] = value
+                    }
+                }.also { base[pdfName] = it }
+            }
+            else -> mutableMapOf<String, Any?>().also { base[pdfName] = it }
+        }
         val list = editorOverlay.getMarkers()
         var added = 0
         var updated = 0
@@ -1345,8 +1450,8 @@ class EditorFragment : Fragment() {
         if (!file.exists()) return mutableMapOf()
         val text = file.readText()
         return try {
-            @Suppress("UNCHECKED_CAST")
-            gson.fromJson(text, Map::class.java) as? MutableMap<String, Any?> ?: mutableMapOf()
+            val type = object : TypeToken<MutableMap<String, Any?>>() {}.type
+            gson.fromJson<MutableMap<String, Any?>>(text, type) ?: mutableMapOf()
         } catch (_: Exception) { mutableMapOf() }
     }
 
@@ -1376,7 +1481,9 @@ class EditorFragment : Fragment() {
                         // Валидация JSON
                         try {
                             gson.fromJson(editedJson, Map::class.java)
-                            if (!targetFile.parentFile.exists()) targetFile.parentFile.mkdirs()
+                            targetFile.parentFile?.let { parent ->
+                                if (!parent.exists()) parent.mkdirs()
+                            }
                             targetFile.writeText(editedJson)
                             savedItems.add("JSON в editor_out")
                             Log.d("EditorFragment", "JSON saved to editor_out: ${targetFile.absolutePath}")
@@ -1479,7 +1586,21 @@ class EditorFragment : Fragment() {
             val baseEdited = storage.loadJson(true)
             val baseOriginal = storage.loadJson(false)
             val base = if (baseEdited.isNotEmpty()) baseEdited else baseOriginal
-            val perPdf = (base[pdfName] as? MutableMap<String, Any?>) ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
+            val perPdf = when (val existing = base[pdfName]) {
+                is MutableMap<*, *> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    existing as? MutableMap<String, Any?> ?: mutableMapOf<String, Any?>().also { base[pdfName] = it }
+                }
+                is Map<*, *> -> {
+                    mutableMapOf<String, Any?>().apply {
+                        existing.forEach { (key, value) ->
+                            val keyStr = key as? String ?: return@forEach
+                            this[keyStr] = value
+                        }
+                    }.also { base[pdfName] = it }
+                }
+                else -> mutableMapOf<String, Any?>().also { base[pdfName] = it }
+            }
             val list = editorOverlay.getMarkers()
             // Удаления
             if (deletedIds.isNotEmpty()) {

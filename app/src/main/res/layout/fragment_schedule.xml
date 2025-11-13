@@ -18,31 +18,27 @@
         <Button
             android:id="@+id/btnPrevYear"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="wrap_content"
             android:text="◀"
             android:textSize="16sp"
             android:minWidth="36dp"
-            android:paddingStart="2.5mm"
-            android:paddingEnd="3.0mm"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
+            android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnToday"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="wrap_content"
             android:layout_marginStart="2mm"
             android:text="Сегодня"
             android:textSize="16sp"
             android:minWidth="72dp"
-            android:paddingStart="1.9mm"
-            android:paddingEnd="12dp"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
+            android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
 
         <TextView
@@ -63,51 +59,45 @@
         <Button
             android:id="@+id/btnNextYear2"
             android:layout_width="wrap_content"
-            android:layout_height="40dp"
+            android:layout_height="wrap_content"
             android:layout_marginStart="2mm"
             android:text="▶"
             android:textSize="16sp"
             android:minWidth="36dp"
-            android:paddingStart="3.0mm"
-            android:paddingEnd="2.5mm"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
+            android:minHeight="0dp"
             android:includeFontPadding="true"
-            android:gravity="center" />
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnZoomOut"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginStart="2mm"
             android:text="-"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
-            android:includeFontPadding="true"
-            android:gravity="center" />
+            android:minHeight="0dp"
+            android:includeFontPadding="false"
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
         <Button
             android:id="@+id/btnZoomIn"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginStart="2mm"
             android:text="+"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="0.5mm"
-            android:paddingBottom="0.9mm"
-            android:includeFontPadding="true"
-            android:gravity="center" />
+            android:minHeight="0dp"
+            android:includeFontPadding="false"
+            android:gravity="center"
+            android:translationY="-1.5dp" />
 
     </LinearLayout>
 
@@ -128,55 +118,6 @@
             android:textStyle="bold"
             android:gravity="center"
             android:textColor="#1976d2" />
-
-    </LinearLayout>
-
-    <!-- Обозначения -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="8dp"
-        android:background="#f0f0f0">
-
-        <!-- Первая строка обозначений -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Обозначения:"
-                android:textSize="12sp"
-                android:textStyle="bold"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="1,2,3,4,5 - смены"
-                android:textSize="12sp"
-                android:background="#c8e6c9"
-                android:padding="4dp"
-                android:layout_marginEnd="8dp" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Вх - выходной"
-                android:id="@+id/legendWeekend"
-                android:textSize="12sp"
-                android:background="#ffcdd2"
-                android:padding="4dp"
-                android:layout_marginEnd="8dp" />
-
-            <!-- Убрали подписи для заметок/напоминаний по требованию -->
-
-        </LinearLayout>
-
-        <!-- Удалена кнопка режима заметок по требованию -->
 
     </LinearLayout>
 

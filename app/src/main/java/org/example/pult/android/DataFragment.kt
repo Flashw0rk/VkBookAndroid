@@ -24,6 +24,8 @@ import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.lifecycle.Observer
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +43,7 @@ fun Context.dpToPx(dp: Int): Int {
     return (dp * resources.displayMetrics.density).toInt()
 }
 
-class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
+class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
 
     private lateinit var recyclerView: RecyclerView
     private var emptyView: android.widget.TextView? = null
@@ -61,6 +63,9 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     private var pagingSession: com.example.vkbookandroid.ExcelPagingSession? = null
     private var lastMeasuredListWidth: Int = 0
     private var cachedSession: com.example.vkbookandroid.PagingSession? = null
+    
+    // Флаг для предотвращения множественных загрузок фона
+    private var isLoadingBackground: Boolean = false
     private var lastHeaders: List<String> = emptyList()
     
     // Новая система поиска
@@ -172,6 +177,9 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         setupSearchFlow()
         setupToggleResizeModeButton()
         setupScrollButtons()
+        
+        // Применяем тему к кнопкам
+        applyThemeToButtons()
         attachWidthAutoScaler()
         
         // Загружаем данные сразу при создании фрагмента
@@ -182,6 +190,10 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        
+        // Применяем тему к фрагменту
+        applyTheme()
+        
         // Загрузка будет инициирована из onResume или извне через ensureDataLoaded()
         // Гарантируем первичную разметку и видимость после ротации
         view.post {
@@ -196,9 +208,93 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         // Отключаем звуки кликов у всего дерева фрагмента
         view.isSoundEffectsEnabled = false
     }
+    
+    /**
+     * Применить тему к фрагменту
+     */
+    override fun applyTheme() {
+        view?.let { v ->
+            // Находим Toolbar
+            val toolbar = v.findViewById<androidx.appcompat.widget.Toolbar>(com.example.vkbookandroid.R.id.toolbar)
+            
+            if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                // КЛАССИЧЕСКАЯ ТЕМА - исходные цвета!
+                toolbar?.setBackgroundColor(android.graphics.Color.parseColor("#1976d2"))
+                toolbar?.setTitleTextColor(android.graphics.Color.WHITE)
+                // Фон - БЕЛЫЙ (как был)!
+                v.setBackgroundColor(android.graphics.Color.WHITE)
+                if (::recyclerView.isInitialized) {
+                    recyclerView.setBackgroundColor(android.graphics.Color.WHITE)
+                }
+                // Применяем тему к кнопкам (восстанавливаем оригинальные цвета)
+                applyThemeToButtons()
+                return
+            }
+            
+            // ДРУГИЕ ТЕМЫ - применяем стили
+            // Применяем Toolbar - используем ФОНОВЫЙ цвет темы (светло-зеленый для эргономичной)
+            toolbar?.let {
+                it.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+                it.setTitleTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+            }
+            
+            // Сначала применяем цвет фона (быстро)
+            v.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+            if (::recyclerView.isInitialized) {
+                recyclerView.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+            }
+            
+            // Затем асинхронно загружаем фоновое изображение (если есть)
+            // ЗАЩИТА: предотвращаем множественные одновременные загрузки
+            if (!isLoadingBackground) {
+                isLoadingBackground = true
+                android.util.Log.d("DataFragment", "Начинаем загрузку фонового изображения...")
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
+                        android.util.Log.d("DataFragment", "Фоновое изображение загружено: ${bgDrawable != null}")
+                        
+                        if (bgDrawable != null && isAdded) {
+                            withContext(Dispatchers.Main) {
+                                if (isAdded && v.isAttachedToWindow) {
+                                    android.util.Log.d("DataFragment", "Применяем фоновое изображение к view")
+                                    v.background = bgDrawable
+                                    if (::recyclerView.isInitialized && recyclerView.isAttachedToWindow) {
+                                        recyclerView.background = bgDrawable.constantState?.newDrawable()?.mutate()
+                                    }
+                                } else {
+                                    android.util.Log.w("DataFragment", "View не готов: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
+                                }
+                            }
+                        } else {
+                            android.util.Log.d("DataFragment", "Фоновое изображение отсутствует или фрагмент не добавлен")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("DataFragment", "Ошибка загрузки фонового изображения", e)
+                    } finally {
+                        isLoadingBackground = false
+                    }
+                }
+            } else {
+                android.util.Log.d("DataFragment", "Загрузка фона уже в процессе, пропускаем")
+            }
+            
+            // Применяем тему к кнопкам
+            applyThemeToButtons()
+            
+            // Обновляем адаптер ТОЛЬКО ОДИН РАЗ
+            if (::adapter.isInitialized) {
+                adapter.notifyDataSetChanged()
+            }
+        }
+    }
 
     override fun onResume() {
         super.onResume()
+        
+        // Регистрируем фрагмент в ThemeManager
+        com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
+        
         if (isVisible) ensureDataLoaded()
         // После ротации иногда список не перерисовывается до переключения вкладки — форсируем ребайндинг
         recyclerView.post {
@@ -215,6 +311,12 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
     override fun onStart() {
         super.onStart()
         ensureDataLoaded()
+    }
+    
+    override fun isFragmentReady(): Boolean {
+        // ИСПРАВЛЕНИЕ: Для применения темы достаточно наличия view
+        // Адаптер и кнопки могут быть не инициализированы
+        return view != null && isAdded
     }
 
     private fun setupSearch() {
@@ -273,6 +375,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         queryFlow.value = query
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun setupSearchFlow() {
         lifecycleScope.launch {
             queryFlow
@@ -581,6 +684,81 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
         })
     }
 
+    private fun applyThemeToButtons() {
+        android.util.Log.d("DataFragment", "=== applyThemeToButtons() вызван ===")
+        
+        // Проверяем, инициализирована ли кнопка
+        if (!::toggleResizeModeButton.isInitialized) {
+            android.util.Log.w("DataFragment", "toggleResizeModeButton НЕ инициализирована!")
+            return
+        }
+        
+        android.util.Log.d("DataFragment", "Кнопка инициализирована, применяем тему")
+        
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - темно-синий цвет, овальная форма
+            toggleResizeModeButton.backgroundTintList = null
+            
+            val drawable = android.graphics.drawable.GradientDrawable()
+            drawable.shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            drawable.cornerRadius = 100f * toggleResizeModeButton.context.resources.displayMetrics.density // Овальная
+            drawable.setColor(android.graphics.Color.parseColor("#0d47a1")) // Темно-синий
+            
+            toggleResizeModeButton.background = drawable
+            toggleResizeModeButton.setTextColor(android.graphics.Color.WHITE)
+            
+            // Сигналы БЩУ: увеличиваем на 2dp (0.5мм) как в Арматуре
+            val px = toggleResizeModeButton.context.resources.displayMetrics.density
+            val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+            val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+            toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+            toggleResizeModeButton.minHeight = 0
+            toggleResizeModeButton.minWidth = 0
+            return
+        }
+        
+        // Применяем тему к кнопке переключения режима
+        // Делаем кнопку темнее ФОНОВОГО цвета на 30% для лучшей видимости
+        toggleResizeModeButton.backgroundTintList = null
+        
+        // ИСПРАВЛЕНИЕ: Используем ФОНОВЫЙ цвет темы и затемняем его на 30%
+        val bgColor = com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+        android.util.Log.d("DataFragment", "Фоновый цвет: #${Integer.toHexString(bgColor)}")
+        
+        val darkerColor = darkenColor(bgColor, 0.3f) // Затемняем на 30%
+        android.util.Log.d("DataFragment", "Затемненный цвет кнопки: #${Integer.toHexString(darkerColor)}")
+        
+        val drawable = android.graphics.drawable.GradientDrawable()
+        drawable.shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+        drawable.cornerRadius = com.example.vkbookandroid.theme.AppTheme.getButtonCornerRadius()
+        drawable.setColor(darkerColor)
+        
+        // КРИТИЧНО: Сбрасываем backgroundTintList ПОСЛЕ создания drawable
+        toggleResizeModeButton.backgroundTintList = null
+        toggleResizeModeButton.background = drawable
+        
+        val textColor = com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
+        android.util.Log.d("DataFragment", "Цвет текста кнопки: #${Integer.toHexString(textColor)}")
+        toggleResizeModeButton.setTextColor(textColor)
+        
+        // Сигналы БЩУ: увеличиваем на 2dp (0.5мм) как в Арматуре
+        val px = toggleResizeModeButton.context.resources.displayMetrics.density
+        val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+        val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+        toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
+        toggleResizeModeButton.minHeight = 0
+        toggleResizeModeButton.minWidth = 0
+        
+        android.util.Log.d("DataFragment", "Кнопка обновлена!")
+    }
+    
+    private fun darkenColor(color: Int, factor: Float): Int {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(color, hsv)
+        hsv[2] *= (1f - factor) // Уменьшаем яркость
+        return android.graphics.Color.HSVToColor(hsv)
+    }
+    
     private fun attachWidthAutoScaler() {
         recyclerView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             val container = recyclerView.parent as? View ?: return@addOnLayoutChangeListener
@@ -642,6 +820,19 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment {
 
     fun ensureDataLoaded() {
         Log.d("DataFragment", "ensureDataLoaded called: isDataLoaded=$isDataLoaded, isAdded=$isAdded, isVisible=$isVisible")
+        
+        // ЗАЩИТА: Проверяем что view готов
+        if (view == null || !::recyclerView.isInitialized) {
+            Log.w("DataFragment", "ensureDataLoaded() вызван но view не готов, откладываем загрузку")
+            // Отложим загрузку до момента когда view будет готов
+            view?.post {
+                if (::recyclerView.isInitialized && !isDataLoaded) {
+                    loadSignalsData()
+                }
+            }
+            return
+        }
+        
         if (!isDataLoaded) {
             // Проверяем, завершена ли инициализация приложения
             val mainActivity = activity as? com.example.vkbookandroid.MainActivity

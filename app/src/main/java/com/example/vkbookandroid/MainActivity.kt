@@ -24,6 +24,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
+import android.util.TypedValue
+import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -47,16 +49,38 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dataRefreshManager: DataRefreshManager
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
+    private val navigationPrefs by lazy { getSharedPreferences(NAVIGATION_PREFS, MODE_PRIVATE) }
     
     // Состояние инициализации
     private var isInitializationComplete = false
     private val initializationListeners = mutableListOf<() -> Unit>()
     
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        android.util.Log.d("MainActivity", "=== settingsLauncher получил результат ===")
+        android.util.Log.d("MainActivity", "resultCode=${result.resultCode}, RESULT_OK=$RESULT_OK")
+        android.util.Log.d("MainActivity", "THEME_CHANGED=${result.data?.getBooleanExtra("THEME_CHANGED", false)}")
+        
+        val themeChanged = result.resultCode == RESULT_OK &&
+            (result.data?.getBooleanExtra("THEME_CHANGED", false) == true)
+        
+        android.util.Log.d("MainActivity", "themeChanged=$themeChanged")
+
         // Обновляем настройки сервера после возврата из настроек
         loadServerSettings()
         // Применяем настройки вкладок и корректируем UI
         try { applyTabsVisibility() } catch (_: Throwable) {}
+
+        if (themeChanged) {
+            android.util.Log.d("MainActivity", "=== ТЕМА ИЗМЕНЕНА, обновляем ===")
+            
+            // Загружаем новую тему
+            com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+            
+            // Применяем тему к MainActivity (внутри уже вызывается refreshAllFragmentsTheme)
+            applyCurrentTheme()
+            
+            return@registerForActivityResult
+        }
         
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ
         if (AutoSyncSettings.isSyncOnSettingsChangeEnabled(this@MainActivity)) {
@@ -96,6 +120,10 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Инициализируем HTTP кэш для NetworkModule
+        com.example.vkbookandroid.network.NetworkModule.initCache(this)
+        
         // Включаем StrictMode только в debug для раннего обнаружения медленных операций на UI-потоке
         // НО отключаем detectNetwork(), так как это может блокировать сетевые запросы
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -108,7 +136,23 @@ class MainActivity : AppCompatActivity() {
                     .build()
             )
         }
+        
+        // Загружаем тему перед созданием интерфейса
+        com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+        
         setContentView(R.layout.activity_main)
+        
+        // Применяем тему к окну
+        if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            window.statusBarColor = com.example.vkbookandroid.theme.AppTheme.getPrimaryColor()
+            
+            // Асинхронная предзагрузка фона для темы Атом
+            if (com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()) {
+                uiScope.launch(Dispatchers.IO) {
+                    com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(this@MainActivity)
+                }
+            }
+        }
         // Глобально отключаем звуки кликов у корневого layout
         findViewById<android.view.View>(android.R.id.content)?.let { root ->
             root.isSoundEffectsEnabled = false
@@ -138,6 +182,9 @@ class MainActivity : AppCompatActivity() {
         // Инициализируем ViewPager2 сразу для быстрого отображения UI
         initializeViewPager()
         
+        // КРИТИЧНО: Настраиваем отслеживание файлов для автоматического обновления
+        setupFileWatching()
+        
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ ПРИ ЗАПУСКЕ
         if (AutoSyncSettings.isSyncOnStartupEnabled(this)) {
             // Автосинхронизация при запуске ВКЛЮЧЕНА
@@ -164,10 +211,39 @@ class MainActivity : AppCompatActivity() {
 
         // Добавляем пункт "О приложении" в меню (через уже существующую иконку меню)
 
+        // Инициализация аналитики (безопасно, работает без Firebase)
+        com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
+        com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
+        com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
     }
     
     override fun onResume() {
         super.onResume()
+        
+        android.util.Log.d("MainActivity", "=== onResume() вызван ===")
+        
+        // Перезагружаем тему (если изменилась в настройках)
+        com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+        android.util.Log.d("MainActivity", "Тема загружена: ${com.example.vkbookandroid.theme.AppTheme.getCurrentThemeId()}")
+        
+        // Применяем тему (внутри вызывается refreshAllFragmentsTheme)
+        applyCurrentTheme()
+        
+        // ВАЖНО: Дополнительно обновляем текущую видимую вкладку через ThemeManager
+        if (::pagerAdapter.isInitialized && ::viewPager.isInitialized) {
+            window.decorView.postDelayed({
+                val currentItem = viewPager.currentItem
+                val tag = "f$currentItem"
+                val fragment = supportFragmentManager.findFragmentByTag(tag)
+                
+                android.util.Log.d("MainActivity", "onResume: дополнительное обновление текущей вкладки #$currentItem")
+                
+                if (fragment != null) {
+                    com.example.vkbookandroid.theme.ThemeManager.applyThemeToFragment(fragment, forceUpdate = true)
+                }
+            }, 100) // Небольшая задержка для гарантии готовности UI
+        }
+        
         // После ротации гарантируем, что видимая вкладка подгружена и отрисована
         // Проверяем, что ViewPager2 уже инициализирован
         if (::pagerAdapter.isInitialized) {
@@ -179,6 +255,69 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Применить текущую тему ко всему интерфейсу
+     */
+    private fun applyCurrentTheme() {
+        if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // КЛАССИЧЕСКАЯ ТЕМА - ВОССТАНАВЛИВАЕМ ИСХОДНЫЙ ВИД!
+            window.decorView.background = null
+            window.decorView.setBackgroundColor(android.graphics.Color.parseColor("#FAFAFA"))
+            window.statusBarColor = android.graphics.Color.parseColor("#1976D2")
+            
+            // КРИТИЧНО: Восстанавливаем ИСХОДНУЮ кнопку (из XML - уже зеленая и овальная)!
+            if (::btnSync.isInitialized) {
+                // НЕ ТРОГАЕМ - кнопка уже правильная из activity_main.xml!
+                // Там уже: backgroundTint="#4CAF50" и овальная форма
+                // Просто сбрасываем если что-то изменилось
+                btnSync.backgroundTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#4CAF50"))
+                btnSync.setTextColor(android.graphics.Color.WHITE)
+            }
+            
+            // Обновляем фрагменты (они сами восстановят исходный вид)
+            refreshAllFragmentsTheme()
+            return
+        }
+        
+        // ДРУГИЕ ТЕМЫ - применяем стили
+        // Сначала применяем цвет фона (быстро)
+        window.decorView.setBackgroundColor(com.example.vkbookandroid.theme.AppTheme.getBackgroundColor())
+        window.statusBarColor = com.example.vkbookandroid.theme.AppTheme.getPrimaryColor()
+        
+        // Затем асинхронно загружаем фоновое изображение (если есть)
+        uiScope.launch(Dispatchers.IO) {
+            val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(this@MainActivity)
+            if (bgDrawable != null) {
+                withContext(Dispatchers.Main) {
+                    window.decorView.background = bgDrawable
+                }
+            }
+        }
+        
+        // Кнопки (ОВАЛЬНЫЕ с градиентом для некоторых тем)
+        if (::btnSync.isInitialized) {
+            // Сбрасываем backgroundTint который перекрывает background
+            btnSync.backgroundTintList = null
+            com.example.vkbookandroid.theme.AppTheme.applyButtonStyle(btnSync)
+        }
+        
+        // Обновляем все загруженные фрагменты
+        refreshAllFragmentsTheme()
+    }
+    
+    /**
+     * Обновить тему во всех загруженных фрагментах
+     * ПРОФЕССИОНАЛЬНЫЙ ПОДХОД: Используем централизованный ThemeManager
+     */
+    private fun refreshAllFragmentsTheme() {
+        android.util.Log.d("MainActivity", "=== refreshAllFragmentsTheme через ThemeManager ===")
+        
+        // Используем ThemeManager для централизованного управления темами
+        com.example.vkbookandroid.theme.ThemeManager.applyThemeToAllFragments()
+        
+        android.util.Log.d("MainActivity", "Зарегистрировано фрагментов: ${com.example.vkbookandroid.theme.ThemeManager.getRegisteredFragmentsCount()}")
+    }
+    
     private fun ensureCurrentTabLoaded() {
         if (::pagerAdapter.isInitialized) {
             ensureTabLoaded(viewPager.currentItem)
@@ -190,14 +329,26 @@ class MainActivity : AppCompatActivity() {
         
         val tag = "f$position"
         val frag = supportFragmentManager.findFragmentByTag(tag)
+        
+        android.util.Log.d("MainActivity", "ensureTabLoaded($position): фрагмент=${frag?.javaClass?.simpleName}")
+        
         when (frag) {
             is org.example.pult.android.DataFragment -> frag.ensureDataLoaded()
             is com.example.vkbookandroid.ArmatureFragment -> frag.ensureDataLoaded()
+            is com.example.vkbookandroid.ChecksScheduleFragment -> frag.ensureDataLoaded()
+            is com.example.vkbookandroid.SchemesFragment -> frag.ensureDataLoaded()
+            is com.example.vkbookandroid.EditorFragment -> frag.ensureDataLoaded()
+            is com.example.vkbookandroid.ScheduleFragment -> frag.ensureDataLoaded()
             else -> {
+                android.util.Log.w("MainActivity", "Неизвестный тип фрагмента на позиции $position")
                 // Если Fragment ещё не найден по тегу, попробуем через адаптер как запасной вариант
                 when (position) {
                     0 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.ensureDataLoaded()
                     1 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.ensureDataLoaded()
+                    2 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(2) as? com.example.vkbookandroid.SchemesFragment)?.ensureDataLoaded()
+                    3 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(3) as? com.example.vkbookandroid.EditorFragment)?.ensureDataLoaded()
+                    4 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(4) as? com.example.vkbookandroid.ScheduleFragment)?.ensureDataLoaded()
+                    5 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(5) as? com.example.vkbookandroid.ChecksScheduleFragment)?.ensureDataLoaded()
                 }
             }
         }
@@ -297,7 +448,7 @@ class MainActivity : AppCompatActivity() {
     
     private fun setupSettingsButton() {
         btnSettings.setOnClickListener {
-            val intent = android.content.Intent(this, ServerSettingsActivity::class.java)
+            val intent = android.content.Intent(this, com.example.vkbookandroid.settings.SettingsTabsActivity::class.java)
             settingsLauncher.launch(intent)
         }
     }
@@ -380,6 +531,9 @@ class MainActivity : AppCompatActivity() {
                         
                         // Диагностика файлов после синхронизации
                         diagnoseFilesAfterSync()
+                        
+                        // Логируем успешную синхронизацию
+                        com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
                     }
                     result.serverConnected -> {
                         updateSyncStatus("Ошибка обновления")
@@ -631,7 +785,9 @@ class MainActivity : AppCompatActivity() {
         
         pagerAdapter = MainPagerAdapter(this)
         viewPager.adapter = pagerAdapter
-        viewPager.offscreenPageLimit = 1 // держим только текущую и одну соседнюю страницу в памяти
+        // ViewPager2 не поддерживает 0, минимум = 1 (предзагружает 1 соседнюю вкладку)
+        // Это компромисс между производительностью и плавностью переключения
+        viewPager.offscreenPageLimit = 1
 
         // Минимальная высота вкладок для удобного тапа
         tabLayout.minimumHeight = (resources.displayMetrics.density * 56).toInt()
@@ -654,10 +810,12 @@ class MainActivity : AppCompatActivity() {
                 2 -> "Схемы"
                 3 -> "Редактор"
                 4 -> "График"
+                5 -> "График проверок"
                 else -> ""
             }
             tab.text = label
         }.attach()
+        adjustTabsLayoutSpacing()
 
         // Применяем видимость к TabLayout и ViewPager
         applyTabsVisibility()
@@ -682,6 +840,22 @@ class MainActivity : AppCompatActivity() {
                         applySharedSearchToCurrentTab(position)
                     }
                 }
+                (viewPager.adapter as? MainPagerAdapter)?.let { adapter ->
+                    val globalPosition = adapter.getGlobalPositionAt(position)
+                    saveLastSelectedTab(globalPosition)
+                    
+                    // Логируем открытие вкладки
+                    val tabName = when (globalPosition) {
+                        0 -> "Сигналы БЩУ"
+                        1 -> "Арматура"
+                        2 -> "Схемы"
+                        3 -> "Редактор"
+                        4 -> "График"
+                        5 -> "График проверок"
+                        else -> "Неизвестная"
+                    }
+                    com.example.vkbookandroid.analytics.AnalyticsManager.logTabOpened(tabName)
+                }
             }
         })
         
@@ -696,8 +870,9 @@ class MainActivity : AppCompatActivity() {
             // Если нет сохраненных настроек, возвращаем значения по умолчанию
             if (json == null) {
                 val defaultMap = mutableMapOf<Int, Boolean>()
-                (0..4).forEach { defaultMap[it] = false }
+                (0..5).forEach { defaultMap[it] = false }
                 // По умолчанию включены: Арматура (1), Схемы (2), График (4)
+                // Отключены: Сигналы БЩУ (0), Редактор (3), График проверок (5)
                 defaultMap[1] = true
                 defaultMap[2] = true
                 defaultMap[4] = true
@@ -710,14 +885,14 @@ class MainActivity : AppCompatActivity() {
                 val listType = object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type
                 val list = gson.fromJson<List<Int>>(json, listType) ?: emptyList()
                 val map = mutableMapOf<Int, Boolean>()
-                (0..4).forEach { map[it] = list.contains(it) }
+                (0..5).forEach { map[it] = list.contains(it) }
                 map
             } else {
                 // формат: карта индексов -> bool (строки или числа)
                 return try {
                     val mapStrType = object : com.google.gson.reflect.TypeToken<Map<String, Boolean>>() {}.type
                     val m = gson.fromJson<Map<String, Boolean>>(json, mapStrType) ?: emptyMap()
-                    m.mapKeys { it.key.toIntOrNull() ?: -1 }.filterKeys { it in 0..4 }
+                    m.mapKeys { it.key.toIntOrNull() ?: -1 }.filterKeys { it in 0..5 }
                 } catch (_: Exception) {
                     val mapIntType = object : com.google.gson.reflect.TypeToken<Map<Int, Boolean>>() {}.type
                     gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
@@ -726,10 +901,11 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) { 
             // В случае ошибки возвращаем значения по умолчанию
             val defaultMap = mutableMapOf<Int, Boolean>()
-            (0..4).forEach { defaultMap[it] = false }
+            (0..5).forEach { defaultMap[it] = false }
             defaultMap[1] = true  // Арматура
             defaultMap[2] = true  // Схемы
             defaultMap[4] = true  // График
+            defaultMap[5] = true  // График проверок
             defaultMap
         }
     }
@@ -737,26 +913,22 @@ class MainActivity : AppCompatActivity() {
     private fun applyTabsVisibility() {
         val visible = loadTabsVisibility()
         if (!::tabLayout.isInitialized || !::viewPager.isInitialized) return
-        // Обновляем список позиций для адаптера
-        val newPositions = (0..4).filter { visible[it] != false }
-        (viewPager.adapter as? MainPagerAdapter)?.setVisiblePositions(newPositions)
-        // Перестраиваем TabLayout: скрываем вкладки без удаления (по глобальной позиции)
         val adapter = (viewPager.adapter as? MainPagerAdapter)
+        val newPositions = (0..5).filter { visible[it] != false }
+        adapter?.setVisiblePositions(newPositions)
         for (i in 0 until tabLayout.tabCount) {
-            val v = tabLayout.getTabAt(i)?.view ?: continue
+            val tabView = tabLayout.getTabAt(i)?.view ?: continue
             val global = adapter?.getGlobalPositionAt(i) ?: i
-            v.visibility = if (visible[global] != false) android.view.View.VISIBLE else android.view.View.GONE
+            tabView.visibility = if (visible[global] != false) android.view.View.VISIBLE else android.view.View.GONE
         }
-        // Если все вкладки скрыты — показываем пустой фон
         if (newPositions.isEmpty()) {
             viewPager.visibility = android.view.View.GONE
-        } else {
-            viewPager.visibility = android.view.View.VISIBLE
-            val currentGlobal = (viewPager.adapter as? MainPagerAdapter)?.getGlobalPositionAt(viewPager.currentItem) ?: 0
-            if (visible[currentGlobal] == false) {
-                viewPager.setCurrentItem(0, false)
-            }
+            return
         }
+        viewPager.visibility = android.view.View.VISIBLE
+        val targetGlobal = determineInitialGlobalTab(newPositions)
+        setCurrentTabByGlobal(targetGlobal, smoothScroll = false)
+        saveLastSelectedTab(targetGlobal)
     }
     
     /**
@@ -809,6 +981,20 @@ class MainActivity : AppCompatActivity() {
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Error refreshing SchemesFragment", e)
                     }
+                }
+            }
+        }
+        
+        // Настраиваем отслеживание для ChecksScheduleFragment (График проверок .xlsx - с пробелом!)
+        val checksFilePath = filesDir.resolve("data").resolve("График проверок .xlsx").absolutePath
+        dataRefreshManager.startWatching(checksFilePath) {
+            Log.d("MainActivity", "График проверок.xlsx changed, refreshing ChecksScheduleFragment")
+            uiScope.launch {
+                try {
+                    val checksFragment = getFragmentByPosition(5) as? ChecksScheduleFragment
+                    checksFragment?.let { (it as RefreshableFragment).refreshData() }
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Error refreshing ChecksScheduleFragment", e)
                 }
             }
         }
@@ -984,5 +1170,64 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
             .setIcon(android.R.drawable.ic_dialog_info)
             .show()
+    }
+
+    private fun saveLastSelectedTab(globalPosition: Int) {
+        navigationPrefs.edit().putInt(KEY_LAST_TAB, globalPosition).apply()
+    }
+
+    private fun loadLastSelectedTab(): Int =
+        navigationPrefs.getInt(KEY_LAST_TAB, DEFAULT_TAB_GLOBAL)
+
+    private fun determineInitialGlobalTab(visiblePositions: List<Int>): Int {
+        if (visiblePositions.isEmpty()) return DEFAULT_TAB_GLOBAL
+        val saved = loadLastSelectedTab()
+        return when {
+            visiblePositions.contains(saved) -> saved
+            visiblePositions.contains(DEFAULT_TAB_GLOBAL) -> DEFAULT_TAB_GLOBAL
+            else -> visiblePositions.first()
+        }
+    }
+
+    private fun setCurrentTabByGlobal(globalPosition: Int, smoothScroll: Boolean) {
+        if (!::viewPager.isInitialized) return
+        val adapter = viewPager.adapter as? MainPagerAdapter ?: return
+        val localIndex = adapter.getLocalIndex(globalPosition) ?: return
+        if (viewPager.currentItem != localIndex) {
+            viewPager.setCurrentItem(localIndex, smoothScroll)
+        }
+    }
+
+    companion object {
+        private const val NAVIGATION_PREFS = "navigation_state"
+        private const val KEY_LAST_TAB = "last_tab"
+        private const val DEFAULT_TAB_GLOBAL = 1
+    }
+
+    private fun adjustTabsLayoutSpacing() {
+        if (!::tabLayout.isInitialized) return
+        val displayMetrics = resources.displayMetrics
+        val deltaPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, 3f, displayMetrics).toInt()
+        val baseMinHeightPx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 56f, displayMetrics).toInt()
+        tabLayout.minimumHeight = (baseMinHeightPx - deltaPx).coerceAtLeast(0)
+        tabLayout.setPadding(
+            tabLayout.paddingLeft,
+            (tabLayout.paddingTop - deltaPx).coerceAtLeast(0),
+            tabLayout.paddingRight,
+            tabLayout.paddingBottom
+        )
+        tabLayout.post {
+            val strip = tabLayout.getChildAt(0) as? ViewGroup ?: return@post
+            for (i in 0 until strip.childCount) {
+                val tabView = strip.getChildAt(i)
+                val newTop = (tabView.paddingTop - deltaPx).coerceAtLeast(0)
+                tabView.setPadding(
+                    tabView.paddingLeft,
+                    newTop,
+                    tabView.paddingRight,
+                    tabView.paddingBottom
+                )
+            }
+        }
     }
 }
