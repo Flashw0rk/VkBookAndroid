@@ -764,7 +764,7 @@ class SignalsAdapter(
         headers = newHeaders.toMutableList()
         columnWidths = newColumnWidths
         armatureColIndex = headers.indexOfFirst { h ->
-            h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
+            h.equals("Арматура", ignoreCase = true)
         }
         pdfSchemeColIndex = headers.indexOfFirst { h ->
             h.equals("PDF_Схема_и_ID_арматуры", ignoreCase = true) || h.equals("PDF_Схема", ignoreCase = true)
@@ -845,13 +845,18 @@ class SignalsAdapter(
         
         // КРИТИЧНО: Обновляем индексы колонок после перестановки!
         armatureColIndex = headers.indexOfFirst { h ->
-            h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
+            h.equals("Арматура", ignoreCase = true)
         }
         pdfSchemeColIndex = headers.indexOfFirst { h ->
             h.equals("PDF_Схема_и_ID_арматуры", ignoreCase = true) || h.equals("PDF_Схема", ignoreCase = true)
         }
         
-        Log.d("SignalsAdapter", "Moved column from=$from to=$to, armatureColIndex=$armatureColIndex, pdfSchemeColIndex=$pdfSchemeColIndex")
+        Log.d("SignalsAdapter", "=== COLUMN REORDER DEBUG ===")
+        Log.d("SignalsAdapter", "Moved column from=$from to=$to")
+        Log.d("SignalsAdapter", "New headers order: $headers")
+        Log.d("SignalsAdapter", "Updated armatureColIndex=$armatureColIndex, pdfSchemeColIndex=$pdfSchemeColIndex")
+        Log.d("SignalsAdapter", "First row sample after reorder: ${data.firstOrNull()?.asMap()}")
+        Log.d("SignalsAdapter", "=== END DEBUG ===")
         
         notifyDataSetChanged()
         try { onColumnReorder?.invoke(headers.toList()) } catch (_: Throwable) {}
@@ -889,7 +894,7 @@ class SignalsAdapter(
         
         // Обновляем индексы колонок после изменения порядка
         armatureColIndex = headers.indexOfFirst { h ->
-            h.equals("Арматура", ignoreCase = true) || h.contains("арматур", ignoreCase = true)
+            h.equals("Арматура", ignoreCase = true)
         }
         pdfSchemeColIndex = headers.indexOfFirst { h ->
             h.equals("PDF_Схема_и_ID_арматуры", ignoreCase = true) || h.equals("PDF_Схема", ignoreCase = true)

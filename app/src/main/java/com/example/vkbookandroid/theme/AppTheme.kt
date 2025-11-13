@@ -505,27 +505,19 @@ object AppTheme {
         android.util.Log.d("AppTheme", "getNuclearBitmap() начало")
         
         val targetRes = com.example.vkbookandroid.R.drawable.bg_atom_photo_full
-        val fallbackRes = com.example.vkbookandroid.R.drawable.bg_atom_photo_image
 
         val existing = cachedNuclearBitmap
         if (existing != null && !existing.isRecycled) {
             val resId = cachedNuclearBitmapResId
-            if (resId == targetRes || resId == fallbackRes) {
+            if (resId == targetRes) {
                 android.util.Log.d("AppTheme", "Используем кэшированный bitmap")
                 return existing
             }
         }
 
         android.util.Log.d("AppTheme", "Декодируем bitmap из ресурсов...")
-        var resUsed: Int? = null
-        var decoded: Bitmap? = decodeBitmapResource(context, targetRes)
-        if (decoded == null) {
-            android.util.Log.w("AppTheme", "Не удалось загрузить bg_atom_photo_full, пробуем fallback")
-            decoded = decodeBitmapResource(context, fallbackRes)
-            resUsed = if (decoded != null) fallbackRes else null
-        } else {
-            resUsed = targetRes
-        }
+        val decoded: Bitmap? = decodeBitmapResource(context, targetRes)
+        val resUsed: Int? = if (decoded != null) targetRes else null
 
         if (decoded != null) {
             cachedNuclearBitmap = decoded
