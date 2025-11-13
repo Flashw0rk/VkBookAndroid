@@ -18,23 +18,29 @@
         <Button
             android:id="@+id/btnPrevYear"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="40dp"
             android:text="◀"
             android:textSize="16sp"
             android:minWidth="36dp"
-            android:minHeight="0dp"
+            android:paddingStart="2.5mm"
+            android:paddingEnd="3.0mm"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
             android:includeFontPadding="true"
             android:gravity="center" />
 
         <Button
             android:id="@+id/btnToday"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="40dp"
             android:layout_marginStart="2mm"
             android:text="Сегодня"
             android:textSize="16sp"
             android:minWidth="72dp"
-            android:minHeight="0dp"
+            android:paddingStart="1.9mm"
+            android:paddingEnd="12dp"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
             android:includeFontPadding="true"
             android:gravity="center" />
 
@@ -57,40 +63,43 @@
         <Button
             android:id="@+id/btnNextYear2"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="40dp"
             android:layout_marginStart="2mm"
             android:text="▶"
             android:textSize="16sp"
             android:minWidth="36dp"
-            android:minHeight="0dp"
+            android:paddingStart="3.0mm"
+            android:paddingEnd="2.5mm"
+            android:paddingTop="0.5mm"
+            android:paddingBottom="0.9mm"
             android:includeFontPadding="true"
             android:gravity="center" />
 
         <Button
             android:id="@+id/btnZoomOut"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:layout_marginStart="2mm"
             android:text="-"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:minHeight="0dp"
+            android:padding="0dp"
             android:includeFontPadding="false"
             android:gravity="center" />
 
         <Button
             android:id="@+id/btnZoomIn"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
             android:layout_marginStart="2mm"
             android:text="+"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@android:color/white"
             android:minWidth="36dp"
-            android:minHeight="0dp"
+            android:padding="0dp"
             android:includeFontPadding="false"
             android:gravity="center" />
 

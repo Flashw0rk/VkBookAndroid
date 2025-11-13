@@ -24,8 +24,6 @@ import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.lifecycle.Observer
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -314,9 +312,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
     }
     
     override fun isFragmentReady(): Boolean {
-        // ИСПРАВЛЕНИЕ: Для применения темы достаточно наличия view
-        // Адаптер и кнопки могут быть не инициализированы
-        return view != null && isAdded
+        return ::adapter.isInitialized && ::toggleResizeModeButton.isInitialized && view != null
     }
 
     private fun setupSearch() {
@@ -375,7 +371,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         queryFlow.value = query
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
     private fun setupSearchFlow() {
         lifecycleScope.launch {
             queryFlow
@@ -706,14 +701,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
             
             toggleResizeModeButton.background = drawable
             toggleResizeModeButton.setTextColor(android.graphics.Color.WHITE)
-            
-            // Сигналы БЩУ: увеличиваем на 2dp (0.5мм) как в Арматуре
-            val px = toggleResizeModeButton.context.resources.displayMetrics.density
-            val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
-            val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
-            toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
-            toggleResizeModeButton.minHeight = 0
-            toggleResizeModeButton.minWidth = 0
             return
         }
         
@@ -740,14 +727,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         val textColor = com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor()
         android.util.Log.d("DataFragment", "Цвет текста кнопки: #${Integer.toHexString(textColor)}")
         toggleResizeModeButton.setTextColor(textColor)
-        
-        // Сигналы БЩУ: увеличиваем на 2dp (0.5мм) как в Арматуре
-        val px = toggleResizeModeButton.context.resources.displayMetrics.density
-        val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
-        val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
-        toggleResizeModeButton.setPadding(paddingH, paddingV, paddingH, paddingV)
-        toggleResizeModeButton.minHeight = 0
-        toggleResizeModeButton.minWidth = 0
         
         android.util.Log.d("DataFragment", "Кнопка обновлена!")
     }

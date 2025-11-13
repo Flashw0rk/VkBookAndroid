@@ -28,21 +28,14 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <activity
-            android:name=".SplashActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.VkBookAndroid.Splash">
+            android:windowSoftInputMode="stateUnchanged|adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
-        
-        <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:theme="@style/Theme.VkBookAndroid"
-            android:windowSoftInputMode="stateUnchanged|adjustResize">
         </activity>
         
         <activity

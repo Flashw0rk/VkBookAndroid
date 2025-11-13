@@ -146,9 +146,6 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     
     private var isScheduleDataGenerated = false
     
-    // Флаг для предотвращения множественных загрузок фона
-    private var isLoadingBackground: Boolean = false
-    
     override fun onResume() {
         super.onResume()
         
@@ -242,16 +239,6 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                 // ИСПРАВЛЕНИЕ: Используем setBackgroundResource вместо backgroundTintList
                 button.setBackgroundResource(R.drawable.bg_zoom_button)
                 button.setTextColor(android.graphics.Color.WHITE)
-                
-                // График (ScheduleFragment): УВЕЛИЧИВАЕМ на 72.8% (базовый * 1.728)
-                val px = button.context.resources.displayMetrics.density
-                val baseH = com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal()
-                val baseV = com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical()
-                val paddingH = ((baseH * 1.728f) * px).toInt()
-                val paddingV = ((baseV * 1.728f) * px).toInt()
-                button.setPadding(paddingH, paddingV, paddingH, paddingV)
-                button.minHeight = 0
-                button.minWidth = 0
             }
             return
         }
@@ -267,16 +254,6 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
             drawable?.let { button.background = it }
             button.setTextColor(com.example.vkbookandroid.theme.AppTheme.getButtonTextColor())
-            
-            // График (ScheduleFragment): УВЕЛИЧИВАЕМ на 72.8% (базовый * 1.728)
-            val px = button.context.resources.displayMetrics.density
-            val baseH = com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal()
-            val baseV = com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical()
-            val paddingH = ((baseH * 1.728f) * px).toInt()
-            val paddingV = ((baseV * 1.728f) * px).toInt()
-            button.setPadding(paddingH, paddingV, paddingH, paddingV)
-            button.minHeight = 0
-            button.minWidth = 0
         }
     }
     
@@ -321,34 +298,26 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             v.setBackgroundColor(bgColor)
             
             // Затем асинхронно загружаем фоновое изображение (если есть)
-            // ЗАЩИТА: предотвращаем множественные одновременные загрузки
-            if (!isLoadingBackground) {
-                isLoadingBackground = true
-                lifecycleScope.launch(Dispatchers.IO) {
-                    try {
-                        Log.d(TAG, "Загружаем фоновое изображение...")
-                        val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
-                        
-                        if (bgDrawable != null && isAdded) {
-                            withContext(Dispatchers.Main) {
-                                if (isAdded && v.isAttachedToWindow) {
-                                    Log.d(TAG, "Применяем фоновое изображение")
-                                    v.background = bgDrawable
-                                } else {
-                                    Log.w(TAG, "View не готов для фонового изображения: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
-                                }
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    Log.d(TAG, "Загружаем фоновое изображение...")
+                    val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
+                    
+                    if (bgDrawable != null && isAdded) {
+                        withContext(Dispatchers.Main) {
+                            if (isAdded && v.isAttachedToWindow) {
+                                Log.d(TAG, "Применяем фоновое изображение")
+                                v.background = bgDrawable
+                            } else {
+                                Log.w(TAG, "View не готов для фонового изображения: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
                             }
-                        } else {
-                            Log.d(TAG, "Фоновое изображение отсутствует или фрагмент не добавлен")
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Ошибка загрузки фонового изображения", e)
-                    } finally {
-                        isLoadingBackground = false
+                    } else {
+                        Log.d(TAG, "Фоновое изображение отсутствует или фрагмент не добавлен")
                     }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка загрузки фонового изображения", e)
                 }
-            } else {
-                Log.d(TAG, "Загрузка фона уже в процессе, пропускаем")
             }
         }
         
