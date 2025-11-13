@@ -2,6 +2,7 @@ package com.example.vkbookandroid
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,7 +11,11 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
 
@@ -18,6 +23,9 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
     private lateinit var textSchemeTitle: TextView
     private lateinit var textSelectedPath: TextView
     private lateinit var pdfContainer: FrameLayout
+    
+    // Флаг для предотвращения множественных одновременных загрузок фона
+    private var isLoadingBackground: Boolean = false
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -51,7 +59,7 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
     }
     
     override fun isFragmentReady(): Boolean {
-        return ::buttonPickPdf.isInitialized && view != null
+        return view != null && isAdded
     }
     
     /**
@@ -66,13 +74,44 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
         android.util.Log.d("SchemesFragment", "Применяем тему к схемам")
         
         // Применяем фон
-        view?.setBackgroundColor(
-            if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
-                com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+        view?.let { v ->
+            if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+                v.background = null
+                v.setBackgroundColor(android.graphics.Color.parseColor("#FAFAFA"))
             } else {
-                android.graphics.Color.parseColor("#FAFAFA")
+                val bgColor = com.example.vkbookandroid.theme.AppTheme.getBackgroundColor()
+                v.setBackgroundColor(bgColor)
+                
+                // Затем асинхронно загружаем фоновое изображение
+                if (!isLoadingBackground) {
+                    isLoadingBackground = true
+                    Log.d("SchemesFragment", "Начинаем загрузку фонового изображения...")
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            val bgDrawable = com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(requireContext())
+                            Log.d("SchemesFragment", "Фоновое изображение получено: ${bgDrawable != null}")
+                            if (bgDrawable != null && isAdded) {
+                                withContext(Dispatchers.Main) {
+                                    val currentView = view
+                                    if (isAdded && currentView != null && currentView.isAttachedToWindow) {
+                                        Log.d("SchemesFragment", "Применяем фоновое изображение к view")
+                                        currentView.background = bgDrawable
+                                    } else {
+                                        Log.w("SchemesFragment", "View не готов: isAdded=$isAdded, isAttached=${currentView?.isAttachedToWindow}")
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("SchemesFragment", "Ошибка загрузки фонового изображения", e)
+                        } finally {
+                            isLoadingBackground = false
+                        }
+                    }
+                } else {
+                    Log.d("SchemesFragment", "Загрузка фонового изображения уже выполняется, пропускаем")
+                }
             }
-        )
+        }
         
         // Применяем тему к кнопке
         applyThemeToButtons()
@@ -80,7 +119,13 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
     
     private fun applyThemeToButtons() {
         if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
-            // Классическая тема - оставляем как есть
+            // Схемы: увеличиваем на 2dp (0.5мм)
+            val px = buttonPickPdf.context.resources.displayMetrics.density
+            val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+            val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+            buttonPickPdf.setPadding(paddingH, paddingV, paddingH, paddingV)
+            buttonPickPdf.minHeight = 0
+            buttonPickPdf.minWidth = 0
             return
         }
         
@@ -97,6 +142,14 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
         
         buttonPickPdf.background = drawable
         buttonPickPdf.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
+        
+        // Схемы: увеличиваем на 2dp (0.5мм)
+        val px = buttonPickPdf.context.resources.displayMetrics.density
+        val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
+        val paddingV = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingVertical() + 2) * px).toInt()
+        buttonPickPdf.setPadding(paddingH, paddingV, paddingH, paddingV)
+        buttonPickPdf.minHeight = 0
+        buttonPickPdf.minWidth = 0
     }
     
     private fun darkenColor(color: Int, factor: Float): Int {

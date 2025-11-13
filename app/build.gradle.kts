@@ -4,6 +4,9 @@ import java.io.FileInputStream
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    jacoco
+    id("com.google.gms.google-services") version "4.4.0" apply false
+    id("com.google.firebase.crashlytics") version "2.9.9" apply false
 }
 
 // Загружаем конфигурацию keystore из local.properties
@@ -52,6 +55,8 @@ android {
 
     buildTypes {
         release {
+            // ProGuard ОТКЛЮЧЕН - вызывает краш при запуске
+            // Приложение работает стабильно без него
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false // Отключаем debug режим в release
@@ -123,6 +128,8 @@ dependencies {
     // WorkManager для фоновой синхронизации
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     
+    androidTestImplementation("androidx.work:work-testing:2.9.1")
+
     // Удалено: зависимости SQLite FTS5 (поиск работает на PersistentSearchEngine)
 
     // Сетевые зависимости для API
@@ -134,10 +141,72 @@ dependencies {
     // Безопасное хранение данных
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     
+    // Robolectric для JVM-юнит тестов Android-логики
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("androidx.test:core:1.5.0")
+    
     // PDF Viewer (пока не используется)
     // implementation("com.github.barteksc:android-pdf-viewer:3.2.0-beta.1")
     
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    
+    // Firebase (добавляются только если файл google-services.json существует)
+    if (rootProject.file("app/google-services.json").exists()) {
+        implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+        implementation("com.google.firebase:firebase-crashlytics-ktx")
+        implementation("com.google.firebase:firebase-analytics-ktx")
+        implementation("com.google.firebase:firebase-config-ktx")
+    }
+}
+
+// ===== JaCoCo Configuration =====
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest", "createDebugCoverageReport")
+    
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+        csv.required.set(false)
+    }
+    
+    val fileFilter = listOf(
+        "**/R.class",
+        "**/R$*.class",
+        "**/BuildConfig.*",
+        "**/Manifest*.*",
+        "**/*Test*.*",
+        "android/**/*.*",
+        "**/databinding/*",
+        "**/generated/**"
+    )
+    
+    val debugTree = fileTree("${buildDir}/tmp/kotlin-classes/debug") {
+        exclude(fileFilter)
+    }
+    
+    val mainSrc = "${project.projectDir}/src/main/java"
+    
+    sourceDirectories.setFrom(files(mainSrc))
+    classDirectories.setFrom(files(debugTree))
+    executionData.setFrom(fileTree(buildDir) {
+        include(
+            "outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec",
+            "outputs/code_coverage/debugAndroidTest/connected/**/*.ec"
+        )
+    })
+}
+
+android {
+    buildTypes {
+        debug {
+            enableAndroidTestCoverage = true
+            enableUnitTestCoverage = true
+        }
+    }
 }
