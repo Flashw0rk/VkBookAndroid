@@ -52,4 +52,11 @@ class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activi
     fun getGlobalPositionAt(localIndex: Int): Int {
         return visiblePositions.getOrElse(localIndex) { 0 }
     }
+
+    fun getLocalIndex(globalPosition: Int): Int? {
+        val index = visiblePositions.indexOf(globalPosition)
+        return if (index >= 0) index else null
+    }
+
+    fun getVisiblePositions(): List<Int> = visiblePositions.toList()
 }
