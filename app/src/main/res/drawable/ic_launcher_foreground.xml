@@ -2,8 +2,8 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:drawable="@drawable/gerb_s_fonom"
-        android:top="16.3dp"
-        android:bottom="13.7dp"
+        android:top="15.3dp"
+        android:bottom="14.7dp"
         android:left="12dp"
         android:right="12dp" />
 </layer-list>
