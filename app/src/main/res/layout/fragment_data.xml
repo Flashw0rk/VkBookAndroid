@@ -71,7 +71,6 @@
         android:id="@+id/hscroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:fillViewport="true"
         android:soundEffectsEnabled="false"
         app:layout_constraintTop_toBottomOf="@+id/app_bar_layout"
         app:layout_constraintBottom_toBottomOf="parent">
@@ -81,6 +80,8 @@
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:scrollbars="vertical"
+            android:scrollbarSize="0dp"
+            android:clipToPadding="false"
             app:fastScrollEnabled="true"
             app:fastScrollVerticalThumbDrawable="@drawable/fastscroll_thumb"
             app:fastScrollVerticalTrackDrawable="@drawable/fastscroll_track"

@@ -111,6 +111,8 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         recyclerView.itemAnimator = null
         // setHasFixedSize(true) убран, так как RecyclerView использует wrap_content в layout
         recyclerView.setItemViewCacheSize(20)
+        // Устанавливаем начальный padding = 0 (без режима редактирования)
+        recyclerView.setPadding(0, 0, 0, 0)
         adapter = SignalsAdapter(emptyList(), isResizingMode, { columnIndex, newWidth, action ->
             val headerName = adapter.headers.getOrNull(columnIndex)
             if (headerName != null) {
@@ -692,6 +694,20 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             isResizingMode = !isResizingMode
             toggleResizeModeButton.text = if (isResizingMode) "Сохранить" else "Редактировать"
             adapter.setResizingMode(isResizingMode)
+            
+            // Добавляем правый padding в режиме редактирования для удобства растягивания последнего столбца
+            val paddingRight = if (isResizingMode) {
+                (48 * resources.displayMetrics.density).toInt() // 48dp зазор для handle последнего столбца
+            } else {
+                0
+            }
+            recyclerView.setPadding(
+                recyclerView.paddingLeft,
+                recyclerView.paddingTop,
+                paddingRight,
+                recyclerView.paddingBottom
+            )
+            
             recyclerView.isNestedScrollingEnabled = true
         }
     }

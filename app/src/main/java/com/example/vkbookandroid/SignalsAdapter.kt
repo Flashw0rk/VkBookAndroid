@@ -455,7 +455,12 @@ class SignalsAdapter(
                     totalWidth += w.coerceAtMost(adapter.maxColumnWidthPx(context)) // Clamp to 50mm
                 }
             }
-            return totalWidth + (visibleCount - 1).coerceAtLeast(0) * context.dpToPx(8) // Add width of all resize handles between visible columns
+            // В режиме редактирования добавляем пространство для handles
+            if (_isResizingMode) {
+                return totalWidth + visibleCount * context.dpToPx(16)
+            } else {
+                return totalWidth  // Без дополнительных зазоров в обычном режиме
+            }
         }
     }
 
@@ -722,7 +727,12 @@ class SignalsAdapter(
                     totalWidth += w.coerceAtMost(adapter.maxColumnWidthPx(context)) // Clamp to 50mm
                 }
             }
-            return totalWidth + (visibleCount) * context.dpToPx(16) // Width of all resize handles including trailing for visible columns
+            // В режиме редактирования добавляем пространство для handles
+            if (_isResizingMode) {
+                return totalWidth + visibleCount * context.dpToPx(16)
+            } else {
+                return totalWidth  // Без дополнительных зазоров в обычном режиме
+            }
         }
     }
 
@@ -959,9 +969,14 @@ class SignalsAdapter(
                 totalWidth += w.coerceAtMost(maxColumnWidthPx(context)) // Clamp to 50mm
             }
         }
-        // Учитываем хэндлы между колонками и правый конечный хэндл только для видимых колонок
-        val handleWidth = context.dpToPx(16)
-        return totalWidth + visibleCount * handleWidth
+        // Учитываем хэндлы ТОЛЬКО в режиме редактирования
+        // В обычном режиме убираем все дополнительные отступы
+        if (_isResizingMode) {
+            val handleWidth = context.dpToPx(16)
+            return totalWidth + visibleCount * handleWidth  // Полное пространство для handles
+        } else {
+            return totalWidth  // Без дополнительных зазоров в обычном режиме
+        }
     }
 
     // === Поиск по столбцам ===

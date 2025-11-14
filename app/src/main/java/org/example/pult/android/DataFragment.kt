@@ -91,6 +91,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         recyclerView.itemAnimator = null
         // recyclerView.setHasFixedSize(true) // Отключено из-за конфликта с wrap_content
         recyclerView.setItemViewCacheSize(20)
+        // Устанавливаем начальный padding = 0 (без режима редактирования)
+        recyclerView.setPadding(0, 0, 0, 0)
         adapter = SignalsAdapter(
             emptyList(),
             isResizingMode,
@@ -457,6 +459,20 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
             isResizingMode = !isResizingMode
             toggleResizeModeButton.text = if (isResizingMode) "Сохранить" else "Редактировать"
             adapter.setResizingMode(isResizingMode)
+            
+            // Добавляем правый padding в режиме редактирования для удобства растягивания последнего столбца
+            val paddingRight = if (isResizingMode) {
+                (48 * resources.displayMetrics.density).toInt() // 48dp зазор для handle последнего столбца
+            } else {
+                0
+            }
+            recyclerView.setPadding(
+                recyclerView.paddingLeft,
+                recyclerView.paddingTop,
+                paddingRight,
+                recyclerView.paddingBottom
+            )
+            
             // Отключаем/включаем прокрутку RecyclerView: оставим включённой, но не будем перехватывать события сверху
             recyclerView.isNestedScrollingEnabled = true
             Log.d("DataFragment", "Resizing mode toggled: $isResizingMode")
