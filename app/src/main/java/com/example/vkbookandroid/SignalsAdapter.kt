@@ -25,6 +25,7 @@ import com.example.vkbookandroid.search.SearchDiffCallback
 import com.example.vkbookandroid.search.DataDiffCallback
 import com.example.vkbookandroid.search.DiffUtilHelper
 import androidx.recyclerview.widget.DiffUtil
+import com.example.vkbookandroid.theme.AppTheme
 import kotlinx.coroutines.*
 import java.util.LinkedHashMap
 
@@ -516,13 +517,19 @@ class SignalsAdapter(
                         val score = SearchNormalizer.getMatchScore(cellText, query)
                         val shouldHighlightBg = score > 0
                         if (shouldHighlightBg) {
-                            setBackgroundResource(R.drawable.cell_highlight)
-                            val color = when {
-                                score >= 1000 -> 0xFF28A745.toInt()
-                                score >= 500 -> 0xFFFF9800.toInt()
-                                else -> 0xFFF44336.toInt()
+                            val useSolidHighlight = AppTheme.isRosatomTheme() || AppTheme.isNuclearTheme()
+                            if (useSolidHighlight) {
+                                setBackgroundResource(R.drawable.cell_highlight_solid)
+                                try { backgroundTintList = null } catch (_: Throwable) {}
+                            } else {
+                                setBackgroundResource(R.drawable.cell_highlight)
+                                val overlayColor = when {
+                                    score >= 1000 -> 0xFF28A745.toInt()
+                                    score >= 500 -> 0xFFFF9800.toInt()
+                                    else -> 0xFFF44336.toInt()
+                                }
+                                try { backgroundTintList = android.content.res.ColorStateList.valueOf(overlayColor) } catch (_: Throwable) {}
                             }
-                            try { backgroundTintList = android.content.res.ColorStateList.valueOf(color) } catch (_: Throwable) {}
                         } else {
                             setBackgroundResource(R.drawable.cell_border)
                             try { backgroundTintList = null } catch (_: Throwable) {}
@@ -698,10 +705,8 @@ class SignalsAdapter(
 
             val finalMaxCellHeight = maxOf(maxCellHeight, context.dpToPx(50))
             cellContainer.layoutParams.height = finalMaxCellHeight
-            // Переприсваиваем ширину строки под реально добавленные ячейки при активном запросе
-            if (query.isNotEmpty() && effectiveRowWidth > 0) {
-                cellContainer.layoutParams.width = effectiveRowWidth
-            }
+            // ВАЖНО: не меняем ширину строки в режиме поиска, чтобы header и строки
+            // всегда имели одинаковый totalRowWidth и не возникал правый зазор
             textViews.forEach { textView ->
                 textView.layoutParams.height = finalMaxCellHeight
                 Log.d("RowViewHolder", "Cell text: ${textView.text}, Final Height: ${textView.layoutParams.height}")
@@ -874,18 +879,37 @@ class SignalsAdapter(
 
     fun applyColumnOrder(order: List<String>) {
         if (order.isEmpty()) return
+
         val current = headers.toList()
-        
-        // Проверяем, что все колонки из order существуют в current
-        val allExist = order.all { desired -> current.any { it == desired } }
-        if (!allExist || order.size != current.size) return // несовпадение наборов колонок — пропускаем
-        
+
+        // Видимые колонки (без скрытых, например PDF_Схема_и_ID_арматуры)
+        val visibleCurrent = current.filterNot { isHidden(it) }
+
+        // Порядок, пришедший «снаружи», трактуем как порядок ТОЛЬКО видимых колонок
+        val allExist = order.all { desired -> visibleCurrent.any { it == desired } }
+        if (!allExist || order.size != visibleCurrent.size) {
+            // Несовпадение наборов видимых колонок — безопасно пропускаем
+            return
+        }
+
+        // Перестраиваем headers: скрытые колонки остаются на своих местах,
+        // для видимых берём порядок из списка order
+        val visibleIterator = order.iterator()
+        val newHeaders = mutableListOf<String>()
+        current.forEach { headerName ->
+            if (isHidden(headerName)) {
+                newHeaders.add(headerName)
+            } else {
+                newHeaders.add(visibleIterator.next())
+            }
+        }
+
         // ИСПРАВЛЕНИЕ: Пересобираем заголовки и данные, сохраняя соответствие "заголовок -> значение"
-        headers = order.toMutableList()
+        headers = newHeaders
         data = data.map { row ->
             val oldMap = row.asMap()  // Получаем исходный Map с парами "заголовок -> значение"
             val newMap = LinkedHashMap<String, String>()
-            order.forEach { headerName ->
+            headers.forEach { headerName ->
                 // Берем значение по ключу (названию заголовка), а не по индексу!
                 newMap[headerName] = oldMap[headerName] ?: ""
             }
@@ -896,7 +920,7 @@ class SignalsAdapter(
         _originalData = _originalData.map { row ->
             val oldMap = row.asMap()
             val newMap = LinkedHashMap<String, String>()
-            order.forEach { headerName ->
+            headers.forEach { headerName ->
                 newMap[headerName] = oldMap[headerName] ?: ""
             }
             RowDataDynamic(newMap)
@@ -917,17 +941,37 @@ class SignalsAdapter(
 
     fun appendData(more: List<RowDataDynamic>) {
         if (more.isEmpty()) return
+        // НОРМАЛИЗАЦИЯ: приводим новые строки к текущему порядку headers,
+        // чтобы нижние страницы использовали тот же порядок колонок, что и верх таблицы.
+        val normalizedMore = normalizeRowsToCurrentHeaders(more)
+
         // Во время показа результатов поиска (включая пустой результат) не меняем текущие отображаемые данные,
         // чтобы таблица не «возвращалась» к полной при догрузке страниц. Обновляем только _originalData.
         if (showingSearchResults) {
-            _originalData = if (_originalData.isNotEmpty()) _originalData + more else more
+            _originalData = if (_originalData.isNotEmpty()) _originalData + normalizedMore else normalizedMore
             return
         }
         val start = data.size
-        data = data + more
-        notifyItemRangeInserted(start + 1, more.size) // +1 из-за заголовка
+        data = data + normalizedMore
+        notifyItemRangeInserted(start + 1, normalizedMore.size) // +1 из-за заголовка
         if (_originalData.isNotEmpty()) {
-            _originalData = _originalData + more
+            _originalData = _originalData + normalizedMore
+        }
+    }
+
+    /**
+     * Нормализует строки к текущему списку headers, чтобы порядок значений всегда
+     * соответствовал порядку колонок (учитывая скрытые колонки, такие как PDF).
+     */
+    private fun normalizeRowsToCurrentHeaders(rows: List<RowDataDynamic>): List<RowDataDynamic> {
+        if (rows.isEmpty() || headers.isEmpty()) return rows
+        return rows.map { row ->
+            val oldMap = row.asMap()
+            val newMap = LinkedHashMap<String, String>()
+            headers.forEach { headerName ->
+                newMap[headerName] = oldMap[headerName] ?: ""
+            }
+            RowDataDynamic(newMap)
         }
     }
 
@@ -1083,8 +1127,9 @@ class SignalsAdapter(
         currentSearchQuery = searchQuery
         showingSearchResults = true
         
-        // Извлекаем данные из SearchResult
-        val newData = searchResults.map { it.data }
+        // Извлекаем данные из SearchResult и нормализуем их под текущий порядок headers
+        val rawData = searchResults.map { it.data }
+        val newData = normalizeRowsToCurrentHeaders(rawData)
         
         // ИСПРАВЛЕНИЕ: Используем DiffUtil безопасно
         adapterScope.launch {

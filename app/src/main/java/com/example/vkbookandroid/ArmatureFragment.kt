@@ -664,6 +664,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             searchView.setQuery("", false)
             scrollToTopOnNextResults = true
             queryFlow.value = ""
+            showFullTable()
             (activity as? MainActivity)?.onFragmentSearchQueryChanged("")
             true // Возвращаем true, чтобы SearchView не закрывался
         }
@@ -722,6 +723,11 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         }
     }
 
+    private fun showFullTable() {
+        try { (recyclerView.parent as? View)?.visibility = View.VISIBLE } catch (_: Throwable) {}
+        emptyView?.visibility = View.GONE
+    }
+
     private fun scrollToTop() {
         try {
             val layoutManager = recyclerView.layoutManager as? LinearLayoutManager
@@ -776,6 +782,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                                     try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
                                     recyclerView.requestLayout()
                                 }
+                                showFullTable()
                             }
                             emit(Unit)
                             return@flow

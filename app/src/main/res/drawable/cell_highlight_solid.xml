@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Базовый фон таблицы, как у обычной ячейки -->
+    <item android:drawable="@drawable/cell_border"/>
+
+    <!-- Полупрозрачное оранжевое покрытие -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#26FF9800"/>
+            <stroke
+                android:width="0.8dp"
+                android:color="#FF9800"/>
+        </shape>
+    </item>
+</layer-list>
+

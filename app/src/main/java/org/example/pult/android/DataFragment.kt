@@ -357,6 +357,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
             queryFlow.value = ""
             lastRawQuery = ""
             (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged("")
+            showFullTable()
             true // Возвращаем true, чтобы SearchView не закрывался
         }
 
@@ -400,9 +401,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                         try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
                         recyclerView.requestLayout()
                     }
-                    // Дополнительно: показать таблицу и скрыть пустой вид при очистке
-                    emptyView?.visibility = View.GONE
-                    (recyclerView.parent as? View)?.visibility = View.VISIBLE
+                    showFullTable()
                     // Дополнительный скролл чуть позже, чтобы закрепить заголовок
                     recyclerView.postDelayed({
                         try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
@@ -487,6 +486,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         scrollToBottomButton.setOnClickListener {
             scrollToBottom()
         }
+    }
+
+    private fun showFullTable() {
+        emptyView?.visibility = View.GONE
+        try { (recyclerView.parent as? View)?.visibility = View.VISIBLE } catch (_: Throwable) {}
     }
 
     private fun scrollToTop() {
