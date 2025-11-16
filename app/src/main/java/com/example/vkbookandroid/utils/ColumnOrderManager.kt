@@ -4,6 +4,18 @@ import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 
+/**
+ * Сервис для сохранения и восстановления порядка колонок в таблицах.
+ *
+ * Хранит два набора порядков:
+ * - `PREFS_BSCHU` — порядок колонок для вкладки "Сигналы БЩУ" (файл `Oborudovanie_BSCHU.xlsx`);
+ * - `PREFS_ARMATURE` — порядок колонок для вкладки "Арматура" (файл `Armatures.xlsx`).
+ *
+ * Вместо индексов колонок сохраняются **имена** (заголовки) колонок. Это позволяет
+ * свободно менять их количество и порядок в Excel, не ломая сохранённые настройки.
+ * Для арматуры дополнительно фильтруется служебная колонка `PDF_Схема_и_ID_арматуры`,
+ * чтобы она не попадала в сохранённый порядок и не смещала данные при повторном открытии.
+ */
 object ColumnOrderManager {
     private const val PREFS_BSCHU = "ColumnOrderBschu"
     private const val PREFS_ARMATURE = "ColumnOrderArmature"

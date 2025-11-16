@@ -38,11 +38,21 @@ import kotlinx.coroutines.flow.collect
 import com.example.vkbookandroid.search.SearchManager
 import com.example.vkbookandroid.search.SearchResult
 
-// Extension function to convert dp to pixels
+// Утилита: перевод dp в пиксели для установки размеров/отступов в коде
 fun Context.dpToPx(dp: Int): Int {
     return (dp * resources.displayMetrics.density).toInt()
 }
 
+/**
+ * Фрагмент "Сигналы БЩУ".
+ *
+ * Отвечает за:
+ * - загрузку и кэширование табличных данных из файла `Oborudovanie_BSCHU.xlsx`;
+ * - отображение таблицы сигналов БЩУ через общий `SignalsAdapter` с поддержкой горизонтального скролла;
+ * - сохранение ширины и порядка колонок (через `ColumnWidthManager` и `ColumnOrderManager`);
+ * - полнотекстовый поиск по сигналам через `SearchManager`;
+ * - применение выбранной темы и управление кнопками прокрутки.
+ */
 class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
 
     private lateinit var recyclerView: RecyclerView

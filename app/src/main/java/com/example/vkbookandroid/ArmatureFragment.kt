@@ -40,6 +40,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/**
+ * Экран "Арматура".
+ *
+ * Отвечает за:
+ * - загрузку и кэширование данных об арматуре из Excel/сервера через `AppExcelDataManager` и `ArmatureRepository`;
+ * - отображение таблицы арматуры с помощью общего `SignalsAdapter` и горизонтального скролла;
+ * - сохранение пользовательских настроек колонок (ширина, порядок, скрытые столбцы);
+ * - полнотекстовый поиск по арматуре (включая голосовой ввод) и переход к PDF‑схемам по нажатию на ячейку.
+ *
+ * Реализует:
+ * - `RefreshableFragment` — позволяет внешне инициировать перезагрузку данных;
+ * - `ThemeManager.ThemeAwareFragment` — применяет текущую тему оформления к своим View.
+ */
 class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandroid.theme.ThemeManager.ThemeAwareFragment {
     
     private lateinit var recyclerView: RecyclerView

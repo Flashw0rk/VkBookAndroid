@@ -19,6 +19,7 @@ import org.example.pult.android.dpToPx
 import android.view.MotionEvent
 import android.os.Handler
 import android.os.Looper
+import com.example.vkbookandroid.BuildConfig
 import com.example.vkbookandroid.utils.SearchNormalizer
 import com.example.vkbookandroid.search.SearchResult
 import com.example.vkbookandroid.search.SearchDiffCallback
@@ -29,6 +30,16 @@ import com.example.vkbookandroid.theme.AppTheme
 import kotlinx.coroutines.*
 import java.util.LinkedHashMap
 
+/**
+ * Универсальный адаптер табличного представления для вкладок "Арматура" и "Сигналы БЩУ".
+ *
+ * Отвечает за:
+ * - отображение строк `RowDataDynamic` в виде таблицы с горизонтальной прокруткой;
+ * - управление шириной колонок и их порядком (через `onColumnResize` и `onColumnReorder`);
+ * - нормализацию данных по именам колонок (`headers`), чтобы значения не смещались при перестановке/скрытии столбцов;
+ * - поддержку полнотекстового поиска (через `SearchManager` и `DiffUtil`), включая подсветку совпадений;
+ * - дополнительную логику для колонки "Арматура" (кликабельные ячейки при наличии PDF-ссылки).
+ */
 class SignalsAdapter(
     private var data: List<RowDataDynamic>,
     private var _isResizingMode: Boolean,
@@ -485,7 +496,9 @@ class SignalsAdapter(
             val textViews = mutableListOf<TextView>()
             val visibleIndices = headers.mapIndexedNotNull { idx, h -> if (!adapter.isHidden(h)) idx else null }
 
-            Log.d("RowViewHolder", "Binding row: ${rowData.getAllProperties()}")
+            if (BuildConfig.DEBUG) {
+                Log.d("RowViewHolder", "Binding row: ${'$'}{rowData.getAllProperties()}")
+            }
             headers.forEachIndexed { i, headerName ->
                 if (adapter.isHidden(headerName)) return@forEachIndexed
                 val colWidthRaw = columnWidths[headerName] ?: context.dpToPx(100) // Default width in dp
@@ -576,7 +589,9 @@ class SignalsAdapter(
                 textView.measure(View.MeasureSpec.makeMeasureSpec(colWidth, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
                 maxCellHeight = maxOf(maxCellHeight, textView.measuredHeight)
-                Log.d("RowViewHolder", "Cell: '$headerName', Value: '${textView.text}', Measured Width: ${textView.measuredWidth}, Measured Height: ${textView.measuredHeight}")
+                if (BuildConfig.DEBUG) {
+                    Log.d("RowViewHolder", "Cell: '$headerName', Value: '${textView.text}', Measured Width: ${textView.measuredWidth}, Measured Height: ${textView.measuredHeight}")
+                }
                 textViews.add(textView)
                 cellContainer.addView(textView)
                 effectiveRowWidth += colWidth
@@ -709,7 +724,9 @@ class SignalsAdapter(
             // всегда имели одинаковый totalRowWidth и не возникал правый зазор
             textViews.forEach { textView ->
                 textView.layoutParams.height = finalMaxCellHeight
-                Log.d("RowViewHolder", "Cell text: ${textView.text}, Final Height: ${textView.layoutParams.height}")
+                if (BuildConfig.DEBUG) {
+                    Log.d("RowViewHolder", "Cell text: ${'$'}{textView.text}, Final Height: ${'$'}{textView.layoutParams.height}")
+                }
             }
             cellContainer.requestLayout()
 
