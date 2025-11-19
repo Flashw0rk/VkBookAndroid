@@ -10,12 +10,29 @@ import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
+import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import com.example.vkbookandroid.BuildConfig
 import com.example.vkbookandroid.R
 import com.example.vkbookandroid.ServerSettingsActivity
 import com.example.vkbookandroid.utils.AutoSyncSettings
+import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.network.ServerInfoRepository
 import com.example.vkbookandroid.network.collectWifiDiagnostics
+import com.example.vkbookandroid.network.model.RateLimitInfo
+import com.example.vkbookandroid.network.model.ServerInfoPayload
+import com.example.vkbookandroid.network.model.UsageQuotaInfo
+import com.example.vkbookandroid.network.model.WarningFlag
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import java.security.MessageDigest
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import android.util.Log
 
 /**
  * Фрагмент настроек подключения к серверу
@@ -36,6 +53,7 @@ class ConnectionSettingsFragment : Fragment() {
     private lateinit var spinnerSyncInterval: Spinner
     private lateinit var tvAutoSyncStatus: TextView
     private lateinit var btnDiagnose: Button
+    private lateinit var btnServerInfo: Button
     
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -62,6 +80,7 @@ class ConnectionSettingsFragment : Fragment() {
         spinnerSyncInterval = view.findViewById(R.id.spinnerSyncInterval)
         tvAutoSyncStatus = view.findViewById(R.id.tvAutoSyncStatus)
         btnDiagnose = view.findViewById(R.id.btnDiagnose)
+        btnServerInfo = view.findViewById(R.id.btnServerInfo)
         
         setupIntervalSpinner()
         loadSettings()
@@ -80,7 +99,7 @@ class ConnectionSettingsFragment : Fragment() {
         } else {
             radioInternet.isChecked = true
             editServerUrl.isEnabled = false
-            editServerUrl.setText("http://158.160.157.7/")
+            editServerUrl.setText(DEFAULT_SERVER_URL)
         }
         
         // Загружаем URL
@@ -109,7 +128,7 @@ class ConnectionSettingsFragment : Fragment() {
             when (checkedId) {
                 R.id.radioInternet -> {
                     editServerUrl.isEnabled = false
-                    editServerUrl.setText("http://158.160.157.7/")
+                    editServerUrl.setText(DEFAULT_SERVER_URL)
                 }
                 R.id.radioCustom -> {
                     editServerUrl.isEnabled = true
@@ -158,6 +177,53 @@ class ConnectionSettingsFragment : Fragment() {
         // Кнопка диагностики - выполняет диагностику сети
         btnDiagnose.setOnClickListener {
             diagnoseNetwork()
+        }
+
+        btnServerInfo.setOnClickListener {
+            showServerInfoDialog()
+        }
+    }
+
+    private fun showServerInfoDialog() {
+        val dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_server_info, null, false)
+        val holder = ServerInfoDialogHolder(dialogView)
+        val baseUrl = ensureTrailingSlash(NetworkModule.getCurrentBaseUrl())
+        holder.setStaticInfo(
+            baseUrl = baseUrl,
+            endpoints = SERVER_ENDPOINTS
+        )
+
+        val dialog = AlertDialog.Builder(requireContext())
+            .setTitle("Render + R2")
+            .setView(dialogView)
+            .setNegativeButton("Закрыть", null)
+            .create()
+
+        holder.refreshButton.setOnClickListener {
+            loadServerInfo(holder)
+        }
+
+        dialog.show()
+        loadServerInfo(holder)
+    }
+
+    private fun loadServerInfo(holder: ServerInfoDialogHolder) {
+        holder.showLoading("Идёт запрос к Render...")
+        viewLifecycleOwner.lifecycleScope.launch {
+            val payload = try {
+                ServerInfoRepository.fetchServerInfo(NetworkModule.getCurrentBaseUrl())
+            } catch (e: Exception) {
+                Log.w("ConnectionSettings", "Не удалось получить данные сервера", e)
+                null
+            }
+
+            if (!isAdded) return@launch
+
+            if (payload == null || (payload.metrics == null && payload.r2Usage == null)) {
+                holder.showError("Render ещё просыпается. Повторите через 20–30 секунд.")
+            } else {
+                holder.bindPayload(payload)
+            }
         }
     }
     
@@ -217,16 +283,338 @@ class ConnectionSettingsFragment : Fragment() {
         val showInterval = autoSyncEnabled && checkBackgroundSync.isChecked
         layoutSyncInterval.visibility = if (showInterval) View.VISIBLE else View.GONE
     }
+
+    private fun ensureTrailingSlash(url: String): String {
+        return if (url.endsWith("/")) url else "$url/"
+    }
+
+    private fun ServerInfoDialogHolder.setStaticInfo(
+        baseUrl: String,
+        endpoints: List<ServerEndpoint>
+    ) {
+        baseUrlValue.text = baseUrl
+        endpointsValue.text = endpoints.joinToString("\n") { endpoint ->
+            "${endpoint.method} ${endpoint.path} — ${endpoint.description}"
+        }
+    }
+
+    private fun ServerInfoDialogHolder.showLoading(message: String) {
+        layoutLoading.visibility = View.VISIBLE
+        progress.isVisible = true
+        loadingText.isVisible = true
+        loadingText.text = message
+        content.visibility = View.GONE
+        refreshButton.isEnabled = false
+    }
+
+    private fun ServerInfoDialogHolder.showError(message: String) {
+        layoutLoading.visibility = View.VISIBLE
+        progress.isVisible = false
+        loadingText.isVisible = true
+        loadingText.text = message
+        content.visibility = View.GONE
+        refreshButton.isEnabled = true
+    }
+
+    private fun ServerInfoDialogHolder.bindPayload(payload: ServerInfoPayload) {
+        layoutLoading.visibility = View.GONE
+        content.visibility = View.VISIBLE
+        refreshButton.isEnabled = true
+
+        bindRateLimit(payload.metrics?.rateLimit)
+        downloadsDetails.text = formatDownloadsText(payload)
+        uploadsDetails.text = formatUploadsText(payload)
+        rateLimitGlobal.text = formatRateLimitGlobal(payload)
+
+        val storageQuota = payload.r2Usage?.storage
+        val classAQuota = payload.r2Usage?.classA
+        val classBQuota = payload.r2Usage?.classB
+
+        updateQuota(r2StorageProgress, r2StorageDetails, storageQuota, "Хранилище", R.drawable.progress_bar_secondary, requireContext())
+        updateQuota(r2ClassAProgress, r2ClassADetails, classAQuota, "Операции записи", R.drawable.progress_bar_primary, requireContext())
+        updateQuota(r2ClassBProgress, r2ClassBDetails, classBQuota, "Операции чтения", R.drawable.progress_bar_warning, requireContext())
+
+        val warningsText = buildWarningsText(payload)
+        r2Warnings.text = warningsText
+        layoutWarnings.visibility = if (warningsText.contains("⚠️") || warningsText.contains("⛔")) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+
+        val updatedAt = formatTimestamp(payload.r2Usage?.updatedAt) ?: formatInstantHuman(Instant.now())
+        lastUpdated.text = "Обновлено: $updatedAt"
+    }
+
+    private fun ServerInfoDialogHolder.bindRateLimit(rateLimit: RateLimitInfo?) {
+        if (rateLimit == null) {
+            rateLimitProgress.isIndeterminate = true
+            rateLimitDetails.text = "Лимит: нет данных"
+            rateLimitReset.text = ""
+            return
+        }
+
+        val limit = rateLimit.limit?.coerceAtLeast(1) ?: 200
+        val used = rateLimit.used?.coerceAtLeast(0) ?: 0
+        val remaining = rateLimit.remaining ?: (limit - used).coerceAtLeast(0)
+
+        rateLimitProgress.isIndeterminate = false
+        rateLimitProgress.max = limit
+        rateLimitProgress.progress = used.coerceAtMost(limit)
+
+        rateLimitDetails.text = "$used / $limit запросов · осталось $remaining"
+        rateLimitReset.text = formatRateLimitStatus(rateLimit)
+    }
+
+    private fun ServerInfoDialogHolder.updateQuota(
+        progressBar: ProgressBar,
+        targetView: TextView,
+        quota: UsageQuotaInfo?,
+        fallbackLabel: String,
+        defaultDrawable: Int = R.drawable.progress_bar_primary,
+        context: android.content.Context
+    ) {
+        if (quota == null) {
+            progressBar.isIndeterminate = true
+            targetView.text = "$fallbackLabel: нет данных"
+            return
+        }
+
+        progressBar.isIndeterminate = false
+        progressBar.max = 100
+
+        val percent = quota.percentage ?: run {
+            if (quota.limit != null && quota.limit > 0 && quota.used != null) {
+                (quota.used / quota.limit) * 100.0
+            } else null
+        }
+
+        val percentValue = percent?.roundToInt()?.coerceIn(0, 100) ?: 0
+        progressBar.progress = percentValue
+        
+        // Динамически меняем цвет progress bar в зависимости от процента использования
+        val progressDrawable = when {
+            percentValue >= 90 || quota.blocked == true -> R.drawable.progress_bar_warning
+            percentValue >= 70 -> R.drawable.progress_bar_warning
+            else -> defaultDrawable
+        }
+        progressBar.progressDrawable = context.getDrawable(progressDrawable)
+
+        // Вычисляем remaining, если не пришло с сервера
+        val calculatedRemaining = quota.remaining ?: run {
+            val used = quota.used ?: 0.0
+            val limit = quota.limit ?: 0.0
+            if (limit > 0) (limit - used).coerceAtLeast(0.0) else null
+        }
+        
+        // Улучшаем единицы измерения для читаемости
+        val usedTextFinal: String
+        val limitTextFinal: String
+        val remainingTextFinal: String
+        val unitFinal: String
+        
+        if (fallbackLabel.contains("Хранилище", ignoreCase = true)) {
+            val usedMB = (quota.used ?: 0.0) / (1024.0 * 1024.0)
+            val limitMB = (quota.limit ?: 0.0) / (1024.0 * 1024.0)
+            val remainingMB = (calculatedRemaining ?: 0.0) / (1024.0 * 1024.0)
+            val usedGB = usedMB / 1024.0
+            val limitGB = limitMB / 1024.0
+            val remainingGB = remainingMB / 1024.0
+            if (limitGB >= 1.0) {
+                usedTextFinal = String.format("%.2f", usedGB)
+                limitTextFinal = String.format("%.2f", limitGB)
+                remainingTextFinal = calculatedRemaining?.let { String.format("%.2f", remainingGB) } ?: "?"
+                unitFinal = "ГБ"
+            } else {
+                usedTextFinal = String.format("%.0f", usedMB)
+                limitTextFinal = String.format("%.0f", limitMB)
+                remainingTextFinal = calculatedRemaining?.let { String.format("%.0f", remainingMB) } ?: "?"
+                unitFinal = "МБ"
+            }
+        } else {
+            usedTextFinal = formatDoubleValue(quota.used)
+            limitTextFinal = formatDoubleValue(quota.limit)
+            remainingTextFinal = calculatedRemaining?.let { formatDoubleValue(it) } ?: "?"
+            unitFinal = quota.unit ?: "операций"
+        }
+
+        val statusIcon = when {
+            quota.blocked == true -> "⛔ "
+            quota.warning == true -> "⚠️ "
+            else -> ""
+        }
+
+        val operationsNote = quota.operations?.let { " · выполнено: ${formatDoubleValue(it)}" } ?: ""
+
+        targetView.text = "$statusIcon Использовано: $usedTextFinal $unitFinal из $limitTextFinal $unitFinal (${percentValue}%) · осталось: $remainingTextFinal $unitFinal$operationsNote"
+    }
+
+    private fun formatDownloadsText(payload: ServerInfoPayload): String {
+        val downloads = payload.metrics?.downloads ?: return "Скачивания: нет данных"
+        val personal = downloads.personalToday ?: 0
+        val global = downloads.globalToday ?: 0
+        val lastFile = downloads.lastDownload?.filename ?: "нет данных"
+        val lastTime = formatTimestamp(downloads.lastDownload?.timestamp)
+        val stamp = lastTime?.let { " · $it" } ?: ""
+        // Убираем префикс vkbook-server/updates/ для читаемости
+        val cleanFileName = lastFile.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: lastFile
+        return "📥 Скачивания сегодня: ваши — $personal, всех пользователей — $global\n📄 Последний файл: $cleanFileName$stamp"
+    }
+
+    private fun formatUploadsText(payload: ServerInfoPayload): String {
+        val uploads = payload.metrics?.uploads ?: return "Загрузки: нет данных"
+        val today = uploads.today ?: 0
+        val total = uploads.total ?: 0
+        return "📤 Загрузки: сегодня — $today файлов, всего — $total файлов"
+    }
+
+    private fun formatRateLimitGlobal(payload: ServerInfoPayload): String {
+        val global = payload.metrics?.rateLimitGlobal ?: return "Глобальный лимит: нет данных"
+        val requests = global.requestsPerHour ?: global.totalRequests ?: 0
+        val clientsAtLimit = global.clientsAtLimit ?: global.activeIps ?: 0
+        val blocked = global.blockedClients ?: global.blockedIps ?: 0
+        return "🌐 Все пользователи: запросов в час — $requests, достигли лимита — $clientsAtLimit, заблокировано — $blocked"
+    }
+
+    private fun buildWarningsText(payload: ServerInfoPayload): String {
+        val warnings = mutableListOf<String>()
+        payload.metrics?.r2Warnings?.let { info ->
+            addWarningMessage(warnings, "Storage", info.storage)
+            addWarningMessage(warnings, "Class A", info.classA)
+            addWarningMessage(warnings, "Class B", info.classB)
+            info.warningFlags?.forEach { warnings.add("⚠️ $it") }
+        }
+        payload.r2Usage?.warnings?.let { warnings.addAll(it.map { flag -> "⚠️ $flag" }) }
+
+        return if (warnings.isEmpty()) {
+            "Предупреждений R2 нет"
+        } else {
+            warnings.joinToString("\n")
+        }
+    }
+
+    private fun addWarningMessage(target: MutableList<String>, label: String, flag: WarningFlag?) {
+        val message = flag?.asReadableMessage(label)
+        if (!message.isNullOrBlank()) {
+            target.add(message)
+        }
+    }
+
+    private fun WarningFlag.asReadableMessage(label: String): String? {
+        val triggered = when {
+            warning != null -> warning
+            value != null -> value
+            blocked == true -> true
+            else -> false
+        } ?: false
+        if (!triggered && blocked != true) return null
+        val icon = if (blocked == true) "⛔" else "⚠️"
+        val parts = mutableListOf("$icon $label")
+        message?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+        operations?.let { parts.add("операций: ${formatDoubleValue(it)}") }
+        monthStart?.takeIf { it.isNotBlank() }?.let { parts.add("с $it") }
+        return parts.joinToString(" · ")
+    }
+
+    private fun formatRateLimitStatus(rateLimit: RateLimitInfo): String {
+        val status = when {
+            rateLimit.blocked == true -> "⛔ Лимит заблокирован"
+            rateLimit.warning == true -> "⚠️ Осталось мало запросов"
+            else -> "✅ Лимит в норме"
+        }
+        val reset = formatTimestamp(rateLimit.resetTimestamp)
+        return if (reset == null) status else "$status · сброс в $reset"
+    }
+
+    private fun formatTimestamp(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        return try {
+            val instant = parseInstant(value)
+            formatInstantHuman(instant)
+        } catch (_: Exception) {
+            value
+        }
+    }
+
+    private fun parseInstant(value: String): Instant {
+        return try {
+            Instant.parse(value)
+        } catch (_: Exception) {
+            OffsetDateTime.parse(value).toInstant()
+        }
+    }
+
+    private fun formatInstantHuman(instant: Instant): String {
+        // Используем русскую локаль для месяцев, но если не поддерживается - fallback на английский
+        val formatter = try {
+            DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", Locale("ru", "RU"))
+        } catch (_: Exception) {
+            DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm:ss", Locale.getDefault())
+        }
+        return instant.atZone(ZoneId.systemDefault()).format(formatter)
+    }
+
+    private fun formatDoubleValue(value: Double?): String {
+        if (value == null) return "?"
+        return if (value % 1.0 == 0.0) {
+            value.toLong().toString()
+        } else {
+            String.format(Locale.getDefault(), "%.2f", value)
+        }
+    }
+
+    private data class ServerEndpoint(
+        val method: String,
+        val path: String,
+        val description: String
+    )
+
+    private class ServerInfoDialogHolder(view: View) {
+        val progress: ProgressBar = view.findViewById(R.id.progressServerInfo)
+        val loadingText: TextView = view.findViewById(R.id.tvServerInfoLoading)
+        val layoutLoading: View = view.findViewById(R.id.layoutLoading)
+        val content: View = view.findViewById(R.id.layoutServerInfoContent)
+        val baseUrlValue: TextView = view.findViewById(R.id.tvBaseUrlValue)
+        val endpointsValue: TextView = view.findViewById(R.id.tvEndpointsValue)
+        val rateLimitProgress: ProgressBar = view.findViewById(R.id.progressRateLimit)
+        val rateLimitDetails: TextView = view.findViewById(R.id.tvRateLimitDetails)
+        val rateLimitReset: TextView = view.findViewById(R.id.tvRateLimitReset)
+        val downloadsDetails: TextView = view.findViewById(R.id.tvDownloadsDetails)
+        val uploadsDetails: TextView = view.findViewById(R.id.tvUploadsDetails)
+        val rateLimitGlobal: TextView = view.findViewById(R.id.tvRateLimitGlobal)
+        val r2StorageProgress: ProgressBar = view.findViewById(R.id.progressR2Storage)
+        val r2StorageDetails: TextView = view.findViewById(R.id.tvR2StorageDetails)
+        val r2ClassAProgress: ProgressBar = view.findViewById(R.id.progressR2ClassA)
+        val r2ClassADetails: TextView = view.findViewById(R.id.tvR2ClassADetails)
+        val r2ClassBProgress: ProgressBar = view.findViewById(R.id.progressR2ClassB)
+        val r2ClassBDetails: TextView = view.findViewById(R.id.tvR2ClassBDetails)
+        val r2Warnings: TextView = view.findViewById(R.id.tvR2Warnings)
+        val layoutWarnings: View = view.findViewById(R.id.layoutWarnings)
+        val lastUpdated: TextView = view.findViewById(R.id.tvLastUpdated)
+        val refreshButton: Button = view.findViewById(R.id.btnRefreshMetrics)
+    }
     
     // ========================================
     // МЕХАНИКА СКРЫТОГО ДОСТУПА К РЕДАКТОРУ
     // ========================================
     
     companion object {
+        private const val DEFAULT_SERVER_URL = "https://vkbookserver.onrender.com/"
         private const val KEY_EDITOR_ACCESS = "editor_access_enabled"
         private const val ADMIN_PASSWORD_HASH = "7773b8d2211efb5d382d36f4ea8bc5dd12af0ab8e52ab96783c3b2be8002d786"
         private const val SALT = "VkBook2024"
         private const val KEY_TABS_VISIBILITY = "tabs_visibility_json"
+        private val SERVER_ENDPOINTS = listOf(
+            ServerEndpoint("GET", "/api/updates/check", "Список файлов + метаданные"),
+            ServerEndpoint("GET", "/api/updates/download?filename=...", "Скачать файл (кириллица, спецсимволы)"),
+            ServerEndpoint("POST", "/api/updates/upload", "Загрузить файл (multipart, поле file)"),
+            ServerEndpoint("DELETE", "/api/updates/delete?filename=...", "Удалить файл из R2"),
+            ServerEndpoint("GET", "/api/debug/r2/list", "Диагностика Cloudflare R2"),
+            ServerEndpoint("GET", "/api/updates/r2/usage", "Лимиты Cloudflare R2 (storage/Class A/B)"),
+            ServerEndpoint("GET", "/api/metrics/usage", "Rate limit, загрузки/выгрузки, предупреждения"),
+            ServerEndpoint("GET", "/api/files/list", "Совместимость со старыми скриптами"),
+            ServerEndpoint("GET", "/api/metadata/versions", "История версий локальных данных")
+        )
         
         /**
          * Вычислить SHA-256 хеш строки
@@ -529,10 +917,10 @@ class ConnectionSettingsFragment : Fragment() {
         val prefs = requireContext().getSharedPreferences("server_settings", android.content.Context.MODE_PRIVATE)
         val mode = prefs.getString("server_mode", "internet")
         val customUrl = prefs.getString("custom_url", "") ?: ""
-        val defaultUrl = "http://158.160.157.7/"
+        val defaultUrl = DEFAULT_SERVER_URL
         
         return when (mode) {
-            "internet" -> "http://158.160.157.7/"
+            "internet" -> DEFAULT_SERVER_URL
             "custom" -> if (customUrl.isNotBlank()) {
                 if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
             } else defaultUrl

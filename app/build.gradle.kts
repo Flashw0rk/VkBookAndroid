@@ -30,11 +30,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         // API ключ из local.properties для безопасности
-        val apiKey = keystoreProperties["API_KEY"] as String? ?: "vkbook-2024-secret-key-abc123"
+        val apiKey = keystoreProperties["API_KEY"] as String? ?: "vkbook-2025-secret-key-abc123"
         buildConfigField("String", "API_KEY", "\"$apiKey\"")
         
         // Базовый URL сервера (HTTP пока сервер не поддерживает HTTPS)
-        val serverUrl = keystoreProperties["SERVER_URL"] as String? ?: "http://158.160.157.7/"
+        val serverUrl = keystoreProperties["SERVER_URL"] as String? ?: "https://vkbookserver.onrender.com/"
         buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
         
         // Флаг для принудительного использования HTTPS (когда сервер будет готов)

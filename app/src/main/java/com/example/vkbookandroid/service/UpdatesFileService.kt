@@ -5,11 +5,15 @@ import android.util.Log
 import com.example.vkbookandroid.network.ArmatureApiService
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.network.model.UpdateFileMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.ResponseBody
 import java.io.File
 import java.io.FileOutputStream
+import com.google.gson.JsonElement
+import com.google.gson.JsonObject
+import com.google.gson.JsonArray
 
 /**
  * Сервис для работы с файлами из папки /opt/vkbook-server/updates
@@ -19,6 +23,7 @@ class UpdatesFileService(private val context: Context) {
     
     private val tag = "UpdatesFileService"
     private val apiService: ArmatureApiService = NetworkModule.getArmatureApiService()
+    private val gson = NetworkModule.gson
     
     /**
      * Синхронизировать все файлы из папки updates
@@ -39,12 +44,13 @@ class UpdatesFileService(private val context: Context) {
                     return@withContext result
                 }
                 
-                Log.d(tag, "Found ${files.size} files in updates directory: $files")
+                Log.d(tag, "Found ${files.size} files in updates directory")
                 
                 // Обрабатываем каждый файл
-                files.forEach { filename ->
+                files.forEach { metadata ->
+                    val filename = metadata.filename
                     try {
-                        val success = downloadAndPlaceFile(filename)
+                        val success = downloadAndPlaceFile(metadata)
                         if (success) {
                             result.successfulFiles.add(filename)
                             Log.d(tag, "Successfully synced: $filename")
@@ -76,48 +82,48 @@ class UpdatesFileService(private val context: Context) {
     }
     
     /**
-     * Получить список файлов используя РАБОЧИЙ endpoint
+     * Получить список файлов используя новый endpoint /api/updates/check
      */
-    private suspend fun getUpdatesFilesList(): List<String> {
-        // 🚀 ИСПОЛЬЗУЕМ РАБОЧИЙ ENDPOINT: /api/files/list
-        try {
-            Log.d(tag, "🚀 Using WORKING endpoint: /api/files/list")
-            val response = apiService.getAllFiles()
-            if (response.isSuccessful) {
-                val body = response.body()
-                if (body != null && body.containsKey("data")) {
-                    val filesData = body["data"] as? List<*>
-                    if (!filesData.isNullOrEmpty()) {
-                        val fileNames = mutableListOf<String>()
-                        for (fileInfo in filesData) {
-                            if (fileInfo is Map<*, *>) {
-                                val filename = fileInfo["filename"] as? String
-                                if (filename != null) {
-                                    fileNames.add(filename)
-                                }
-                            }
-                        }
-                        Log.d(tag, "✅ Got ${fileNames.size} files from WORKING endpoint: $fileNames")
-                        return fileNames
-                    }
+    private suspend fun getUpdatesFilesList(): List<UpdateFileMetadata> {
+        return try {
+            Log.d(tag, "🚀 Requesting /api/updates/check for metadata")
+            val response = apiService.checkUpdates()
+            if (!response.isSuccessful) {
+                Log.e(tag, "❌ /api/updates/check failed: HTTP ${response.code()}")
+                if (response.code() == 429) {
+                    Log.w(tag, "⚠️ Rate limit exceeded, will retry later")
                 }
-            } else {
-                Log.e(tag, "❌ Working endpoint failed: HTTP ${response.code()}")
+                return emptyList()
             }
+            val body = response.body()
+            if (body == null) {
+                Log.w(tag, "❌ /api/updates/check returned null body")
+                return emptyList()
+            }
+            // Читаем body до того, как response будет закрыт автоматически
+            val json = body.string()
+            if (json.isBlank()) {
+                Log.w(tag, "❌ /api/updates/check returned empty body")
+                return emptyList()
+            }
+            val files = parseUpdatesCheckPayload(json)
+            Log.d(tag, "✅ Parsed ${files.size} entries from /api/updates/check")
+            files
         } catch (e: Exception) {
-            Log.e(tag, "❌ Exception with working endpoint", e)
+            Log.e(tag, "❌ Exception while parsing /api/updates/check", e)
+            emptyList()
         }
-        
-        Log.w(tag, "❌ Working endpoint failed to get files list")
-        return emptyList()
     }
     
     /**
      * Скачать файл и разместить в соответствующей папке
      */
-    private suspend fun downloadAndPlaceFile(filename: String): Boolean {
+    private suspend fun downloadAndPlaceFile(fileMetadata: UpdateFileMetadata): Boolean {
+        val filename = fileMetadata.filename
         return try {
             Log.d(tag, "=== DOWNLOADING FILE: $filename ===")
+            fileMetadata.size?.let { Log.d(tag, "Reported size: $it bytes") }
+            fileMetadata.hash?.let { Log.d(tag, "Reported hash: $it") }
             
             // Определяем тип файла и целевую папку
             val targetDir = getTargetDirectory(filename)
@@ -177,121 +183,53 @@ class UpdatesFileService(private val context: Context) {
     }
     
     /**
-     * Скачать файл используя РАБОЧИЙ универсальный endpoint
+     * Скачать файл используя новый endpoint /api/updates/download
+     * Использует URLEncoder UTF-8 для корректной обработки кириллицы и спецсимволов
      */
     private suspend fun downloadFileFromUpdates(filename: String): ResponseBody? {
         return try {
-            Log.d(tag, "🚀 Trying multiple strategies to download: $filename")
-
-            // Q) Безопасная сборка абсолютного URL через HttpUrl.Builder c сырым именем файла
-            runCatching {
-                val base = NetworkModule.getCurrentBaseUrl().trimEnd('/')
-                val baseUrl = base.toHttpUrlOrNull()
-                if (baseUrl != null) {
-                    val built = baseUrl.newBuilder()
-                        .addPathSegment("api")
-                        .addPathSegment("files")
-                        .addPathSegment("download")
-                        .addQueryParameter("filename", filename)
-                        .build()
-                        .toString()
-                    val r = apiService.downloadByUrl(built)
-                    if (r.isSuccessful) {
-                        Log.d(tag, "✅ Downloaded via HttpUrl.Builder query: $built")
-                        return r.body()
-                    } else {
-                        Log.w(tag, "HttpUrl.Builder attempt failed: code=${r.code()}")
-                    }
+            // Проверяем безопасность пути (защита от path traversal)
+            if (filename.contains("..") || filename.startsWith("/")) {
+                Log.e(tag, "❌ Invalid filename (security check failed): $filename")
+                return null
+            }
+            
+            // Нормализуем путь: заменяем обратные слэши на прямые
+            val normalizedFilename = filename.replace("\\", "/")
+            
+            // Пробуем прямой вызов через Retrofit (он сам кодирует query параметры)
+            val direct = apiService.downloadUpdatesFile(normalizedFilename)
+            if (direct.isSuccessful) {
+                Log.d(tag, "✅ Downloaded via /api/updates/download query parameter")
+                return direct.body()
+            }
+            Log.w(tag, "Primary /api/updates/download failed: HTTP ${direct.code()}")
+            
+            // Fallback: явное URL-кодирование через HttpUrl.Builder
+            val base = NetworkModule.getCurrentBaseUrl().trimEnd('/')
+            val baseUrl = base.toHttpUrlOrNull()
+            if (baseUrl != null) {
+                // Используем URLEncoder UTF-8 как указано в техзадании
+                val encodedFilename = java.net.URLEncoder.encode(normalizedFilename, Charsets.UTF_8.name())
+                val built = baseUrl.newBuilder()
+                    .addPathSegment("api")
+                    .addPathSegment("updates")
+                    .addPathSegment("download")
+                    .addQueryParameter("filename", encodedFilename)
+                    .build()
+                    .toString()
+                val fallback = apiService.downloadByUrl(built)
+                if (fallback.isSuccessful) {
+                    Log.d(tag, "✅ Downloaded via absolute URL builder with explicit encoding: $built")
+                    return fallback.body()
                 } else {
-                    Log.w(tag, "HttpUrl.parse returned null for base: $base")
+                    Log.w(tag, "Absolute URL builder failed: HTTP ${fallback.code()}")
                 }
+            } else {
+                Log.w(tag, "HttpUrl.parse returned null for base: $base")
             }
-
-            // A) Попытка по абсолютному URL, если есть в списке файлов
-            runCatching {
-                val list = apiService.getAllFiles()
-                if (list.isSuccessful) {
-                    val body = list.body()
-                    val data = body?.get("data") as? List<*>
-                    val match = data?.firstOrNull {
-                        val name = when (it) {
-                            is com.example.vkbookandroid.model.FileInfo -> it.filename
-                            is Map<*, *> -> it["filename"] as? String
-                            else -> null
-                        }
-                        name?.equals(filename, ignoreCase = false) == true
-                    }
-                    val url = when (match) {
-                        is com.example.vkbookandroid.model.FileInfo -> null // нет поля downloadUrl в модели
-                        is Map<*, *> -> (match["downloadUrl"] as? String) ?: (match["path"] as? String)
-                        else -> null
-                    } ?: run {
-                        // Собираем по умолчанию путь скачивания через filename
-                        val encoded = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name()).replace("+", "%20")
-                        "/api/files/download/$encoded"
-                    }
-                    if (!url.isNullOrBlank()) {
-                        val abs = if (url.startsWith("http")) url else NetworkModule.getCurrentBaseUrl().trimEnd('/') + "/" + url.trimStart('/')
-                        val r = apiService.downloadByUrl(abs)
-                        if (r.isSuccessful) {
-                            Log.d(tag, "✅ Downloaded via downloadUrl: $abs")
-                            return r.body()
-                        }
-                    }
-                }
-            }
-
-            // B) Вариант с path-параметром (encoded path): /api/files/download/{filename}
-            runCatching {
-                val encodedPath = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
-                    .replace("+", "%20") // пробелы как %20
-                val r = apiService.downloadFileByPath(encodedPath)
-                if (r.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via path endpoint: $filename")
-                    return r.body()
-                }
-            }
-
-            // C) Вариант с query: сначала raw, потом строго закодированный, затем строгая ручная экранизация (' '->%20, '+'->%2B)
-            runCatching {
-                val r1 = apiService.downloadFileByName(filename)
-                if (r1.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via query raw: $filename")
-                    return r1.body()
-                }
-                val encoded = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
-                val r2 = apiService.downloadFileByName(encoded)
-                if (r2.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via query encoded: $filename -> $encoded")
-                    return r2.body()
-                }
-                val strict = filename
-                    .replace(" ", "%20")
-                    .replace("+", "%2B")
-                val r3 = apiService.downloadFileByName(strict)
-                if (r3.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via query strict: $filename -> $strict")
-                    return r3.body()
-                }
-            }
-
-            // D) Вариант updates с encoded path
-            runCatching {
-                val encodedUpd = java.net.URLEncoder.encode(filename, Charsets.UTF_8.name())
-                    .replace("+", "%20")
-                val upd = apiService.downloadUpdatesFile(encodedUpd)
-                if (upd.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via updates encoded path: $filename")
-                    return upd.body()
-                }
-                val updRaw = apiService.downloadUpdatesFile(filename)
-                if (updRaw.isSuccessful) {
-                    Log.d(tag, "✅ Downloaded via updates raw path: $filename")
-                    return updRaw.body()
-                }
-            }
-
-            Log.e(tag, "❌ All download strategies failed for: $filename")
+            
+            Log.e(tag, "❌ Download failed for: $filename")
             null
         } catch (e: Exception) {
             Log.e(tag, "💥 Exception in download for $filename", e)
@@ -326,21 +264,80 @@ class UpdatesFileService(private val context: Context) {
     }
     
     /**
-     * Проверить доступность файлов через РАБОЧИЙ endpoint
+     * Проверить доступность файлов через новый endpoint /api/updates/check
      */
     suspend fun checkUpdatesAvailability(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(tag, "🚀 Checking file availability via WORKING endpoint...")
-                val response = apiService.getAllFiles()
-                val available = response.isSuccessful
-                Log.d(tag, "✅ Files available via working endpoint: $available")
+                Log.d(tag, "🚀 Checking availability via /api/updates/check ...")
+                val response = apiService.checkUpdates()
+                val available = response.isSuccessful || response.code() == 429
+                if (response.code() == 429) {
+                    Log.w(tag, "⚠️ Rate limit exceeded, but endpoint is available")
+                }
+                Log.d(tag, "✅ /api/updates/check available: $available (HTTP ${response.code()})")
                 available
             } catch (e: Exception) {
-                Log.e(tag, "❌ Error checking files availability", e)
+                Log.e(tag, "❌ Error checking /api/updates/check", e)
                 false
             }
         }
+    }
+
+    private fun parseUpdatesCheckPayload(json: String?): List<UpdateFileMetadata> {
+        if (json.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val element = gson.fromJson(json, JsonElement::class.java) ?: return emptyList()
+            when {
+                element.isJsonArray -> parseMetadataArray(element.asJsonArray)
+                element.isJsonObject -> parseMetadataObject(element.asJsonObject)
+                else -> emptyList()
+            }
+        }.getOrElse {
+            Log.e(tag, "Failed to parse updates payload", it)
+            emptyList()
+        }
+    }
+
+    private fun parseMetadataArray(array: JsonArray): List<UpdateFileMetadata> {
+        return array.mapNotNull { parseMetadataElement(it) }
+    }
+
+    private fun parseMetadataObject(obj: JsonObject): List<UpdateFileMetadata> {
+        val arrayKeys = listOf("data", "files", "items", "result", "updates")
+        arrayKeys.forEach { key ->
+            if (obj.has(key) && obj.get(key).isJsonArray) {
+                return parseMetadataArray(obj.getAsJsonArray(key))
+            }
+        }
+
+        if (obj.has("file") && obj.get("file").isJsonObject) {
+            return listOfNotNull(parseMetadataElement(obj.getAsJsonObject("file")))
+        }
+
+        return listOfNotNull(parseMetadataElement(obj))
+    }
+
+    private fun parseMetadataElement(element: JsonElement?): UpdateFileMetadata? {
+        if (element == null || !element.isJsonObject) return null
+        val obj = element.asJsonObject
+        val filename = when {
+            obj.has("filename") -> obj.get("filename").asString
+            obj.has("name") -> obj.get("name").asString
+            else -> ""
+        }
+        if (filename.isBlank()) return null
+
+        return UpdateFileMetadata(
+            filename = filename,
+            size = obj.get("size")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong,
+            lastModified = obj.get("lastModified")?.asString,
+            hash = obj.get("hash")?.asString,
+            version = obj.get("version")?.asString,
+            hasUpdates = obj.get("hasUpdates")?.asBoolean,
+            etag = obj.get("etag")?.asString,
+            contentType = obj.get("contentType")?.asString
+        )
     }
 }
 

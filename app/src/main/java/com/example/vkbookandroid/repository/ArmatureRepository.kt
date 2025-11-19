@@ -225,6 +225,40 @@ class ArmatureRepository(
                     checkRateLimit(response?.code())
                 }
 
+                // ФОЛБЭК 0: новый эндпоинт /api/updates/download (R2) - пробуем с полным путем и коротким именем
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying new endpoint: /api/updates/download for armature_coords.json")
+                    // Сначала пробуем с полным путем (как в R2)
+                    val fullPath = "vkbook-server/updates/armature_coords.json"
+                    var updatesResponse = apiService?.downloadUpdatesFile(fullPath)
+                    if (updatesResponse?.isSuccessful != true) {
+                        // Если не получилось, пробуем короткое имя
+                        Log.d("ArmatureRepository", "Full path failed, trying short name")
+                        updatesResponse = apiService?.downloadUpdatesFile("armature_coords.json")
+                    }
+                    if (updatesResponse?.isSuccessful == true) {
+                        val json = updatesResponse.body()?.string()
+                        if (!json.isNullOrBlank()) {
+                            val type = com.google.gson.reflect.TypeToken.getParameterized(
+                                Map::class.java,
+                                String::class.java,
+                                com.google.gson.reflect.TypeToken.getParameterized(
+                                    Map::class.java,
+                                    String::class.java,
+                                    ArmatureMarker::class.java
+                                ).type
+                            ).type
+                            val parsed: Map<String, Map<String, ArmatureMarker>>? = gson.fromJson(json, type)
+                            if (parsed != null && parsed.isNotEmpty()) {
+                                Log.d("ArmatureRepository", "✅ Successfully loaded via /api/updates/download")
+                                return@withContext parsed
+                            }
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "/api/updates/download failed: code=${updatesResponse?.code()}")
+                    }
+                }
+
                 // ФОЛБЭК 1: универсальная загрузка по имени файла (включая path и абсолютный URL)
                 runCatching {
                     Log.d("ArmatureRepository", "Trying fallback: downloadFileByName(armature_coords.json)")
@@ -398,9 +432,13 @@ class ArmatureRepository(
                     val upd = apiService?.getUpdatesFilesByType("json")
                     if (upd?.isSuccessful == true) {
                         val names = upd.body().orEmpty()
-                        val has = names.any { it.equals("armature_coords.json", ignoreCase = true) }
+                        val has = names.any { it.equals("armature_coords.json", ignoreCase = true) || it.endsWith("armature_coords.json", ignoreCase = true) }
                         if (has) {
-                            val dl = apiService.downloadUpdatesFile("armature_coords.json")
+                            val fullPath = "vkbook-server/updates/armature_coords.json"
+                            var dl = apiService.downloadUpdatesFile(fullPath)
+                            if (!dl.isSuccessful) {
+                                dl = apiService.downloadUpdatesFile("armature_coords.json")
+                            }
                             if (dl.isSuccessful) {
                                 val json = dl.body()?.string()
                                 if (!json.isNullOrBlank()) {
@@ -441,6 +479,92 @@ class ArmatureRepository(
             try {
                 Log.d("ArmatureRepository", "=== REQUESTING PDF FILES LIST ===")
                 Log.d("ArmatureRepository", "API service available: ${apiService != null}")
+                
+                // НОВЫЙ ЭНДПОИНТ: /api/updates/check (R2) - приоритетный
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying new endpoint: /api/updates/check for PDF files")
+                    val updatesResponse = apiService?.checkUpdates()
+                    if (updatesResponse?.isSuccessful == true) {
+                        val body = updatesResponse.body()?.string()
+                        if (!body.isNullOrBlank()) {
+                            try {
+                                val gson = com.google.gson.Gson()
+                                val element = gson.fromJson(body, com.google.gson.JsonElement::class.java)
+                                val files = mutableListOf<com.example.vkbookandroid.network.model.UpdateFileMetadata>()
+                                
+                                when {
+                                    element.isJsonArray -> {
+                                        element.asJsonArray.forEach { item ->
+                                            if (item.isJsonObject) {
+                                                val obj = item.asJsonObject
+                                                val fullPath = obj.get("filename")?.asString ?: ""
+                                                if (fullPath.endsWith(".pdf", ignoreCase = true) && !fullPath.endsWith("/")) {
+                                                    // Извлекаем только имя файла без префикса vkbook-server/updates/
+                                                    val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                    files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                        filename = filename,
+                                                        size = obj.get("size")?.asLong,
+                                                        hash = obj.get("hash")?.asString
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    element.isJsonObject -> {
+                                        val obj = element.asJsonObject
+                                        // Пробуем поле "files" (как в реальном ответе сервера)
+                                        val filesArray = obj.get("files")?.takeIf { it.isJsonArray }?.asJsonArray
+                                        filesArray?.forEach { item ->
+                                            if (item.isJsonObject) {
+                                                val itemObj = item.asJsonObject
+                                                val fullPath = itemObj.get("filename")?.asString ?: ""
+                                                if (fullPath.endsWith(".pdf", ignoreCase = true) && !fullPath.endsWith("/")) {
+                                                    // Извлекаем только имя файла без префикса vkbook-server/updates/
+                                                    val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                    files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                        filename = filename,
+                                                        size = itemObj.get("size")?.asLong,
+                                                        hash = itemObj.get("hash")?.asString
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                        // Fallback на поле "data" (если есть)
+                                        if (files.isEmpty()) {
+                                            val data = obj.get("data")?.takeIf { it.isJsonArray }?.asJsonArray
+                                            data?.forEach { item ->
+                                                if (item.isJsonObject) {
+                                                    val itemObj = item.asJsonObject
+                                                    val fullPath = itemObj.get("filename")?.asString ?: ""
+                                                    if (fullPath.endsWith(".pdf", ignoreCase = true) && !fullPath.endsWith("/")) {
+                                                        val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                        files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                            filename = filename,
+                                                            size = itemObj.get("size")?.asLong,
+                                                            hash = itemObj.get("hash")?.asString
+                                                        ))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if (files.isNotEmpty()) {
+                                    val filenames = files.map { it.filename }
+                                    Log.d("ArmatureRepository", "✅ Successfully loaded ${filenames.size} PDF files via /api/updates/check: $filenames")
+                                    return@withContext filenames
+                                }
+                            } catch (e: Exception) {
+                                Log.w("ArmatureRepository", "Failed to parse /api/updates/check response: ${e.message}")
+                            }
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "/api/updates/check failed: code=${updatesResponse?.code()}")
+                    }
+                }.onFailure { e ->
+                    Log.w("ArmatureRepository", "Exception in /api/updates/check: ${e.message}")
+                }
                 
                 val response = apiService?.getPdfFiles()
                 Log.d("ArmatureRepository", "PDF files response received")
@@ -536,6 +660,92 @@ class ArmatureRepository(
                 Log.d("ArmatureRepository", "=== REQUESTING EXCEL FILES LIST ===")
                 Log.d("ArmatureRepository", "API service available: ${apiService != null}")
                 
+                // НОВЫЙ ЭНДПОИНТ: /api/updates/check (R2) - приоритетный
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying new endpoint: /api/updates/check for Excel files")
+                    val updatesResponse = apiService?.checkUpdates()
+                    if (updatesResponse?.isSuccessful == true) {
+                        val body = updatesResponse.body()?.string()
+                        if (!body.isNullOrBlank()) {
+                            try {
+                                val gson = com.google.gson.Gson()
+                                val element = gson.fromJson(body, com.google.gson.JsonElement::class.java)
+                                val files = mutableListOf<com.example.vkbookandroid.network.model.UpdateFileMetadata>()
+                                
+                                when {
+                                    element.isJsonArray -> {
+                                        element.asJsonArray.forEach { item ->
+                                            if (item.isJsonObject) {
+                                                val obj = item.asJsonObject
+                                                val fullPath = obj.get("filename")?.asString ?: ""
+                                                if ((fullPath.endsWith(".xlsx", ignoreCase = true) || fullPath.endsWith(".xls", ignoreCase = true)) && !fullPath.endsWith("/")) {
+                                                    // Извлекаем только имя файла без префикса vkbook-server/updates/
+                                                    val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                    files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                        filename = filename,
+                                                        size = obj.get("size")?.asLong,
+                                                        hash = obj.get("hash")?.asString
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    element.isJsonObject -> {
+                                        val obj = element.asJsonObject
+                                        // Пробуем поле "files" (как в реальном ответе сервера)
+                                        val filesArray = obj.get("files")?.takeIf { it.isJsonArray }?.asJsonArray
+                                        filesArray?.forEach { item ->
+                                            if (item.isJsonObject) {
+                                                val itemObj = item.asJsonObject
+                                                val fullPath = itemObj.get("filename")?.asString ?: ""
+                                                if ((fullPath.endsWith(".xlsx", ignoreCase = true) || fullPath.endsWith(".xls", ignoreCase = true)) && !fullPath.endsWith("/")) {
+                                                    // Извлекаем только имя файла без префикса vkbook-server/updates/
+                                                    val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                    files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                        filename = filename,
+                                                        size = itemObj.get("size")?.asLong,
+                                                        hash = itemObj.get("hash")?.asString
+                                                    ))
+                                                }
+                                            }
+                                        }
+                                        // Fallback на поле "data" (если есть)
+                                        if (files.isEmpty()) {
+                                            val data = obj.get("data")?.takeIf { it.isJsonArray }?.asJsonArray
+                                            data?.forEach { item ->
+                                                if (item.isJsonObject) {
+                                                    val itemObj = item.asJsonObject
+                                                    val fullPath = itemObj.get("filename")?.asString ?: ""
+                                                    if ((fullPath.endsWith(".xlsx", ignoreCase = true) || fullPath.endsWith(".xls", ignoreCase = true)) && !fullPath.endsWith("/")) {
+                                                        val filename = fullPath.removePrefix("vkbook-server/updates/").takeIf { it.isNotEmpty() } ?: fullPath
+                                                        files.add(com.example.vkbookandroid.network.model.UpdateFileMetadata(
+                                                            filename = filename,
+                                                            size = itemObj.get("size")?.asLong,
+                                                            hash = itemObj.get("hash")?.asString
+                                                        ))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                if (files.isNotEmpty()) {
+                                    val filenames = files.map { it.filename }
+                                    Log.d("ArmatureRepository", "✅ Successfully loaded ${filenames.size} Excel files via /api/updates/check: $filenames")
+                                    return@withContext filenames
+                                }
+                            } catch (e: Exception) {
+                                Log.w("ArmatureRepository", "Failed to parse /api/updates/check response: ${e.message}")
+                            }
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "/api/updates/check failed: code=${updatesResponse?.code()}")
+                    }
+                }.onFailure { e ->
+                    Log.w("ArmatureRepository", "Exception in /api/updates/check: ${e.message}")
+                }
+                
                 val response = apiService?.getExcelFiles()
                 Log.d("ArmatureRepository", "Excel files response received")
                 Log.d("ArmatureRepository", "Response code: ${response?.code()}")
@@ -630,6 +840,28 @@ class ArmatureRepository(
                 Log.d("ArmatureRepository", "=== DOWNLOADING EXCEL FILE: $filename ===")
                 Log.d("ArmatureRepository", "Making API request to server...")
                 
+                // НОВЫЙ ЭНДПОИНТ: /api/updates/download (R2) - приоритетный
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying new endpoint: /api/updates/download for $filename")
+                    // Сначала пробуем с полным путем (как в R2)
+                    val fullPath = "vkbook-server/updates/$filename"
+                    var updatesResponse = apiService?.downloadUpdatesFile(fullPath)
+                    if (updatesResponse?.isSuccessful != true) {
+                        // Если не получилось, пробуем короткое имя
+                        Log.d("ArmatureRepository", "Full path failed, trying short name")
+                        updatesResponse = apiService?.downloadUpdatesFile(filename)
+                    }
+                    if (updatesResponse?.isSuccessful == true) {
+                        val body = updatesResponse.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "✅ Successfully downloaded via /api/updates/download: $filename (${body.contentLength()} bytes)")
+                            return@withContext body
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "/api/updates/download failed: code=${updatesResponse?.code()}")
+                    }
+                }
+                
                 val response = apiService?.downloadExcel(filename)
                 Log.d("ArmatureRepository", "Raw response received")
                 Log.d("ArmatureRepository", "Response code: ${response?.code()}")
@@ -676,7 +908,11 @@ class ArmatureRepository(
 
                 // ФОЛБЭК 2: загрузка из updates
                 runCatching {
-                    val upd = apiService?.downloadUpdatesFile(filename)
+                    val fullPath = "vkbook-server/updates/$filename"
+                    var upd = apiService?.downloadUpdatesFile(fullPath)
+                    if (upd?.isSuccessful != true) {
+                        upd = apiService?.downloadUpdatesFile(filename)
+                    }
                     if (upd?.isSuccessful == true) {
                         val body = upd.body()
                         if (body != null && body.contentLength() > 0) {
@@ -705,6 +941,28 @@ class ArmatureRepository(
             try {
                 Log.d("ArmatureRepository", "=== DOWNLOADING PDF FILE: $filename ===")
                 Log.d("ArmatureRepository", "Making API request to server...")
+                
+                // НОВЫЙ ЭНДПОИНТ: /api/updates/download (R2) - приоритетный
+                runCatching {
+                    Log.d("ArmatureRepository", "Trying new endpoint: /api/updates/download for $filename")
+                    // Сначала пробуем с полным путем (как в R2)
+                    val fullPath = "vkbook-server/updates/$filename"
+                    var updatesResponse = apiService?.downloadUpdatesFile(fullPath)
+                    if (updatesResponse?.isSuccessful != true) {
+                        // Если не получилось, пробуем короткое имя
+                        Log.d("ArmatureRepository", "Full path failed, trying short name")
+                        updatesResponse = apiService?.downloadUpdatesFile(filename)
+                    }
+                    if (updatesResponse?.isSuccessful == true) {
+                        val body = updatesResponse.body()
+                        if (body != null && body.contentLength() > 0) {
+                            Log.d("ArmatureRepository", "✅ Successfully downloaded via /api/updates/download: $filename (${body.contentLength()} bytes)")
+                            return@withContext body
+                        }
+                    } else {
+                        Log.w("ArmatureRepository", "/api/updates/download failed: code=${updatesResponse?.code()}")
+                    }
+                }
                 
                 val response = apiService?.downloadPdf(filename)
                 Log.d("ArmatureRepository", "PDF response received")
@@ -751,7 +1009,11 @@ class ArmatureRepository(
 
                 // ФОЛБЭК 2: загрузка из updates
                 runCatching {
-                    val upd = apiService?.downloadUpdatesFile(filename)
+                    val fullPath = "vkbook-server/updates/$filename"
+                    var upd = apiService?.downloadUpdatesFile(fullPath)
+                    if (upd?.isSuccessful != true) {
+                        upd = apiService?.downloadUpdatesFile(filename)
+                    }
                     if (upd?.isSuccessful == true) {
                         val body = upd.body()
                         if (body != null && body.contentLength() > 0) {

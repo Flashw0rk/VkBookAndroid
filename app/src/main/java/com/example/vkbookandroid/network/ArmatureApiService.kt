@@ -78,14 +78,26 @@ interface ArmatureApiService {
     /**
      * Получить список всех файлов из папки /opt/vkbook-server/updates
      */
-    @GET("api/updates/files")
-    suspend fun getUpdatesFiles(): Response<Map<String, Any>>
+    @GET("api/updates/check")
+    suspend fun checkUpdates(@Query("filename") filename: String? = null): Response<ResponseBody>
     
     /**
      * Скачать файл из папки updates
      */
     @GET("api/updates/download")
     suspend fun downloadUpdatesFile(@Query("filename") filename: String): Response<ResponseBody>
+
+    /**
+     * Удалить файл из updates
+     */
+    @DELETE("api/updates/delete")
+    suspend fun deleteUpdatesFile(@Query("filename") filename: String): Response<ResponseBody>
+
+    /**
+     * Временный служебный список объектов в R2 (диагностика)
+     */
+    @GET("api/debug/r2/list")
+    suspend fun getR2DebugList(): Response<ResponseBody>
     /**
      * Загрузить файл в updates (универсальная загрузка)
      */

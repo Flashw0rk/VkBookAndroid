@@ -57,7 +57,7 @@
                         android:id="@+id/radioInternet"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="VkBook сервер (158.160.157.7:8082)"
+                        android:text="VkBook сервер (Render · vkbookserver.onrender.com)"
                         android:textSize="14sp"
                         android:textColor="@color/black"
                         android:layout_marginBottom="8dp" />
@@ -100,7 +100,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="🌐 VkBook сервер: готов к работе на внешнем IP\n⚙️ Свой сервер: введите внешний IP или домен вашего сервера"
+                    android:text="🌐 Render: https://vkbookserver.onrender.com\n⚠️ Холодный старт: первый запрос после паузы может занять до 3 минут\n⚙️ Свой сервер: введите HTTPS адрес и убедитесь в наличии API-ключа"
                     android:textSize="12sp"
                     android:textColor="@color/gray"
                     android:background="@drawable/info_background"

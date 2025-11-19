@@ -72,6 +72,8 @@ class ServerSettingsActivity : AppCompatActivity() {
         private const val KEY_EDITOR_ACCESS = "editor_access_enabled"
         private const val ADMIN_PASSWORD_HASH = "7773b8d2211efb5d382d36f4ea8bc5dd12af0ab8e52ab96783c3b2be8002d786"
         private const val SALT = "VkBook2024"
+        private const val DEFAULT_SERVER_URL = "https://vkbookserver.onrender.com/"
+        private const val DEFAULT_SERVER_HOST = "vkbookserver.onrender.com"
         
         const val MODE_INTERNET = "internet"
         const val MODE_CUSTOM = "custom"
@@ -103,10 +105,10 @@ class ServerSettingsActivity : AppCompatActivity() {
             val serverMode = prefs.getString(KEY_SERVER_MODE, MODE_INTERNET) ?: MODE_INTERNET
             val customUrl = prefs.getString(KEY_CUSTOM_URL, "") ?: ""
             
-            val defaultUrl = "http://158.160.157.7/"
+            val defaultUrl = DEFAULT_SERVER_URL
             
             val resolvedUrl = when (serverMode) {
-                MODE_INTERNET -> "http://158.160.157.7/"
+                MODE_INTERNET -> DEFAULT_SERVER_URL
                 MODE_CUSTOM -> if (customUrl.isNotBlank()) {
                     if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
                 } else defaultUrl
@@ -177,7 +179,7 @@ class ServerSettingsActivity : AppCompatActivity() {
             MODE_INTERNET -> {
                 radioInternet.isChecked = true
                 editServerUrl.isEnabled = false
-                editServerUrl.setText("http://158.160.157.7/")
+                editServerUrl.setText(DEFAULT_SERVER_URL)
             }
             MODE_CUSTOM -> {
                 radioCustom.isChecked = true
@@ -188,7 +190,7 @@ class ServerSettingsActivity : AppCompatActivity() {
                 // По умолчанию интернет-сервер
                 radioInternet.isChecked = true
                 editServerUrl.isEnabled = false
-                editServerUrl.setText("http://158.160.157.7/")
+                editServerUrl.setText(DEFAULT_SERVER_URL)
             }
         }
     }
@@ -287,7 +289,7 @@ class ServerSettingsActivity : AppCompatActivity() {
             when (checkedId) {
                 R.id.radioInternet -> {
                     editServerUrl.isEnabled = false
-                    editServerUrl.setText("http://158.160.157.7/")
+                    editServerUrl.setText(DEFAULT_SERVER_URL)
                 }
                 R.id.radioCustom -> {
                     editServerUrl.isEnabled = true
@@ -562,10 +564,10 @@ class ServerSettingsActivity : AppCompatActivity() {
         val serverMode = sharedPrefs.getString(KEY_SERVER_MODE, MODE_INTERNET) ?: MODE_INTERNET
         val customUrl = sharedPrefs.getString(KEY_CUSTOM_URL, "") ?: ""
         
-        val defaultUrl = "http://158.160.157.7/"
+        val defaultUrl = DEFAULT_SERVER_URL
         
         val baseUrl = when (serverMode) {
-            MODE_INTERNET -> "http://158.160.157.7/"
+            MODE_INTERNET -> DEFAULT_SERVER_URL
             MODE_CUSTOM -> if (customUrl.isNotBlank()) {
                 if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
             } else defaultUrl
@@ -755,7 +757,7 @@ class ServerSettingsActivity : AppCompatActivity() {
                 // 6. Анализ и рекомендации
                 results.add("")
                 results.add("6️⃣ Анализ настроек:")
-                if (host == "158.160.157.7") {
+                if (host == DEFAULT_SERVER_HOST) {
                     results.add("   ✅ Используется правильный VkBook сервер")
                     results.add("   💡 Сервер развернут на Yandex Cloud")
                     results.add("   🌐 Доступен из любой сети")
@@ -790,10 +792,10 @@ class ServerSettingsActivity : AppCompatActivity() {
         }
         val customUrl = editServerUrl.text.toString().trim()
         
-        val defaultUrl = "http://158.160.157.7/"
+        val defaultUrl = DEFAULT_SERVER_URL
         
         return when (serverMode) {
-            MODE_INTERNET -> "http://158.160.157.7/"
+            MODE_INTERNET -> DEFAULT_SERVER_URL
             MODE_CUSTOM -> if (customUrl.isNotBlank()) {
                 if (!customUrl.endsWith("/")) "$customUrl/" else customUrl
             } else defaultUrl

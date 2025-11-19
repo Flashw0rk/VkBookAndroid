@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit
  */
 object NetworkModule {
     
+    private const val RENDER_HOST = "vkbookserver.onrender.com"
+    
     // Динамический URL из настроек (по умолчанию HTTPS)
     private var currentBaseUrl = BuildConfig.SERVER_URL
     
@@ -43,9 +45,9 @@ object NetworkModule {
     private fun createCertificatePinner(): CertificatePinner {
         return CertificatePinner.Builder()
             // Для production сервера - добавьте реальные пины сертификатов
-            // Получить пины можно командой: openssl s_client -connect 158.160.157.7:443 | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
-            // .add("158.160.157.7", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            // .add("158.160.157.7", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=")
+            // Получить пины можно командой: openssl s_client -connect vkbookserver.onrender.com:443 | openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64
+            // .add("vkbookserver.onrender.com", "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            // .add("vkbookserver.onrender.com", "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=")
             .build()
     }
     
@@ -165,7 +167,7 @@ object NetworkModule {
             }
         
         // SSL Pinning только для production сервера
-        if (currentBaseUrl.contains("158.160.157.7") && currentBaseUrl.startsWith("https://")) {
+        if (currentBaseUrl.contains(RENDER_HOST) && currentBaseUrl.startsWith("https://")) {
             android.util.Log.d("NetworkModule", "Enabling SSL Pinning for production server")
             // Закомментировано до получения реальных пинов сертификатов
             // builder.certificatePinner(createCertificatePinner())
@@ -178,7 +180,8 @@ object NetworkModule {
                 
                 // Список доверенных хостов
                 val trustedHosts = listOf(
-                    "158.160.157.7", // Production сервер
+                    RENDER_HOST, // Production Render
+                    "158.160.157.7", // Legacy production IP
                     "localhost",
                     "127.0.0.1",
                     "192.168.", // Локальная сеть
@@ -239,7 +242,7 @@ object NetworkModule {
         android.util.Log.d("NetworkModule", "updateBaseUrl called. Old URL: '$currentBaseUrl', New URL: '$newBaseUrl'")
         
         // Автоматически конвертируем HTTP в HTTPS только если флаг FORCE_HTTPS включен
-        val secureUrl = if (BuildConfig.FORCE_HTTPS && newBaseUrl.contains("158.160.157.7") && newBaseUrl.startsWith("http://")) {
+        val secureUrl = if (shouldEnforceHttps(newBaseUrl)) {
             val httpsUrl = newBaseUrl.replace("http://", "https://")
             android.util.Log.d("NetworkModule", "Converting to HTTPS (FORCE_HTTPS=true): $httpsUrl")
             httpsUrl
@@ -299,7 +302,7 @@ object NetworkModule {
             android.util.Log.d("NetworkModule", "Testing connection to: $url")
             
             // Автоматически пробуем HTTPS только если флаг FORCE_HTTPS включен
-            val testUrl = if (BuildConfig.FORCE_HTTPS && url.contains("158.160.157.7") && url.startsWith("http://")) {
+            val testUrl = if (shouldEnforceHttps(url)) {
                 url.replace("http://", "https://")
             } else {
                 url
@@ -319,6 +322,7 @@ object NetworkModule {
                 }
                 .hostnameVerifier { hostname, _ ->
                     // Для тестирования разрешаем все доверенные хосты
+                    hostname.contains(RENDER_HOST) || 
                     hostname.contains("158.160.157.7") || 
                     hostname.contains("localhost") || 
                     hostname.contains("127.0.0.1") ||
@@ -345,5 +349,11 @@ object NetworkModule {
             android.util.Log.e("NetworkModule", "Connection test failed: ${e.message}", e)
             false
         }
+    }
+    
+    private fun shouldEnforceHttps(url: String): Boolean {
+        return BuildConfig.FORCE_HTTPS &&
+            url.startsWith("http://") &&
+            (url.contains(RENDER_HOST) || url.contains("158.160.157.7"))
     }
 }
