@@ -17,10 +17,17 @@ import android.widget.Toast
 import com.example.vkbookandroid.service.SyncService
 import com.example.vkbookandroid.network.NetworkModule
 import com.example.vkbookandroid.utils.AutoSyncSettings
+import com.example.vkbookandroid.security.AdminAccessManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
@@ -40,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabLayout: TabLayout
     private lateinit var pagerAdapter: MainPagerAdapter
     private var sharedSearchQuery: String = ""
+    private var isAdminMode = false
     
     // Синхронизация
     private lateinit var btnSync: Button
@@ -47,6 +55,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvSyncStatus: TextView
     private lateinit var syncService: SyncService
     private lateinit var dataRefreshManager: DataRefreshManager
+    private var syncJob: Job? = null
+    private var isWaitingServerWake = false
+    private var syncButtonDefaultText: String = ""
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
     private val navigationPrefs by lazy { getSharedPreferences(NAVIGATION_PREFS, MODE_PRIVATE) }
@@ -74,7 +85,7 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.d("MainActivity", "=== ТЕМА ИЗМЕНЕНА, обновляем ===")
             
             // Загружаем новую тему
-            com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+            loadThemeConfiguration()
             
             // Применяем тему к MainActivity (внутри уже вызывается refreshAllFragmentsTheme)
             applyCurrentTheme()
@@ -138,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         // Загружаем тему перед созданием интерфейса
-        com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+        loadThemeConfiguration()
         
         setContentView(R.layout.activity_main)
         
@@ -168,6 +179,7 @@ class MainActivity : AppCompatActivity() {
         
         // Инициализация синхронизации
         btnSync = findViewById(R.id.btnSync)
+        syncButtonDefaultText = btnSync.text.toString()
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
         
@@ -222,8 +234,10 @@ class MainActivity : AppCompatActivity() {
         
         android.util.Log.d("MainActivity", "=== onResume() вызван ===")
         
+        val adminChanged = updateAdminModeState()
+        
         // Перезагружаем тему (если изменилась в настройках)
-        com.example.vkbookandroid.theme.AppTheme.loadTheme(this)
+        loadThemeConfiguration()
         android.util.Log.d("MainActivity", "Тема загружена: ${com.example.vkbookandroid.theme.AppTheme.getCurrentThemeId()}")
         
         // Применяем тему (внутри вызывается refreshAllFragmentsTheme)
@@ -247,6 +261,15 @@ class MainActivity : AppCompatActivity() {
         // После ротации гарантируем, что видимая вкладка подгружена и отрисована
         // Проверяем, что ViewPager2 уже инициализирован
         if (::pagerAdapter.isInitialized) {
+            if (adminChanged) {
+                // ВАЖНО: Обновляем видимость вкладок при изменении режима администратора
+                try {
+                    applyTabsVisibility()
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error applying tabs visibility in onResume", e)
+                }
+            }
+            
             ensureCurrentTabLoaded()
             // УЛУЧШЕНИЕ: Применяем поиск к текущей вкладке при возврате в приложение
             if (sharedSearchQuery.isNotEmpty()) {
@@ -326,11 +349,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun ensureTabLoaded(position: Int) {
         if (!::pagerAdapter.isInitialized) return
-        
+        val adapter = pagerAdapter
         val tag = "f$position"
         val frag = supportFragmentManager.findFragmentByTag(tag)
+        val globalPosition = adapter.getGlobalPositionAt(position)
         
-        android.util.Log.d("MainActivity", "ensureTabLoaded($position): фрагмент=${frag?.javaClass?.simpleName}")
+        android.util.Log.d("MainActivity", "ensureTabLoaded(local=$position, global=$globalPosition): фрагмент=${frag?.javaClass?.simpleName}")
         
         when (frag) {
             is org.example.pult.android.DataFragment -> frag.ensureDataLoaded()
@@ -340,15 +364,14 @@ class MainActivity : AppCompatActivity() {
             is com.example.vkbookandroid.EditorFragment -> frag.ensureDataLoaded()
             is com.example.vkbookandroid.ScheduleFragment -> frag.ensureDataLoaded()
             else -> {
-                android.util.Log.w("MainActivity", "Неизвестный тип фрагмента на позиции $position")
-                // Если Fragment ещё не найден по тегу, попробуем через адаптер как запасной вариант
-                when (position) {
-                    0 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.ensureDataLoaded()
-                    1 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.ensureDataLoaded()
-                    2 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(2) as? com.example.vkbookandroid.SchemesFragment)?.ensureDataLoaded()
-                    3 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(3) as? com.example.vkbookandroid.EditorFragment)?.ensureDataLoaded()
-                    4 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(4) as? com.example.vkbookandroid.ScheduleFragment)?.ensureDataLoaded()
-                    5 -> ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(5) as? com.example.vkbookandroid.ChecksScheduleFragment)?.ensureDataLoaded()
+                android.util.Log.w("MainActivity", "Неизвестный тип фрагмента на позиции $position (global=$globalPosition)")
+                when (globalPosition) {
+                    0 -> (getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.ensureDataLoaded()
+                    1 -> (getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.ensureDataLoaded()
+                    2 -> (getFragmentByGlobalPosition(2) as? com.example.vkbookandroid.SchemesFragment)?.ensureDataLoaded()
+                    3 -> (getFragmentByGlobalPosition(3) as? com.example.vkbookandroid.EditorFragment)?.ensureDataLoaded()
+                    4 -> (getFragmentByGlobalPosition(4) as? com.example.vkbookandroid.ScheduleFragment)?.ensureDataLoaded()
+                    5 -> (getFragmentByGlobalPosition(5) as? com.example.vkbookandroid.ChecksScheduleFragment)?.ensureDataLoaded()
                 }
             }
         }
@@ -363,12 +386,12 @@ class MainActivity : AppCompatActivity() {
     private fun applySharedSearchToFragments() {
         if (!::pagerAdapter.isInitialized) return
         
-        // Пробуем найти уже созданные фрагменты по тегам ViewPager2
-        (supportFragmentManager.findFragmentByTag("f0") as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
-        (supportFragmentManager.findFragmentByTag("f1") as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
-        // Фоллбек через адаптер
-        ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)?.setSearchQueryExternal(sharedSearchQuery)
-        ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)?.setSearchQueryExternal(sharedSearchQuery)
+        if (isAdminMode) {
+            (getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)
+                ?.setSearchQueryExternal(sharedSearchQuery)
+        }
+        (getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)
+            ?.setSearchQueryExternal(sharedSearchQuery)
     }
     
     /**
@@ -387,29 +410,35 @@ class MainActivity : AppCompatActivity() {
         
         Log.d("MainActivity", "Applying shared search '$sharedSearchQuery' to tab $position")
         
-        when (position) {
+        val adapter = viewPager.adapter as? MainPagerAdapter ?: return
+        if (position >= adapter.getVisiblePositions().size) {
+            Log.w("MainActivity", "applySharedSearchToCurrentTab: position $position out of bounds")
+            return
+        }
+        val globalPosition = adapter.getGlobalPositionAt(position)
+        when (globalPosition) {
             0 -> {
-                // Вкладка "Сигналы БЩУ"
-                Log.d("MainActivity", "=== SEARCHING IN TAB 0: DataFragment (БЩУ сигналы) ===")
-                val fragment = supportFragmentManager.findFragmentByTag("f0") as? org.example.pult.android.DataFragment
-                    ?: ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment)
+                if (!isAdminMode) {
+                    Log.w("MainActivity", "Admin mode disabled, skipping DataFragment search apply")
+                    return
+                }
+                Log.d("MainActivity", "=== SEARCHING IN TAB (global 0): DataFragment (БЩУ сигналы) ===")
+                val fragment = getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
                 if (fragment != null) {
                     Log.d("MainActivity", "Found DataFragment, applying search")
                     fragment.setSearchQueryExternal(sharedSearchQuery)
                 } else {
-                    Log.w("MainActivity", "DataFragment not found for tab $position")
+                    Log.w("MainActivity", "DataFragment not found for global tab $globalPosition")
                 }
             }
             1 -> {
-                // Вкладка "Арматура"
-                Log.d("MainActivity", "=== SEARCHING IN TAB 1: ArmatureFragment (Арматура) ===")
-                val fragment = supportFragmentManager.findFragmentByTag("f1") as? com.example.vkbookandroid.ArmatureFragment
-                    ?: ((pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment)
+                Log.d("MainActivity", "=== SEARCHING IN TAB (global 1): ArmatureFragment (Арматура) ===")
+                val fragment = getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment
                 if (fragment != null) {
                     Log.d("MainActivity", "Found ArmatureFragment, applying search")
                     fragment.setSearchQueryExternal(sharedSearchQuery)
                 } else {
-                    Log.w("MainActivity", "ArmatureFragment not found for tab $position")
+                    Log.w("MainActivity", "ArmatureFragment not found for global tab $globalPosition")
                 }
             }
             2 -> {
@@ -433,13 +462,15 @@ class MainActivity : AppCompatActivity() {
         // Добавляем диагностику по двойному тапу
         var lastTapTime = 0L
         btnSync.setOnClickListener {
+            if (isWaitingServerWake) {
+                cancelPendingSync()
+                return@setOnClickListener
+            }
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < 500) {
-                // Двойной тап - запускаем диагностику
                 diagnoseFiles()
                 Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
             } else {
-                // Обычный тап - запускаем РУЧНУЮ синхронизацию (автообновления отключены)
                 startSync()
             }
             lastTapTime = currentTime
@@ -465,9 +496,10 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun loadServerSettings() {
-        val currentUrl = ServerSettingsActivity.getCurrentServerUrl(this)
+        val currentUrl = readServerUrlFromPreferences()
         android.util.Log.d("MainActivity", "loadServerSettings: currentUrl=$currentUrl")
         NetworkModule.updateBaseUrl(currentUrl)
+        updateAdminModeState()
         // После возврата из настроек применяем видимость вкладок
         try { applyTabsVisibility() } catch (_: Throwable) {}
     }
@@ -496,13 +528,21 @@ class MainActivity : AppCompatActivity() {
      * Пользователь может обновить данные только нажав кнопку "Синхронизация"
      */
     private fun startSync() {
-        btnSync.isEnabled = false
-        updateSyncStatus("Ручное обновление...")
-        
-        uiScope.launch {
+        if (syncJob?.isActive == true) return
+        syncJob = uiScope.launch {
             try {
+                val serverReady = waitForServerWakeup()
+                if (!serverReady) {
+                    updateSyncStatus("Сервер недоступен")
+                    resetSyncButtonState()
+                    return@launch
+                }
+                
+                btnSync.isEnabled = false
+                btnSync.text = syncButtonDefaultText
+                updateSyncStatus("Ручное обновление...")
+                
                 val result = withContext(Dispatchers.IO) {
-                    // Полная РУЧНАЯ синхронизация данных с прогрессом
                     syncService.syncAll { percent, type ->
                         withContext(Dispatchers.Main) {
                             updateSyncStatus("[$percent%] $type")
@@ -520,19 +560,13 @@ class MainActivity : AppCompatActivity() {
                         val updateSummary = result.getUpdateSummary()
                         Toast.makeText(this@MainActivity, updateSummary, Toast.LENGTH_LONG).show()
                         
-                        // Показываем детальную информацию об обновленных файлах
                         if (result.updatedFiles.isNotEmpty()) {
                             val filesList = result.updatedFiles.joinToString("\n• ", "• ")
                             showUpdateDetailsDialog(updateSummary, filesList)
                         }
                         
-                        // Обновляем данные во фрагментах
                         refreshFragmentsData()
-                        
-                        // Диагностика файлов после синхронизации
                         diagnoseFilesAfterSync()
-                        
-                        // Логируем успешную синхронизацию
                         com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
                     }
                     result.serverConnected -> {
@@ -549,11 +583,16 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
                     }
                 }
+            } catch (ce: CancellationException) {
+                updateSyncStatus("Обновление отменено")
             } catch (e: Exception) {
                 updateSyncStatus("Ошибка соединения")
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                btnSync.isEnabled = true
+                if (!isWaitingServerWake) {
+                    resetSyncButtonState()
+                }
+                syncJob = null
             }
         }
     }
@@ -563,6 +602,56 @@ class MainActivity : AppCompatActivity() {
      */
     private fun updateSyncStatus(status: String) {
         tvSyncStatus.text = status
+    }
+
+    private fun resetSyncButtonState() {
+        btnSync.isEnabled = true
+        btnSync.text = syncButtonDefaultText
+    }
+
+    private fun cancelPendingSync() {
+        syncJob?.cancel()
+        exitServerWarmupState()
+        resetSyncButtonState()
+        updateSyncStatus("Обновление отменено")
+    }
+
+    private fun enterServerWarmupState() {
+        if (isWaitingServerWake) return
+        isWaitingServerWake = true
+        btnSync.text = "Отменить обновление"
+        btnSync.isEnabled = true
+    }
+
+    private fun exitServerWarmupState() {
+        if (!isWaitingServerWake) return
+        isWaitingServerWake = false
+        btnSync.text = syncButtonDefaultText
+    }
+
+    private suspend fun waitForServerWakeup(): Boolean {
+        updateSyncStatus("Проверяем соединение...")
+        val readyImmediately = withContext(Dispatchers.IO) { syncService.checkServerConnection() }
+        if (readyImmediately) {
+            return true
+        }
+        enterServerWarmupState()
+        return try {
+            repeat(6) {
+                if (!currentCoroutineContext().isActive) return false
+                updateSyncStatus("Происходит включение сервера, базы данных скоро обновятся.")
+                delay(5000)
+                if (!currentCoroutineContext().isActive) return false
+                val isReady = withContext(Dispatchers.IO) { syncService.checkServerConnection() }
+                if (isReady) {
+                    updateSyncStatus("Сервер активен, начинаем обновление…")
+                    return true
+                }
+            }
+            false
+        } finally {
+            exitServerWarmupState()
+        }
     }
 
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
@@ -652,8 +741,11 @@ class MainActivity : AppCompatActivity() {
                 
                 // Проверяем, нужно ли выполнить начальную установку
                 val appInstallService = com.example.vkbookandroid.service.AppInstallationService(this@MainActivity)
+                val needsInitialSetup = withContext(Dispatchers.IO) {
+                    appInstallService.needsInitialSetup()
+                }
                 
-                if (appInstallService.needsInitialSetup()) {
+                if (needsInitialSetup) {
                     updateSyncStatus("Первоначальная установка...")
                     
                     val setupComplete = withContext(Dispatchers.IO) {
@@ -671,11 +763,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 // Создаем Excel файлы, если их нет (БЕЗ загрузки с сервера)
-                val dataDir = filesDir.resolve("data")
-                val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
-                val armaturesFile = dataDir.resolve("Armatures.xlsx")
+                val excelFilesMissing = withContext(Dispatchers.IO) {
+                    val dataDir = filesDir.resolve("data")
+                    val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
+                    val armaturesFile = dataDir.resolve("Armatures.xlsx")
+                    !(bschuFile.exists() && armaturesFile.exists())
+                }
                 
-                if (!bschuFile.exists() || !armaturesFile.exists()) {
+                if (excelFilesMissing) {
                     updateSyncStatus("Создание базовых Excel файлов...")
                     val created = withContext(Dispatchers.IO) {
                         com.example.vkbookandroid.utils.ExcelFileCreator.createExcelFilesInDataDir(this@MainActivity)
@@ -714,8 +809,11 @@ class MainActivity : AppCompatActivity() {
                 
                 // Инициализируем базовые файлы
                 val appInstallService = com.example.vkbookandroid.service.AppInstallationService(this@MainActivity)
+                val needsInitialSetup = withContext(Dispatchers.IO) {
+                    appInstallService.needsInitialSetup()
+                }
                 
-                if (appInstallService.needsInitialSetup()) {
+                if (needsInitialSetup) {
                     updateSyncStatus("Первоначальная установка...")
                     
                     val setupComplete = withContext(Dispatchers.IO) {
@@ -733,11 +831,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 // Создаем Excel файлы, если их нет
-                val dataDir = filesDir.resolve("data")
-                val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
-                val armaturesFile = dataDir.resolve("Armatures.xlsx")
+                val excelFilesMissing = withContext(Dispatchers.IO) {
+                    val dataDir = filesDir.resolve("data")
+                    val bschuFile = dataDir.resolve("Oborudovanie_BSCHU.xlsx")
+                    val armaturesFile = dataDir.resolve("Armatures.xlsx")
+                    !(bschuFile.exists() && armaturesFile.exists())
+                }
                 
-                if (!bschuFile.exists() || !armaturesFile.exists()) {
+                if (excelFilesMissing) {
                     updateSyncStatus("Создание Excel файлов...")
                     val created = withContext(Dispatchers.IO) {
                         com.example.vkbookandroid.utils.ExcelFileCreator.createExcelFilesInDataDir(this@MainActivity)
@@ -862,21 +963,14 @@ class MainActivity : AppCompatActivity() {
         Log.d("MainActivity", "ViewPager2 initialization completed")
     }
 
-    private fun loadTabsVisibility(): Map<Int, Boolean> {
+    private fun loadTabsVisibility(): MutableMap<Int, Boolean> {
         return try {
             val prefs = getSharedPreferences("server_settings", MODE_PRIVATE)
             val json = prefs.getString("tabs_visibility_json", null)
             
             // Если нет сохраненных настроек, возвращаем значения по умолчанию
             if (json == null) {
-                val defaultMap = mutableMapOf<Int, Boolean>()
-                (0..5).forEach { defaultMap[it] = false }
-                // По умолчанию включены: Арматура (1), Схемы (2), График (4)
-                // Отключены: Сигналы БЩУ (0), Редактор (3), График проверок (5)
-                defaultMap[1] = true
-                defaultMap[2] = true
-                defaultMap[4] = true
-                return defaultMap
+                return defaultTabsVisibility()
             }
             
             val gson = com.google.gson.Gson()
@@ -884,7 +978,7 @@ class MainActivity : AppCompatActivity() {
                 // формат: список включённых индексов
                 val listType = object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type
                 val list = gson.fromJson<List<Int>>(json, listType) ?: emptyList()
-                val map = mutableMapOf<Int, Boolean>()
+                val map = defaultTabsVisibility()
                 (0..5).forEach { map[it] = list.contains(it) }
                 map
             } else {
@@ -892,26 +986,38 @@ class MainActivity : AppCompatActivity() {
                 return try {
                     val mapStrType = object : com.google.gson.reflect.TypeToken<Map<String, Boolean>>() {}.type
                     val m = gson.fromJson<Map<String, Boolean>>(json, mapStrType) ?: emptyMap()
-                    m.mapKeys { it.key.toIntOrNull() ?: -1 }.filterKeys { it in 0..5 }
+                    val result = defaultTabsVisibility()
+                    m.forEach { (key, value) ->
+                        val intKey = key.toIntOrNull()
+                        if (intKey != null && intKey in 0..5) {
+                            result[intKey] = value ?: false
+                        }
+                    }
+                    result
                 } catch (_: Exception) {
                     val mapIntType = object : com.google.gson.reflect.TypeToken<Map<Int, Boolean>>() {}.type
-                    gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
+                    val parsed = gson.fromJson<Map<Int, Boolean>>(json, mapIntType) ?: emptyMap()
+                    val result = defaultTabsVisibility()
+                    parsed.forEach { (key, value) ->
+                        if (key in 0..5) {
+                            result[key] = value ?: false
+                        }
+                    }
+                    result
                 }
             }
         } catch (e: Exception) { 
             // В случае ошибки возвращаем значения по умолчанию
-            val defaultMap = mutableMapOf<Int, Boolean>()
-            (0..5).forEach { defaultMap[it] = false }
-            defaultMap[1] = true  // Арматура
-            defaultMap[2] = true  // Схемы
-            defaultMap[4] = true  // График
-            defaultMap[5] = true  // График проверок
-            defaultMap
+            defaultTabsVisibility()
         }
     }
 
     private fun applyTabsVisibility() {
         val visible = loadTabsVisibility()
+        if (!isAdminMode) {
+            visible[0] = false
+            visible[3] = false
+        }
         if (!::tabLayout.isInitialized || !::viewPager.isInitialized) return
         val adapter = (viewPager.adapter as? MainPagerAdapter)
         val newPositions = (0..5).filter { visible[it] != false }
@@ -926,9 +1032,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
         viewPager.visibility = android.view.View.VISIBLE
+        
+        // Проверяем текущую вкладку - если она стала невидимой (например, Редактор после отключения админ режима),
+        // переключаемся на другую вкладку
+        val currentLocalIndex = viewPager.currentItem
+        val currentGlobalIndex = adapter?.getGlobalPositionAt(currentLocalIndex)
+        val isCurrentTabVisible = currentGlobalIndex != null && newPositions.contains(currentGlobalIndex)
+        
+        // Если текущая вкладка невидима, определяем новую целевую вкладку
+        // determineInitialGlobalTab() уже проверяет сохраненную вкладку и если она не видима, выбирает другую
         val targetGlobal = determineInitialGlobalTab(newPositions)
-        setCurrentTabByGlobal(targetGlobal, smoothScroll = false)
-        saveLastSelectedTab(targetGlobal)
+        
+        // Переключаемся на целевую вкладку только если текущая невидима или целевая отличается
+        if (!isCurrentTabVisible || currentGlobalIndex != targetGlobal) {
+            setCurrentTabByGlobal(targetGlobal, smoothScroll = false)
+            saveLastSelectedTab(targetGlobal)
+        }
     }
     
     /**
@@ -938,16 +1057,17 @@ class MainActivity : AppCompatActivity() {
         Log.d("MainActivity", "Setting up file watching for automatic data refresh")
         
         // Отслеживаем файлы для удаленного сервера
-        val baseUrl = ServerSettingsActivity.getCurrentServerUrl(this)
+        val baseUrl = NetworkModule.getCurrentBaseUrl()
         Log.d("MainActivity", "Server URL: $baseUrl")
         
         // Настраиваем отслеживание для DataFragment (Oborudovanie_BSCHU.xlsx)
         val bschuFilePath = filesDir.resolve("data").resolve("Oborudovanie_BSCHU.xlsx").absolutePath
         dataRefreshManager.startWatching(bschuFilePath) {
+            if (!isAdminMode) return@startWatching
             Log.d("MainActivity", "BSCHU file changed, refreshing DataFragment")
             uiScope.launch {
                 try {
-                    val dataFragment = getFragmentByPosition(0) as? org.example.pult.android.DataFragment
+                    val dataFragment = getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
                     dataFragment?.let { (it as RefreshableFragment).refreshData() }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Error refreshing DataFragment", e)
@@ -961,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
             Log.d("MainActivity", "Armature file changed, refreshing ArmatureFragment")
             uiScope.launch {
                 try {
-                    val armatureFragment = getFragmentByPosition(1) as? ArmatureFragment
+                    val armatureFragment = getFragmentByGlobalPosition(1) as? ArmatureFragment
                     armatureFragment?.let { (it as RefreshableFragment).refreshData() }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Error refreshing ArmatureFragment", e)
@@ -976,7 +1096,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("MainActivity", "Data directory changed, refreshing SchemesFragment")
                 uiScope.launch {
                     try {
-                        val schemesFragment = getFragmentByPosition(2) as? SchemesFragment
+                        val schemesFragment = getFragmentByGlobalPosition(2) as? SchemesFragment
                         schemesFragment?.let { (it as RefreshableFragment).refreshData() }
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Error refreshing SchemesFragment", e)
@@ -989,9 +1109,9 @@ class MainActivity : AppCompatActivity() {
         val checksFilePath = filesDir.resolve("data").resolve("График проверок .xlsx").absolutePath
         dataRefreshManager.startWatching(checksFilePath) {
             Log.d("MainActivity", "График проверок.xlsx changed, refreshing ChecksScheduleFragment")
-            uiScope.launch {
-                try {
-                    val checksFragment = getFragmentByPosition(5) as? ChecksScheduleFragment
+                uiScope.launch {
+                    try {
+                        val checksFragment = getFragmentByGlobalPosition(5) as? ChecksScheduleFragment
                     checksFragment?.let { (it as RefreshableFragment).refreshData() }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Error refreshing ChecksScheduleFragment", e)
@@ -1005,21 +1125,10 @@ class MainActivity : AppCompatActivity() {
     /**
      * Получить фрагмент по позиции в ViewPager
      */
-    private fun getFragmentByPosition(position: Int): androidx.fragment.app.Fragment? {
-        return try {
-            val fragmentManager = supportFragmentManager
-            val fragmentTag = "f$position"
-            fragmentManager.findFragmentByTag(fragmentTag)
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error getting fragment by position $position", e)
-            null
-        }
-    }
-    
     fun refreshArmatureFragmentData() {
         uiScope.launch {
             try {
-                val armatureFragment = getFragmentByPosition(1) as? ArmatureFragment
+                val armatureFragment = getFragmentByGlobalPosition(1) as? ArmatureFragment
                 armatureFragment?.let { 
                     (it as RefreshableFragment).refreshData()
                     Log.d("MainActivity", "ArmatureFragment refreshed from external call")
@@ -1031,9 +1140,10 @@ class MainActivity : AppCompatActivity() {
     }
     
     fun refreshDataFragmentData() {
+        if (!isAdminMode) return
         uiScope.launch {
             try {
-                val dataFragment = getFragmentByPosition(0) as? org.example.pult.android.DataFragment
+                val dataFragment = getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
                 dataFragment?.let { 
                     (it as RefreshableFragment).refreshData()
                     Log.d("MainActivity", "DataFragment refreshed from external call")
@@ -1076,6 +1186,21 @@ class MainActivity : AppCompatActivity() {
             Log.d("MainActivity", "Refreshed data in all fragments using new refresh mechanism")
         } catch (e: Exception) {
             Log.e("MainActivity", "Error refreshing fragments", e)
+        }
+    }
+    
+    private fun getFragmentByGlobalPosition(globalPosition: Int): androidx.fragment.app.Fragment? {
+        if (!::pagerAdapter.isInitialized) return null
+        val adapter = pagerAdapter
+        // Сначала пробуем взять уже созданный экземпляр из адаптера
+        adapter.getFragmentByGlobalPosition(globalPosition)?.let { return it }
+        // Если фрагмент ещё не создан или был уничтожен, пытаемся найти его по тэгу ViewPager2
+        val localIndex = adapter.getLocalIndex(globalPosition) ?: return null
+        return try {
+            supportFragmentManager.findFragmentByTag("f$localIndex")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error getting fragment by global position $globalPosition", e)
+            null
         }
     }
     
@@ -1179,6 +1304,13 @@ class MainActivity : AppCompatActivity() {
     private fun loadLastSelectedTab(): Int =
         navigationPrefs.getInt(KEY_LAST_TAB, DEFAULT_TAB_GLOBAL)
 
+    private fun updateAdminModeState(): Boolean {
+        val newState = AdminAccessManager.isAdminModeEnabled(this)
+        val changed = newState != isAdminMode
+        isAdminMode = newState
+        return changed
+    }
+
     private fun determineInitialGlobalTab(visiblePositions: List<Int>): Int {
         if (visiblePositions.isEmpty()) return DEFAULT_TAB_GLOBAL
         val saved = loadLastSelectedTab()
@@ -1195,6 +1327,32 @@ class MainActivity : AppCompatActivity() {
         val localIndex = adapter.getLocalIndex(globalPosition) ?: return
         if (viewPager.currentItem != localIndex) {
             viewPager.setCurrentItem(localIndex, smoothScroll)
+        }
+    }
+
+    private fun defaultTabsVisibility(): MutableMap<Int, Boolean> {
+        val defaultMap = mutableMapOf<Int, Boolean>()
+        (0..5).forEach { defaultMap[it] = false }
+        // По умолчанию включены: Арматура (1), Схемы (2), График (4)
+        defaultMap[1] = true
+        defaultMap[2] = true
+        defaultMap[4] = true
+        return defaultMap
+    }
+
+    private fun loadThemeConfiguration() {
+        runBlocking {
+            withContext(Dispatchers.IO) {
+                com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
+            }
+        }
+    }
+
+    private fun readServerUrlFromPreferences(): String {
+        return runBlocking {
+            withContext(Dispatchers.IO) {
+                ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
+            }
         }
     }
 

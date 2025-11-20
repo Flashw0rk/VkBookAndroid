@@ -6,6 +6,7 @@ import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
+import kotlin.LazyThreadSafetyMode
 
 /**
  * Менеджер для работы с хешами файлов
@@ -20,7 +21,10 @@ class FileHashManager(private val context: Context) {
         private const val KEY_HASH_PREFIX = "hash_"
     }
     
-    private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val sharedPrefs by lazy(LazyThreadSafetyMode.NONE) {
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
     
     /**
      * Вычисляет SHA-256 хеш файла

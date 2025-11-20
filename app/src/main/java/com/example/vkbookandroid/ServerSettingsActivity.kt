@@ -430,7 +430,9 @@ class ServerSettingsActivity : AppCompatActivity() {
     
     private fun showTabSettingsDialog() {
         val tabs = mutableListOf<Pair<String, Int>>()
-        tabs.add("Сигналы БЩУ" to 0)
+        if (hasEditorAccess()) {
+            tabs.add("Сигналы БЩУ" to 0)
+        }
         tabs.add("Арматура" to 1)
         tabs.add("Схемы" to 2)
         

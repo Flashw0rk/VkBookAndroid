@@ -30,7 +30,8 @@
         <activity
             android:name=".SplashActivity"
             android:exported="true"
-            android:theme="@style/Theme.VkBookAndroid.Splash">
+            android:theme="@style/Theme.VkBookAndroid.Splash"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -42,7 +43,8 @@
             android:name=".MainActivity"
             android:exported="false"
             android:theme="@style/Theme.VkBookAndroid"
-            android:windowSoftInputMode="stateUnchanged|adjustResize">
+            android:windowSoftInputMode="stateUnchanged|adjustResize"
+            android:launchMode="singleTask">
         </activity>
         
         <activity

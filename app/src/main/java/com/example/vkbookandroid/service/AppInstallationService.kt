@@ -3,6 +3,7 @@ package com.example.vkbookandroid.service
 import android.content.Context
 import android.util.Log
 import java.io.File
+import kotlin.LazyThreadSafetyMode
 
 /**
  * Сервис для создания базовых файлов в filesDir при первом запуске
@@ -11,7 +12,10 @@ import java.io.File
 class AppInstallationService(private val context: Context) {
     
     private val tag = "AppInstallationService"
-    private val prefs = context.getSharedPreferences("app_installation", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs by lazy(LazyThreadSafetyMode.NONE) {
+        appContext.getSharedPreferences("app_installation", Context.MODE_PRIVATE)
+    }
     private val INSTALLATION_COMPLETE_KEY = "installation_complete"
     
     /**
@@ -23,7 +27,7 @@ class AppInstallationService(private val context: Context) {
         
         if (isComplete) {
             // Проверяем, действительно ли файлы существуют
-            val dataDir = File(context.filesDir, "data")
+            val dataDir = File(appContext.filesDir, "data")
             val jsonFile = File(dataDir, "armature_coords.json")
             val armaturesFile = File(dataDir, "Armatures.xlsx")
             val bschuFile = File(dataDir, "Oborudovanie_BSCHU.xlsx")
@@ -49,7 +53,7 @@ class AppInstallationService(private val context: Context) {
             val startTime = System.currentTimeMillis()
             
             // Создаем единую папку data/ для всех файлов
-            val dataDir = File(context.filesDir, "data")
+            val dataDir = File(appContext.filesDir, "data")
             if (!dataDir.exists()) {
                 dataDir.mkdirs()
                 Log.d(tag, "Created data directory: ${dataDir.absolutePath}")
@@ -92,7 +96,7 @@ class AppInstallationService(private val context: Context) {
      * Создать базовый файл armature_coords.json
      */
     private fun createBaseArmatureCoords() {
-        val jsonFile = File(context.filesDir, "data/armature_coords.json")
+        val jsonFile = File(appContext.filesDir, "data/armature_coords.json")
         val baseJson = """
         {
             "Безымянный-1.pdf": {
@@ -186,7 +190,7 @@ class AppInstallationService(private val context: Context) {
             dataRow.createCell(3).setCellValue("Безымянный-1.pdf")
             
             // Сохраняем файл
-            val file = File(context.filesDir, "data/Armatures.xlsx")
+            val file = File(appContext.filesDir, "data/Armatures.xlsx")
             file.outputStream().use { outputStream ->
                 workbook.write(outputStream)
             }
@@ -223,7 +227,7 @@ class AppInstallationService(private val context: Context) {
             dataRow.createCell(3).setCellValue("Безымянный-1.pdf")
             
             // Сохраняем файл
-            val file = File(context.filesDir, "data/Oborudovanie_BSCHU.xlsx")
+            val file = File(appContext.filesDir, "data/Oborudovanie_BSCHU.xlsx")
             file.outputStream().use { outputStream ->
                 workbook.write(outputStream)
             }
@@ -255,7 +259,7 @@ class AppInstallationService(private val context: Context) {
             val pdfContent = createMinimalPdfContent(title)
             
             // Создаем только в filesDir/data/ (для приложения)
-            val appPdfFile = File(context.filesDir, "data/$filename")
+            val appPdfFile = File(appContext.filesDir, "data/$filename")
             appPdfFile.writeBytes(pdfContent)
             Log.d(tag, "Created PDF in app data: $filename")
             
@@ -346,8 +350,8 @@ class AppInstallationService(private val context: Context) {
      * Проверить, установлены ли файлы
      */
     fun areFilesInstalled(): Boolean {
-        val dataDir = File(context.filesDir, "data")
-        val jsonFile = File(context.filesDir, "data/armature_coords.json")
+        val dataDir = File(appContext.filesDir, "data")
+        val jsonFile = File(appContext.filesDir, "data/armature_coords.json")
         
         val excelFiles = listOf("Armatures.xlsx", "Oborudovanie_BSCHU.xlsx")
         val allExcelExist = excelFiles.all { filename ->

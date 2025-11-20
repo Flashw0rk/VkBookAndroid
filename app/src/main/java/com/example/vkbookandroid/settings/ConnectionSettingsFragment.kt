@@ -24,7 +24,10 @@ import com.example.vkbookandroid.network.model.RateLimitInfo
 import com.example.vkbookandroid.network.model.ServerInfoPayload
 import com.example.vkbookandroid.network.model.UsageQuotaInfo
 import com.example.vkbookandroid.network.model.WarningFlag
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import java.security.MessageDigest
 import java.time.Instant
@@ -33,6 +36,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import android.util.Log
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 /**
  * Фрагмент настроек подключения к серверу
@@ -86,6 +92,12 @@ class ConnectionSettingsFragment : Fragment() {
         loadSettings()
         setupListeners()
         applyAutoSyncVisibility()
+        updateAdminUiVisibility()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        updateAdminUiVisibility()
     }
     
     private fun loadSettings() {
@@ -188,10 +200,7 @@ class ConnectionSettingsFragment : Fragment() {
         val dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_server_info, null, false)
         val holder = ServerInfoDialogHolder(dialogView)
         val baseUrl = ensureTrailingSlash(NetworkModule.getCurrentBaseUrl())
-        holder.setStaticInfo(
-            baseUrl = baseUrl,
-            endpoints = SERVER_ENDPOINTS
-        )
+        holder.setStaticInfo(baseUrl = baseUrl)
 
         val dialog = AlertDialog.Builder(requireContext())
             .setTitle("Render + R2")
@@ -288,14 +297,8 @@ class ConnectionSettingsFragment : Fragment() {
         return if (url.endsWith("/")) url else "$url/"
     }
 
-    private fun ServerInfoDialogHolder.setStaticInfo(
-        baseUrl: String,
-        endpoints: List<ServerEndpoint>
-    ) {
+    private fun ServerInfoDialogHolder.setStaticInfo(baseUrl: String) {
         baseUrlValue.text = baseUrl
-        endpointsValue.text = endpoints.joinToString("\n") { endpoint ->
-            "${endpoint.method} ${endpoint.path} — ${endpoint.description}"
-        }
     }
 
     private fun ServerInfoDialogHolder.showLoading(message: String) {
@@ -563,19 +566,12 @@ class ConnectionSettingsFragment : Fragment() {
         }
     }
 
-    private data class ServerEndpoint(
-        val method: String,
-        val path: String,
-        val description: String
-    )
-
     private class ServerInfoDialogHolder(view: View) {
         val progress: ProgressBar = view.findViewById(R.id.progressServerInfo)
         val loadingText: TextView = view.findViewById(R.id.tvServerInfoLoading)
         val layoutLoading: View = view.findViewById(R.id.layoutLoading)
         val content: View = view.findViewById(R.id.layoutServerInfoContent)
         val baseUrlValue: TextView = view.findViewById(R.id.tvBaseUrlValue)
-        val endpointsValue: TextView = view.findViewById(R.id.tvEndpointsValue)
         val rateLimitProgress: ProgressBar = view.findViewById(R.id.progressRateLimit)
         val rateLimitDetails: TextView = view.findViewById(R.id.tvRateLimitDetails)
         val rateLimitReset: TextView = view.findViewById(R.id.tvRateLimitReset)
@@ -604,17 +600,6 @@ class ConnectionSettingsFragment : Fragment() {
         private const val ADMIN_PASSWORD_HASH = "7773b8d2211efb5d382d36f4ea8bc5dd12af0ab8e52ab96783c3b2be8002d786"
         private const val SALT = "VkBook2024"
         private const val KEY_TABS_VISIBILITY = "tabs_visibility_json"
-        private val SERVER_ENDPOINTS = listOf(
-            ServerEndpoint("GET", "/api/updates/check", "Список файлов + метаданные"),
-            ServerEndpoint("GET", "/api/updates/download?filename=...", "Скачать файл (кириллица, спецсимволы)"),
-            ServerEndpoint("POST", "/api/updates/upload", "Загрузить файл (multipart, поле file)"),
-            ServerEndpoint("DELETE", "/api/updates/delete?filename=...", "Удалить файл из R2"),
-            ServerEndpoint("GET", "/api/debug/r2/list", "Диагностика Cloudflare R2"),
-            ServerEndpoint("GET", "/api/updates/r2/usage", "Лимиты Cloudflare R2 (storage/Class A/B)"),
-            ServerEndpoint("GET", "/api/metrics/usage", "Rate limit, загрузки/выгрузки, предупреждения"),
-            ServerEndpoint("GET", "/api/files/list", "Совместимость со старыми скриптами"),
-            ServerEndpoint("GET", "/api/metadata/versions", "История версий локальных данных")
-        )
         
         /**
          * Вычислить SHA-256 хеш строки
@@ -723,7 +708,23 @@ class ConnectionSettingsFragment : Fragment() {
     
     private fun toggleEditorAccess() {
         val prefs = requireContext().getSharedPreferences("server_settings", android.content.Context.MODE_PRIVATE)
+        // Отключаем доступ к редактору
         prefs.edit().putBoolean(KEY_EDITOR_ACCESS, false).apply()
+        
+        // Также отключаем Редактор из активных вкладок, если он включен
+        val current = loadTabsVisibility(prefs)
+        if (current[3] == true) {
+            val json = prefs.getString(KEY_TABS_VISIBILITY, null)
+            if (json != null && json.trim().startsWith("[")) {
+                val gson = com.google.gson.Gson()
+                val listType = object : com.google.gson.reflect.TypeToken<List<Int>>() {}.type
+                val list = gson.fromJson<List<Int>>(json, listType) ?: emptyList()
+                val filteredList = list.filter { it != 3 } // Убираем индекс 3 (Редактор)
+                val newJson = gson.toJson(filteredList)
+                prefs.edit().putString(KEY_TABS_VISIBILITY, newJson).apply()
+            }
+        }
+        
         Toast.makeText(requireContext(), "🔒 Доступ к редактору заблокирован", Toast.LENGTH_SHORT).show()
     }
     
@@ -731,12 +732,18 @@ class ConnectionSettingsFragment : Fragment() {
         val prefs = requireContext().getSharedPreferences("server_settings", android.content.Context.MODE_PRIVATE)
         return prefs.getBoolean(KEY_EDITOR_ACCESS, false)
     }
+
+    private fun updateAdminUiVisibility() {
+        btnServerInfo.isVisible = hasEditorAccess()
+    }
     
     private fun showTabSettingsDialog() {
         val prefs = requireContext().getSharedPreferences("server_settings", android.content.Context.MODE_PRIVATE)
         
         val tabs = mutableListOf<Pair<String, Int>>()
-        tabs.add("Сигналы БЩУ" to 0)
+        if (hasEditorAccess()) {
+            tabs.add("Сигналы БЩУ" to 0)
+        }
         tabs.add("Арматура" to 1)
         tabs.add("Схемы" to 2)
         
@@ -803,114 +810,27 @@ class ConnectionSettingsFragment : Fragment() {
     // ========================================
     
     private fun diagnoseNetwork() {
-        btnDiagnose.isEnabled = false
-        btnDiagnose.text = "🔍 Проверяем..."
-        
         val currentUrl = getCurrentServerUrl()
+        btnDiagnose.isEnabled = false
+        updateDiagnoseStatus("🔍 Диагностика...")
         
-        Thread {
+        viewLifecycleOwner.lifecycleScope.launch {
             val results = mutableListOf<String>()
-            
             try {
-                results.add("🔍 Диагностика сетевого подключения")
-                results.add("URL: $currentUrl")
-                results.add("")
-                
-                // 1. Проверка парсинга URL
-                results.add("1️⃣ Парсинг URL...")
-                val url = java.net.URL(currentUrl)
-                val host = url.host
-                val port = if (url.port != -1) url.port else url.defaultPort
-                results.add("   ✅ Хост: $host")
-                results.add("   ✅ Порт: $port")
-                
-                // 2. Проверка DNS резолвинга
-                results.add("")
-                results.add("2️⃣ DNS резолвинг...")
-                try {
-                    val address = java.net.InetAddress.getByName(host)
-                    results.add("   ✅ IP адрес: ${address.hostAddress}")
-                } catch (e: Exception) {
-                    results.add("   ❌ DNS ошибка: ${e.message}")
+                warmupRenderIfNeeded(currentUrl, results)
+                val mainReport = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    buildDiagnosticsReport(currentUrl)
                 }
-                
-                // 3. Проверка подключения к порту
-                results.add("")
-                results.add("3️⃣ Проверка доступности порта...")
-                try {
-                    java.net.Socket().use { socket ->
-                        socket.connect(java.net.InetSocketAddress(host, port), 10000)
-                        results.add("   ✅ Порт $port доступен")
-                    }
-                } catch (e: Exception) {
-                    results.add("   ❌ Порт $port недоступен")
-                    results.add("   Причина: ${e.message}")
-                }
-                
-                // 4. Проверка HTTP ответа через actuator/health
-                results.add("")
-                results.add("4️⃣ HTTP проверка...")
-                try {
-                    val healthUrl = java.net.URL("${currentUrl}actuator/health")
-                    val connection = healthUrl.openConnection() as java.net.HttpURLConnection
-                    connection.connectTimeout = 10000
-                    connection.readTimeout = 10000
-                    connection.requestMethod = "GET"
-                    connection.setRequestProperty("X-API-Key", com.example.vkbookandroid.BuildConfig.API_KEY)
-                    
-                    val responseCode = connection.responseCode
-                    results.add("   ✅ HTTP ответ: $responseCode")
-                    
-                    if (responseCode == 200) {
-                        val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
-                        results.add("   ✅ Сервер отвечает!")
-                        if (responseBody.contains("\"status\":\"UP\"")) {
-                            results.add("   ✅ Статус сервера: UP")
-                        }
-                    } else {
-                        results.add("   ⚠️ Код ответа: $responseCode")
-                    }
-                    connection.disconnect()
-                } catch (e: Exception) {
-                    results.add("   ❌ HTTP ошибка: ${e.message}")
-                    
-                    // Пробуем основной URL
-                    try {
-                        val connection = url.openConnection() as java.net.HttpURLConnection
-                        connection.connectTimeout = 10000
-                        connection.readTimeout = 10000
-                        connection.requestMethod = "GET"
-                        val responseCode = connection.responseCode
-                        results.add("   ℹ️ Основной URL ответ: $responseCode")
-                        connection.disconnect()
-                    } catch (e2: Exception) {
-                        results.add("   ❌ Основной URL недоступен: ${e2.message}")
-                    }
-                }
-                
-                // 5. Информация о сети
-                results.add("")
-                results.add("5️⃣ Информация о сети:")
-                val wifiDetails = requireContext().collectWifiDiagnostics()
-                val ssid = wifiDetails.ssid ?: "Неизвестно"
-                results.add("   📶 Wi-Fi сеть: $ssid")
-                wifiDetails.ipAddress?.let { ip ->
-                    results.add("   📡 IP устройства: $ip")
-                }
-                
-                results.add("")
-                results.add("✅ Диагностика завершена")
-                
+                results.addAll(mainReport)
             } catch (e: Exception) {
                 results.add("❌ Критическая ошибка: ${e.message}")
-            }
-            
-            requireActivity().runOnUiThread {
+            } finally {
+                if (!isAdded) return@launch
                 btnDiagnose.isEnabled = true
                 btnDiagnose.text = "🔍 Диагностика сети"
-                showDiagnosticResults(results, currentUrl)
+                showDiagnosticResults(results)
             }
-        }.start()
+        }
     }
     
     private fun getCurrentServerUrl(): String {
@@ -927,8 +847,27 @@ class ConnectionSettingsFragment : Fragment() {
             else -> defaultUrl
         }
     }
+
+    private fun describeServerMode(): String {
+        val prefs = requireContext().getSharedPreferences("server_settings", android.content.Context.MODE_PRIVATE)
+        val mode = prefs.getString("server_mode", "internet") ?: "internet"
+        if (mode != "custom") return "Основной Render"
+        val custom = prefs.getString("custom_url", "")?.trim().orEmpty()
+        if (custom.isBlank()) return "Пользовательский (не задан)"
+        val host = extractHostSafe(custom)
+        return "Пользовательский ($host)"
+    }
+
+    private fun extractHostSafe(raw: String): String {
+        return try {
+            val prepared = if (raw.contains("://")) raw else "https://$raw"
+            java.net.URL(prepared).host.ifBlank { raw }
+        } catch (_: Exception) {
+            raw
+        }
+    }
     
-    private fun showDiagnosticResults(results: List<String>, url: String) {
+    private fun showDiagnosticResults(results: List<String>) {
         val message = results.joinToString("\n")
         
         AlertDialog.Builder(requireContext())
@@ -942,6 +881,198 @@ class ConnectionSettingsFragment : Fragment() {
                 Toast.makeText(requireContext(), "Результаты скопированы", Toast.LENGTH_SHORT).show()
             }
             .show()
+    }
+
+    private fun updateDiagnoseStatus(text: String) {
+        if (!isAdded) return
+        btnDiagnose.post { btnDiagnose.text = text }
+    }
+
+    private suspend fun warmupRenderIfNeeded(baseUrl: String, results: MutableList<String>) {
+        val normalized = ensureTrailingSlash(baseUrl)
+        val warmupUrl = "$normalized" + "api/metrics/usage"
+        results.add("🌐 Параллельный ping активного сервера")
+        val firstAttempt = pingEndpoint(warmupUrl, 8000)
+        if (firstAttempt.success) {
+            results.add("   ✅ Render ответил за ${firstAttempt.latencyMs ?: 0} мс")
+            return
+        }
+        if (!firstAttempt.isRenderSleepLike()) {
+            results.add("   ⚠️ Ping завершился ошибкой: ${firstAttempt.error?.message ?: "код ${firstAttempt.responseCode}"}")
+            return
+        }
+
+        val maxAttempts = 5
+        for (attempt in 1..maxAttempts) {
+            val remainingSeconds = (maxAttempts - attempt) * 5
+            val status = if (remainingSeconds > 0) {
+                "🌙 Render просыпается… осталось ~${remainingSeconds} c"
+            } else {
+                "🌙 Render просыпается…"
+            }
+            updateDiagnoseStatus(status)
+            results.add("   ⏳ Попытка ${attempt + 1}: сервер ещё просыпается")
+            delay(5000)
+            val retry = pingEndpoint(warmupUrl, 12000)
+            if (retry.success) {
+                updateDiagnoseStatus("✅ Render готов")
+                results.add("   ✅ Render ответил на попытке ${attempt + 1}")
+                return
+            }
+            if (!retry.isRenderSleepLike()) {
+                results.add("   ⚠️ Ping завершился ошибкой: ${retry.error?.message ?: "код ${retry.responseCode}"}")
+                break
+            }
+        }
+        results.add("   ⚠️ Render не успел проснуться. Диагностика продолжится, ответ может появиться с задержкой.")
+        updateDiagnoseStatus("⚠️ Render запускается… выполняем проверку")
+    }
+
+    private suspend fun pingEndpoint(url: String, timeoutMs: Int): PingResult {
+        return withContext(Dispatchers.IO) {
+            var connection: java.net.HttpURLConnection? = null
+            val start = System.currentTimeMillis()
+            try {
+                val target = java.net.URL(url)
+                connection = (target.openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                    requestMethod = "GET"
+                    setRequestProperty("X-API-Key", BuildConfig.API_KEY)
+                }
+                val code = connection!!.responseCode
+                PingResult(
+                    success = code in 200..399,
+                    responseCode = code,
+                    latencyMs = System.currentTimeMillis() - start,
+                    error = null
+                )
+            } catch (e: Exception) {
+                PingResult(
+                    success = false,
+                    error = e
+                )
+            } finally {
+                try { connection?.disconnect() } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    private fun buildDiagnosticsReport(currentUrl: String): List<String> {
+        val results = mutableListOf<String>()
+        try {
+            results.add("🔍 Диагностика сетевого подключения")
+            results.add("Режим: ${describeServerMode()}")
+            results.add("")
+
+            // 1. Парсинг URL
+            results.add("1️⃣ Парсинг URL...")
+            val url = java.net.URL(currentUrl)
+            val host = url.host
+            val port = if (url.port != -1) url.port else url.defaultPort
+            results.add("   ✅ Хост и порт получены")
+
+            // 2. DNS
+            results.add("")
+            results.add("2️⃣ DNS резолвинг...")
+            try {
+                val address = java.net.InetAddress.getByName(host)
+            results.add("   ✅ DNS резолвинг: ${address.hostAddress}")
+            } catch (e: Exception) {
+                results.add("   ❌ DNS ошибка: ${e.message}")
+            }
+
+            // 3. Порт
+            results.add("")
+            results.add("3️⃣ Проверка доступности порта...")
+            try {
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress(host, port), 10000)
+            results.add("   ✅ Порт доступен")
+                }
+            } catch (e: Exception) {
+                results.add("   ❌ Порт $port недоступен: ${e.message}")
+            }
+
+            // 4. HTTP проверка
+            results.add("")
+            results.add("4️⃣ HTTP проверка...")
+            try {
+                val healthUrl = java.net.URL("${ensureTrailingSlash(currentUrl)}actuator/health")
+                val connection = healthUrl.openConnection() as java.net.HttpURLConnection
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("X-API-Key", BuildConfig.API_KEY)
+                val responseCode = connection.responseCode
+                results.add("   ✅ HTTP ответ: $responseCode")
+                if (responseCode == 200) {
+                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                    if (responseBody.contains("\"status\":\"UP\"")) {
+                        results.add("   ✅ Статус сервера: UP")
+                    } else {
+                        results.add("   ℹ️ Тело ответа: ${responseBody.take(200)}")
+                    }
+                } else {
+                    results.add("   ⚠️ Код ответа: $responseCode")
+                }
+                connection.disconnect()
+            } catch (e: Exception) {
+                if (isRenderSleepException(e)) {
+                    results.add("   ⚠️ Render выводится из спящего режима. Оставайтесь на экране — повторная попытка выполнится автоматически.")
+                    results.add("   ℹ️ Причина: ${e.localizedMessage ?: e.javaClass.simpleName}")
+                } else {
+                    results.add("   ❌ HTTP ошибка: ${e.message}")
+                }
+                try {
+                    val fallbackConnection = url.openConnection() as java.net.HttpURLConnection
+                    fallbackConnection.connectTimeout = 10000
+                    fallbackConnection.readTimeout = 10000
+                    fallbackConnection.requestMethod = "GET"
+                    val responseCode = fallbackConnection.responseCode
+                    results.add("   ℹ️ Основной URL ответ: $responseCode")
+                    fallbackConnection.disconnect()
+                } catch (fallbackError: Exception) {
+                    val renderSpecific = if (isRenderSleepException(fallbackError)) {
+                        "   ⚠️ Render всё ещё просыпается: ${fallbackError.localizedMessage ?: fallbackError.javaClass.simpleName}"
+                    } else {
+                        "   ❌ Основной URL недоступен: ${fallbackError.message}"
+                    }
+                    results.add(renderSpecific)
+                }
+            }
+
+            // 5. Информация о сети
+            results.add("")
+            results.add("5️⃣ Информация о сети:")
+            val wifiDetails = requireContext().collectWifiDiagnostics()
+            val ssid = wifiDetails.ssid ?: "Неизвестно"
+            results.add("   📶 Wi-Fi сеть: $ssid")
+            wifiDetails.ipAddress?.let { ip ->
+                results.add("   📡 IP устройства: $ip")
+            }
+            results.add("")
+            results.add("✅ Диагностика завершена")
+        } catch (e: Exception) {
+            results.add("❌ Критическая ошибка: ${e.message}")
+        }
+        return results
+    }
+
+    private fun isRenderSleepException(e: Throwable): Boolean {
+        return e is SocketTimeoutException || e is ConnectException || e is UnknownHostException
+    }
+
+    private data class PingResult(
+        val success: Boolean,
+        val responseCode: Int? = null,
+        val latencyMs: Long? = null,
+        val error: Throwable? = null
+    ) {
+        fun isRenderSleepLike(): Boolean {
+            val err = error
+            return err != null && (err is SocketTimeoutException || err is ConnectException || err is UnknownHostException)
+        }
     }
 }
 
