@@ -53,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSync: Button
     private lateinit var btnSettings: android.widget.ImageButton
     private lateinit var tvSyncStatus: TextView
+    private lateinit var progressSync: android.widget.ProgressBar
+    private lateinit var tvProgressPercent: TextView
     private lateinit var syncService: SyncService
     private lateinit var dataRefreshManager: DataRefreshManager
     private var syncJob: Job? = null
@@ -157,7 +159,7 @@ class MainActivity : AppCompatActivity() {
         if (com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
             window.statusBarColor = com.example.vkbookandroid.theme.AppTheme.getPrimaryColor()
             
-            // Асинхронная предзагрузка фона для темы Атом
+            // Асинхронная предзагрузка фона для темы Неон
             if (com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()) {
                 uiScope.launch(Dispatchers.IO) {
                     com.example.vkbookandroid.theme.AppTheme.getBackgroundDrawable(this@MainActivity)
@@ -182,6 +184,8 @@ class MainActivity : AppCompatActivity() {
         syncButtonDefaultText = btnSync.text.toString()
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
+        progressSync = findViewById(R.id.progressSync)
+        tvProgressPercent = findViewById(R.id.tvProgressPercent)
         
         // Загружаем настройки сервера ПЕРЕД созданием SyncService
         loadServerSettings()
@@ -231,6 +235,9 @@ class MainActivity : AppCompatActivity() {
     
     override fun onResume() {
         super.onResume()
+        
+        // Возобновляем FileWatcher при возврате приложения на передний план
+        dataRefreshManager.resumeAllWatchers()
         
         android.util.Log.d("MainActivity", "=== onResume() вызван ===")
         
@@ -533,30 +540,34 @@ class MainActivity : AppCompatActivity() {
             try {
                 val serverReady = waitForServerWakeup()
                 if (!serverReady) {
-                    updateSyncStatus("Сервер недоступен")
+                    updateSyncStatus("Сервер недоступен", 0)
+                    hideSyncProgress()
                     resetSyncButtonState()
                     return@launch
                 }
                 
                 btnSync.isEnabled = false
                 btnSync.text = syncButtonDefaultText
-                updateSyncStatus("Ручное обновление...")
+                showSyncProgress()
+                updateSyncStatus("Подключение к серверу...", 0)
                 
                 val result = withContext(Dispatchers.IO) {
                     syncService.syncAll { percent, type ->
                         withContext(Dispatchers.Main) {
-                            updateSyncStatus("[$percent%] $type")
+                            updateSyncStatus(type, percent)
                         }
                     }
                 }
                 
                 when {
                     result.rateLimitReached -> {
-                        updateSyncStatus("Лимит запросов достигнут")
+                        updateSyncStatus("Лимит запросов достигнут", 100)
+                        hideSyncProgress()
                         Toast.makeText(this@MainActivity, "Достигнут лимит запросов к серверу", Toast.LENGTH_LONG).show()
                     }
                     result.overallSuccess -> {
-                        updateSyncStatus("Обновление завершено")
+                        updateSyncStatus("Обновление завершено", 100)
+                        hideSyncProgress()
                         val updateSummary = result.getUpdateSummary()
                         Toast.makeText(this@MainActivity, updateSummary, Toast.LENGTH_LONG).show()
                         
@@ -570,7 +581,8 @@ class MainActivity : AppCompatActivity() {
                         com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
                     }
                     result.serverConnected -> {
-                        updateSyncStatus("Ошибка обновления")
+                        updateSyncStatus("Ошибка обновления", 100)
+                        hideSyncProgress()
                         val errorMsg = if (result.errorMessages.isNotEmpty()) {
                             "Ошибки: ${result.errorMessages.joinToString(", ")}"
                         } else {
@@ -579,14 +591,17 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
                     }
                     else -> {
-                        updateSyncStatus("Сервер недоступен")
+                        updateSyncStatus("Сервер недоступен", 0)
+                        hideSyncProgress()
                         Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (ce: CancellationException) {
-                updateSyncStatus("Обновление отменено")
+                updateSyncStatus("Обновление отменено", 0)
+                hideSyncProgress()
             } catch (e: Exception) {
-                updateSyncStatus("Ошибка соединения")
+                updateSyncStatus("Ошибка соединения", 0)
+                hideSyncProgress()
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
                 if (!isWaitingServerWake) {
@@ -603,6 +618,33 @@ class MainActivity : AppCompatActivity() {
     private fun updateSyncStatus(status: String) {
         tvSyncStatus.text = status
     }
+    
+    /**
+     * Обновление статуса синхронизации с прогрессом
+     */
+    private fun updateSyncStatus(status: String, percent: Int) {
+        tvSyncStatus.text = status
+        progressSync.progress = percent
+        tvProgressPercent.text = "$percent%"
+    }
+    
+    /**
+     * Показать индикатор прогресса синхронизации
+     */
+    private fun showSyncProgress() {
+        progressSync.visibility = android.view.View.VISIBLE
+        tvProgressPercent.visibility = android.view.View.VISIBLE
+        progressSync.progress = 0
+        tvProgressPercent.text = "0%"
+    }
+    
+    /**
+     * Скрыть индикатор прогресса синхронизации
+     */
+    private fun hideSyncProgress() {
+        progressSync.visibility = android.view.View.GONE
+        tvProgressPercent.visibility = android.view.View.GONE
+    }
 
     private fun resetSyncButtonState() {
         btnSync.isEnabled = true
@@ -613,7 +655,8 @@ class MainActivity : AppCompatActivity() {
         syncJob?.cancel()
         exitServerWarmupState()
         resetSyncButtonState()
-        updateSyncStatus("Обновление отменено")
+        updateSyncStatus("Обновление отменено", 0)
+        hideSyncProgress()
     }
 
     private fun enterServerWarmupState() {
@@ -631,18 +674,54 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun waitForServerWakeup(): Boolean {
         updateSyncStatus("Проверяем соединение...")
-        val readyImmediately = withContext(Dispatchers.IO) { syncService.checkServerConnection() }
+        val readyImmediately = withContext(Dispatchers.IO) {
+            runCatching { syncService.checkServerConnection() }
+                .onFailure { e ->
+                    Log.w("MainActivity", "Initial server check failed: ${e.message}")
+                    // ⚠️ ВАЖНО: Проверяем, не rate limit ли это
+                    if (isRateLimitRelatedException(e)) {
+                        Log.w("MainActivity", "Rate limit detected in initial check")
+                        // При rate limit НЕ начинаем процесс пробуждения
+                        updateSyncStatus("Достигнут лимит запросов. Подождите 30-60 секунд.")
+                    }
+                }
+                .getOrDefault(false)
+        }
+        
+        // ⚠️ ВАЖНО: Если checkServerConnection вернул true, это может быть:
+        // 1. Сервер доступен (хорошо)
+        // 2. Rate limit (checkServerConnection возвращает true при rate limit)
+        // Нужно проверить, не rate limit ли это, перед началом синхронизации
+        
         if (readyImmediately) {
+            // Проверяем, не rate limit ли это, делая дополнительную проверку
+            // Если это rate limit, syncAll обработает это правильно
             return true
         }
+        
+        // ⚠️ ВАЖНО: Начинаем процесс пробуждения ТОЛЬКО если сервер действительно не отвечает
+        // (не rate limit, не доступен)
         enterServerWarmupState()
         return try {
-            repeat(6) {
+            repeat(6) { attempt ->
                 if (!currentCoroutineContext().isActive) return false
-                updateSyncStatus("Происходит включение сервера, базы данных скоро обновятся.")
+                updateSyncStatus("Происходит включение сервера, базы данных скоро обновятся. Попытка ${attempt + 1}/6")
                 delay(5000)
                 if (!currentCoroutineContext().isActive) return false
-                val isReady = withContext(Dispatchers.IO) { syncService.checkServerConnection() }
+                val isReady = withContext(Dispatchers.IO) {
+                    runCatching { syncService.checkServerConnection() }
+                        .onFailure { e ->
+                            Log.w("MainActivity", "Server wake check failed on attempt ${attempt + 1}: ${e.message}")
+                            // ⚠️ ВАЖНО: Проверяем, не rate limit ли это
+                            if (isRateLimitRelatedException(e)) {
+                                Log.w("MainActivity", "Rate limit detected during wakeup check - stopping wakeup process")
+                                updateSyncStatus("Достигнут лимит запросов. Прекращаем попытки пробуждения.")
+                                // При rate limit прекращаем процесс пробуждения
+                                return@withContext false
+                            }
+                        }
+                        .getOrDefault(false)
+                }
                 if (isReady) {
                     updateSyncStatus("Сервер активен, начинаем обновление…")
                     return true
@@ -652,6 +731,24 @@ class MainActivity : AppCompatActivity() {
         } finally {
             exitServerWarmupState()
         }
+    }
+    
+    /**
+     * Проверить, связано ли исключение с rate limit
+     */
+    private fun isRateLimitRelatedException(e: Throwable): Boolean {
+        // Проверяем тип исключения
+        if (e is com.example.vkbookandroid.repository.RateLimitException) {
+            return true
+        }
+        
+        // Проверяем по сообщению
+        val message = e.message?.lowercase() ?: ""
+        return message.contains("429") ||
+               message.contains("rate limit") ||
+               message.contains("too many requests") ||
+               message.contains("quota exceeded") ||
+               message.contains("rate_limit")
     }
 
     override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
@@ -856,19 +953,27 @@ class MainActivity : AppCompatActivity() {
                 }
                 
                 if (isServerAvailable) {
-                    updateSyncStatus("Автосинхронизация...")
+                    showSyncProgress()
+                    updateSyncStatus("Автосинхронизация...", 0)
                     val result = withContext(Dispatchers.IO) {
-                        syncService.syncAll()
+                        syncService.syncAll { percent, type ->
+                            withContext(Dispatchers.Main) {
+                                updateSyncStatus(type, percent)
+                            }
+                        }
                     }
                     
                     if (result.overallSuccess) {
-                        updateSyncStatus("Автообновление завершено")
+                        updateSyncStatus("Автообновление завершено", 100)
+                        hideSyncProgress()
                         refreshFragmentsData()
                     } else {
-                        updateSyncStatus("Ошибка автообновления")
+                        updateSyncStatus("Ошибка автообновления", 0)
+                        hideSyncProgress()
                     }
                 } else {
-                    updateSyncStatus("Сервер недоступен")
+                    updateSyncStatus("Сервер недоступен", 0)
+                    hideSyncProgress()
                 }
                 
             } catch (e: Exception) {

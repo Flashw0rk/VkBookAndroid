@@ -155,6 +155,13 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
         // Регистрируем фрагмент в ThemeManager
         com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
         
+        // Применяем тему сразу при открытии фрагмента
+        view?.post {
+            if (isAdded && view != null) {
+                applyTheme()
+            }
+        }
+        
         // Генерируем данные только при первом показе фрагмента
         if (!isScheduleDataGenerated) {
             // КРИТИЧНО: Выполняем тяжелые вычисления асинхронно, чтобы не блокировать UI
@@ -331,11 +338,35 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                         
                         if (bgDrawable != null && isAdded) {
                             withContext(Dispatchers.Main) {
+                                // Пытаемся применить фон сразу, если view готов
                                 if (isAdded && v.isAttachedToWindow) {
                                     Log.d(TAG, "Применяем фоновое изображение")
                                     v.background = bgDrawable
                                 } else {
-                                    Log.w(TAG, "View не готов для фонового изображения: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
+                                    // Если view еще не готов, откладываем применение через post
+                                    Log.w(TAG, "View не готов для фонового изображения, откладываем применение: isAdded=$isAdded, isAttached=${v.isAttachedToWindow}")
+                                    
+                                    // Пробуем применить через post
+                                    v.post {
+                                        if (isAdded && v.isAttachedToWindow) {
+                                            Log.d(TAG, "Применяем фоновое изображение (отложенное через post)")
+                                            v.background = bgDrawable
+                                        } else {
+                                            // Если все еще не готов, добавляем слушатель для отслеживания прикрепления
+                                            Log.w(TAG, "View все еще не готов, добавляем слушатель прикрепления")
+                                            val attachListener = object : View.OnAttachStateChangeListener {
+                                                override fun onViewAttachedToWindow(view: View) {
+                                                    if (isAdded && view.isAttachedToWindow) {
+                                                        Log.d(TAG, "Применяем фоновое изображение (через слушатель прикрепления)")
+                                                        view.background = bgDrawable
+                                                    }
+                                                    view.removeOnAttachStateChangeListener(this)
+                                                }
+                                                override fun onViewDetachedFromWindow(view: View) {}
+                                            }
+                                            v.addOnAttachStateChangeListener(attachListener)
+                                        }
+                                    }
                                 }
                             }
                         } else {

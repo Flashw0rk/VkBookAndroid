@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Неоновая стилистика: яркие светящиеся линии и элементы на темном фоне -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- ========== ФОН: Темно-синий градиент (как в теме Неон) ========== -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#07152D"
+                android:centerColor="#0B1F46"
+                android:endColor="#04102A" />
+        </shape>
+    </item>
+    
+    <!-- ========== НЕОНОВЫЕ СВЕТЯЩИЕСЯ ЛИНИИ ========== -->
+    
+    <!-- Горизонтальная неоновая линия 1 (сверху) -->
+    <item
+        android:top="80dp"
+        android:bottom="0dp"
+        android:left="50dp"
+        android:right="50dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="0"
+                android:startColor="#00D8FF80"
+                android:centerColor="#00D8FFFF"
+                android:endColor="#00D8FF80" />
+            <size android:height="2dp" />
+        </shape>
+    </item>
+    
+    <!-- Горизонтальная неоновая линия 2 (по центру) -->
+    <item
+        android:top="350dp"
+        android:bottom="0dp"
+        android:left="100dp"
+        android:right="100dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="0"
+                android:startColor="#00E5FF60"
+                android:centerColor="#00E5FFFF"
+                android:endColor="#00E5FF60" />
+            <size android:height="3dp" />
+        </shape>
+    </item>
+    
+    <!-- Вертикальная неоновая линия 1 (слева) -->
+    <item
+        android:top="150dp"
+        android:bottom="150dp"
+        android:left="80dp"
+        android:right="0dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="90"
+                android:startColor="#0091D580"
+                android:centerColor="#0091D5FF"
+                android:endColor="#0091D580" />
+            <size android:width="2dp" />
+        </shape>
+    </item>
+    
+    <!-- Вертикальная неоновая линия 2 (справа) -->
+    <item
+        android:top="200dp"
+        android:bottom="200dp"
+        android:left="0dp"
+        android:right="120dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="90"
+                android:startColor="#00C4FF70"
+                android:centerColor="#00C4FFFF"
+                android:endColor="#00C4FF70" />
+            <size android:width="2dp" />
+        </shape>
+    </item>
+    
+    <!-- Диагональная неоновая линия 1 -->
+    <item
+        android:top="100dp"
+        android:bottom="500dp"
+        android:left="150dp"
+        android:right="150dp">
+        <rotate
+            android:fromDegrees="45"
+            android:pivotX="50%"
+            android:pivotY="50%">
+            <shape android:shape="rectangle">
+                <gradient
+                    android:angle="45"
+                    android:startColor="#00D8FF50"
+                    android:centerColor="#00D8FFFF"
+                    android:endColor="#00D8FF50" />
+                <size android:width="2dp" android:height="400dp" />
+            </shape>
+        </rotate>
+    </item>
+    
+    <!-- Диагональная неоновая линия 2 -->
+    <item
+        android:top="200dp"
+        android:bottom="400dp"
+        android:left="200dp"
+        android:right="200dp">
+        <rotate
+            android:fromDegrees="-45"
+            android:pivotX="50%"
+            android:pivotY="50%">
+            <shape android:shape="rectangle">
+                <gradient
+                    android:angle="-45"
+                    android:startColor="#00E5FF50"
+                    android:centerColor="#00E5FFFF"
+                    android:endColor="#00E5FF50" />
+                <size android:width="2dp" android:height="300dp" />
+            </shape>
+        </rotate>
+    </item>
+    
+    <!-- ========== НЕОНОВЫЕ СВЕТЯЩИЕСЯ ТОЧКИ И КРУГИ ========== -->
+    
+    <!-- Большой неоновый круг (центр) -->
+    <item
+        android:top="320dp"
+        android:bottom="320dp"
+        android:left="320dp"
+        android:right="320dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="40"
+                android:startColor="#00D8FFFF"
+                android:centerColor="#00D8FF80"
+                android:endColor="#00D8FF20" />
+            <size android:width="80dp" android:height="80dp" />
+        </shape>
+    </item>
+    
+    <!-- Средний неоновый круг (слева) -->
+    <item
+        android:top="180dp"
+        android:bottom="180dp"
+        android:left="180dp"
+        android:right="180dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="25"
+                android:startColor="#00E5FFFF"
+                android:centerColor="#00E5FF70"
+                android:endColor="#00E5FF20" />
+            <size android:width="50dp" android:height="50dp" />
+        </shape>
+    </item>
+    
+    <!-- Средний неоновый круг (справа) -->
+    <item
+        android:top="480dp"
+        android:bottom="480dp"
+        android:left="480dp"
+        android:right="480dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="25"
+                android:startColor="#0091D5FF"
+                android:centerColor="#0091D570"
+                android:endColor="#0091D520" />
+            <size android:width="50dp" android:height="50dp" />
+        </shape>
+    </item>
+    
+    <!-- Маленькие неоновые точки (разбросанные) -->
+    <item android:top="120dp" android:left="250dp">
+        <shape android:shape="oval">
+            <solid android:color="#00D8FFFF" />
+            <size android:width="8dp" android:height="8dp" />
+        </shape>
+    </item>
+    
+    <item android:top="250dp" android:left="450dp">
+        <shape android:shape="oval">
+            <solid android:color="#00E5FFFF" />
+            <size android:width="10dp" android:height="10dp" />
+        </shape>
+    </item>
+    
+    <item android:top="400dp" android:left="150dp">
+        <shape android:shape="oval">
+            <solid android:color="#0091D5FF" />
+            <size android:width="8dp" android:height="8dp" />
+        </shape>
+    </item>
+    
+    <item android:top="550dp" android:left="350dp">
+        <shape android:shape="oval">
+            <solid android:color="#00C4FFFF" />
+            <size android:width="10dp" android:height="10dp" />
+        </shape>
+    </item>
+    
+    <item android:top="200dp" android:left="550dp">
+        <shape android:shape="oval">
+            <solid android:color="#00D8FFFF" />
+            <size android:width="6dp" android:height="6dp" />
+        </shape>
+    </item>
+    
+    <item android:top="500dp" android:left="500dp">
+        <shape android:shape="oval">
+            <solid android:color="#00E5FFFF" />
+            <size android:width="8dp" android:height="8dp" />
+        </shape>
+    </item>
+    
+    <!-- ========== НЕОНОВЫЕ СВЕТЯЩИЕСЯ ДУГИ ========== -->
+    
+    <!-- Дуга 1 (верхняя) -->
+    <item
+        android:top="150dp"
+        android:bottom="150dp"
+        android:left="200dp"
+        android:right="200dp">
+        <shape android:shape="oval">
+            <stroke
+                android:width="4dp"
+                android:color="#00D8FFFF" />
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+    
+    <!-- Дуга 2 (нижняя) -->
+    <item
+        android:top="450dp"
+        android:bottom="450dp"
+        android:left="250dp"
+        android:right="250dp">
+        <shape android:shape="oval">
+            <stroke
+                android:width="3dp"
+                android:color="#00E5FFFF" />
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+    
+    <!-- ========== ЖЕЛТЫЕ НЕОНОВЫЕ АКЦЕНТЫ ========== -->
+    
+    <!-- Желтая неоновая точка (акцент) -->
+    <item android:top="300dp" android:left="400dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:centerX="0.5"
+                android:centerY="0.5"
+                android:gradientRadius="15"
+                android:startColor="#FFC107FF"
+                android:centerColor="#FFC10780"
+                android:endColor="#FFC10720" />
+            <size android:width="30dp" android:height="30dp" />
+        </shape>
+    </item>
+    
+    <item android:top="450dp" android:left="300dp">
+        <shape android:shape="oval">
+            <solid android:color="#FFC107FF" />
+            <size android:width="12dp" android:height="12dp" />
+        </shape>
+    </item>
+    
+    <!-- Полупрозрачный слой для читаемости текста (очень тонкий) -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#0D47A105" />
+        </shape>
+    </item>
+    
+</layer-list>
+

@@ -27,18 +27,13 @@ object AppTheme {
     
     // ID тем (Темная эргономичная УДАЛЕНА по просьбе!)
     const val THEME_CLASSIC = 0           // Классическая (текущая, по умолчанию)
-    const val THEME_NUCLEAR = 1           // Атомная промышленность
+    const val THEME_NUCLEAR = 1           // Неоновая тема
     const val THEME_ERGONOMIC_LIGHT = 2   // Эргономичная светлая
     const val THEME_MODERN_GLASS = 3      // Современная Glass (было 4)
     const val THEME_MODERN_GRADIENT = 4   // Современная Брутальная (бывшая Gradient)
     const val THEME_ROSATOM = 5           // Корпоративный стиль Росатома
     
     private var currentThemeId = THEME_ROSATOM // По умолчанию тема Росатом
-    @Volatile
-    private var cachedNuclearBitmap: Bitmap? = null
-    @Volatile
-    private var cachedNuclearBitmapResId: Int? = null
-    
     @Volatile
     private var cachedRosatomBitmap: Bitmap? = null
     @Volatile
@@ -61,9 +56,7 @@ object AppTheme {
         prefs.edit().putInt(KEY_CURRENT_THEME, themeId).apply()
         
         // Очищаем кэши картинок для других тем
-        if (themeId != THEME_NUCLEAR) {
-            clearNuclearBitmapCache()
-        }
+        // Кэш картинки атома удален - больше не используется
         if (themeId != THEME_ROSATOM) {
             clearRosatomBitmapCache()
         }
@@ -83,7 +76,7 @@ object AppTheme {
      */
     fun getThemeName(themeId: Int): String = when (themeId) {
         THEME_CLASSIC -> "📘 Классическая"
-        THEME_NUCLEAR -> "⚛️ Атом"
+        THEME_NUCLEAR -> "💡 Неон"
         THEME_ERGONOMIC_LIGHT -> "🌿 Эргономичная"
         THEME_MODERN_GLASS -> "💎 Стеклянная"
         THEME_MODERN_GRADIENT -> "🧱 Брутальная"
@@ -120,7 +113,7 @@ object AppTheme {
     // Фон приложения
     fun getBackgroundColor(): Int = when (currentThemeId) {
         THEME_CLASSIC -> Color.parseColor("#FAFAFA") // Светлый (текущий)
-        THEME_NUCLEAR -> Color.parseColor("#0D47A1") // Темно-синий (как на картинке атома!)
+        THEME_NUCLEAR -> Color.parseColor("#0D47A1") // Темно-синий (неоновый фон)
         THEME_ERGONOMIC_LIGHT -> Color.parseColor("#F1F8E9") // Очень светло-зеленый (НЕ кислотный!)
         THEME_MODERN_GLASS -> Color.parseColor("#E0F7FA") // Светло-циановый
         THEME_MODERN_GRADIENT -> Color.parseColor("#FCE4EC") // Светло-розовый
@@ -164,7 +157,7 @@ object AppTheme {
     // Цвет активного элемента
     fun getActiveColor(): Int = when (currentThemeId) {
         THEME_CLASSIC -> Color.parseColor("#FFEB3B") // Желтый (текущий)
-        THEME_NUCLEAR -> Color.parseColor("#FFC107") // ЯРКО-ЖЕЛТЫЙ (Атом) - было блеклое!
+        THEME_NUCLEAR -> Color.parseColor("#FFC107") // ЯРКО-ЖЕЛТЫЙ (Неон) - яркий акцент
         THEME_ERGONOMIC_LIGHT -> Color.parseColor("#DCEDC8") // Светло-зеленый (пастельный)
         THEME_MODERN_GLASS -> Color.parseColor("#B2EBF2") // Светлый циан
         THEME_MODERN_GRADIENT -> Color.parseColor("#F8BBD0") // Светло-розовый
@@ -331,7 +324,7 @@ object AppTheme {
      */
     fun getThemeDescription(themeId: Int): String = when (themeId) {
         THEME_CLASSIC -> "Стандартное оформление. Проверенный временем дизайн, удобный для работы."
-        THEME_NUCLEAR -> "Голубые и белые тона с оранжевыми акцентами."
+        THEME_NUCLEAR -> "Яркие неоновые цвета: темно-синий фон с голубыми и желтыми акцентами."
         THEME_ERGONOMIC_LIGHT -> "Светлая эргономичная тема с природными мягкими зелеными тонами. Снижает усталость глаз при длительной работы."
         THEME_MODERN_GLASS -> "Современный стеклянный дизайн с легкой прозрачностью. Воздушный и элегантный."
         THEME_MODERN_GRADIENT -> "Контрастное брутальное оформление с насыщенными акцентами и строгой геометрией."
@@ -488,47 +481,19 @@ object AppTheme {
             intArrayOf(Color.parseColor("#07152D"), Color.parseColor("#0B1F46"), Color.parseColor("#04102A"))
         ).apply { shape = GradientDrawable.RECTANGLE }
 
-        val bitmap = getNuclearBitmap(context)
-        android.util.Log.d("AppTheme", "getNuclearBitmap() вернул: ${if (bitmap != null) "bitmap ${bitmap.width}x${bitmap.height}" else "NULL"}")
+        // Используем старую векторную картинку с атомом (с желтыми акцентами)
+        val atomDrawable = ContextCompat.getDrawable(context, com.example.vkbookandroid.R.drawable.bg_atom_3d_realistic)
         
-        return if (bitmap != null) {
-            android.util.Log.d("AppTheme", "Создаем LayerDrawable с градиентом и картинкой")
-            LayerDrawable(arrayOf(gradient, CenterCropBitmapDrawable(bitmap)))
+        return if (atomDrawable != null) {
+            android.util.Log.d("AppTheme", "Используем векторную картинку атома для темы Неон")
+            atomDrawable
         } else {
-            // Фоллбек: используем статичную картинку если не удалось декодировать
-            android.util.Log.w("AppTheme", "Bitmap не загрузился, используем fallback drawable")
-            ContextCompat.getDrawable(context, com.example.vkbookandroid.R.drawable.bg_atom_3d_realistic) ?: gradient
+            android.util.Log.w("AppTheme", "Картинка атома не найдена, используем только градиент")
+            gradient
         }
     }
 
-    private fun getNuclearBitmap(context: Context): Bitmap? {
-        android.util.Log.d("AppTheme", "getNuclearBitmap() начало")
-        
-        val targetRes = com.example.vkbookandroid.R.drawable.bg_atom_photo_full
-
-        val existing = cachedNuclearBitmap
-        if (existing != null && !existing.isRecycled) {
-            val resId = cachedNuclearBitmapResId
-            if (resId == targetRes) {
-                android.util.Log.d("AppTheme", "Используем кэшированный bitmap")
-                return existing
-            }
-        }
-
-        android.util.Log.d("AppTheme", "Декодируем bitmap из ресурсов...")
-        val decoded: Bitmap? = decodeBitmapResource(context, targetRes)
-        val resUsed: Int? = if (decoded != null) targetRes else null
-
-        if (decoded != null) {
-            cachedNuclearBitmap = decoded
-            cachedNuclearBitmapResId = resUsed
-            android.util.Log.d("AppTheme", "Bitmap успешно декодирован и закэширован: ${decoded.width}x${decoded.height}")
-        } else {
-            android.util.Log.e("AppTheme", "НЕ УДАЛОСЬ загрузить ни один bitmap для темы Атом!")
-        }
-
-        return decoded
-    }
+    // Метод удален - картинка атома больше не используется в теме Неон
 
     private fun decodeBitmapResource(context: Context, resId: Int): Bitmap? {
         return try {
@@ -552,10 +517,7 @@ object AppTheme {
         }
     }
 
-    private fun clearNuclearBitmapCache() {
-        cachedNuclearBitmap = null
-        cachedNuclearBitmapResId = null
-    }
+    // Метод удален - кэш картинки атома больше не используется
     
     private fun clearRosatomBitmapCache() {
         cachedRosatomBitmap = null
