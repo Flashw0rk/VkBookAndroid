@@ -358,9 +358,25 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadArmatureColumnWidths(ctx)
                 currentColumnWidths = mutableMapOf()
                 val headersForDefaults = try { (cachedSession ?: pagingSession ?: sessionForInitial).getHeaders() } catch (_: Throwable) { emptyList() }
-                if (savedColumnWidths.isNotEmpty()) {
-                    currentColumnWidths.putAll(savedColumnWidths)
-                } else {
+                
+                // Проверяем соответствие сохраненных размеров текущим заголовкам
+                if (savedColumnWidths.isNotEmpty() && headersForDefaults.isNotEmpty()) {
+                    // Фильтруем сохраненные размеры, оставляя только те, которые соответствуют текущим заголовкам
+                    val filteredWidths = savedColumnWidths.filterKeys { savedHeader ->
+                        headersForDefaults.any { currentHeader -> 
+                            currentHeader.equals(savedHeader, ignoreCase = true) 
+                        }
+                    }
+                    if (filteredWidths.isNotEmpty()) {
+                        currentColumnWidths.putAll(filteredWidths)
+                        Log.d("ArmatureFragment", "Загружены сохраненные размеры колонок: ${filteredWidths.size} из ${savedColumnWidths.size}")
+                    } else {
+                        Log.w("ArmatureFragment", "Сохраненные размеры не соответствуют текущим заголовкам, используем значения по умолчанию")
+                    }
+                }
+                
+                // Заполняем недостающие размеры значениями по умолчанию
+                if (currentColumnWidths.isEmpty() || currentColumnWidths.size < headersForDefaults.size) {
                     val xdpi = resources.displayMetrics.xdpi
                     val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
@@ -604,6 +620,9 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             val newW = container.width
             if (newW <= 0) return@addOnLayoutChangeListener
             if (!isDataLoaded) return@addOnLayoutChangeListener
+            if (adapter.headers.isEmpty()) return@addOnLayoutChangeListener
+            if (currentColumnWidths.isEmpty()) return@addOnLayoutChangeListener
+            
             if (lastMeasuredListWidth == 0) {
                 lastMeasuredListWidth = newW
                 return@addOnLayoutChangeListener
@@ -629,7 +648,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 adapter.updateColumnWidths(idx, newWForCol, notify)
             }
 
-            com.example.vkbookandroid.utils.ColumnWidthManager.saveArmatureColumnWidths(requireContext(), currentColumnWidths, "ArmatureFragment")
+            // Сохраняем только если данные загружены и размеры не пустые
+            if (isDataLoaded && currentColumnWidths.isNotEmpty() && adapter.headers.isNotEmpty()) {
+                com.example.vkbookandroid.utils.ColumnWidthManager.saveArmatureColumnWidths(requireContext(), currentColumnWidths, "ArmatureFragment")
+            }
         }
     }
 

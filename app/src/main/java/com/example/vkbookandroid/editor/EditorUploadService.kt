@@ -15,7 +15,8 @@ import kotlin.math.pow
 
 class EditorUploadService(
     private val maxAttempts: Int = 3,
-    private val baseBackoffMs: Long = 500L
+    private val baseBackoffMs: Long = 500L,
+    private val updatesPrefix: String = "vkbook-server/updates/"
 ) : IEditorUploadService {
 
     override suspend fun uploadJson(file: File): Response<String>? = runCatching {
@@ -25,9 +26,10 @@ class EditorUploadService(
             body = file.asRequestBody("application/json".toMediaType())
         )
         // Отправляем в обновлённый универсальный endpoint updates/upload
+        val targetPath = buildUpdatesPath(file.name)
         val resp = NetworkModule.getArmatureApiService().uploadUpdatesFile(
             file = part,
-            filename = file.name,
+            filename = targetPath,
             adminLogin = EditorUploadState.adminLogin,
             adminPassword = EditorUploadState.adminPassword
         )
@@ -47,9 +49,10 @@ class EditorUploadService(
             filename = file.name,
             body = file.asRequestBody("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".toMediaType())
         )
+        val targetPath = buildUpdatesPath(file.name)
         val resp = NetworkModule.getArmatureApiService().uploadUpdatesFile(
             file = part,
-            filename = file.name,
+            filename = targetPath,
             adminLogin = EditorUploadState.adminLogin,
             adminPassword = EditorUploadState.adminPassword
         )
@@ -135,6 +138,10 @@ class EditorUploadService(
             else -> "failure"
         }
         return UploadReport(overall, jsonRes, excelRes)
+    }
+
+    private fun buildUpdatesPath(fileName: String): String {
+        return if (fileName.startsWith(updatesPrefix)) fileName else updatesPrefix + fileName
     }
 }
 

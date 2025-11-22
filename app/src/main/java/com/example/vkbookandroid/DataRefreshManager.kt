@@ -14,10 +14,29 @@ class DataRefreshManager(private val context: Context) {
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val fileWatchers = ConcurrentHashMap<String, FileWatcher>()
     private val refreshCallbacks = ConcurrentHashMap<String, MutableList<() -> Unit>>()
+    private var isPaused = false // Флаг паузы для экономии батареи
     
     companion object {
         private const val TAG = "DataRefreshManager"
         private const val CHECK_INTERVAL_MS = 5000L // Проверяем каждые 5 секунд
+    }
+    
+    /**
+     * Приостановить все watchers (когда приложение в фоне)
+     */
+    fun pauseAllWatchers() {
+        if (isPaused) return
+        isPaused = true
+        Log.d(TAG, "All file watchers paused (app in background)")
+    }
+    
+    /**
+     * Возобновить все watchers (когда приложение на переднем плане)
+     */
+    fun resumeAllWatchers() {
+        if (!isPaused) return
+        isPaused = false
+        Log.d(TAG, "All file watchers resumed (app in foreground)")
     }
     
     /**
@@ -146,6 +165,11 @@ class DataRefreshManager(private val context: Context) {
         }
         
         private suspend fun checkForChanges() {
+            // ⚠️ ВАЖНО: Не проверяем файлы если приложение в фоне (экономия батареи)
+            if (isPaused) {
+                return
+            }
+            
             val file = File(filePath)
             if (!file.exists()) return
             

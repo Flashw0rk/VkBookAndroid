@@ -28,12 +28,21 @@ object ColumnWidthManager {
     
     /**
      * Сохранить ширины колонок для арматуры
+     * Использует commit() для гарантированного сохранения на диск
      */
     fun saveArmatureColumnWidths(context: Context, widths: Map<String, Int>, tag: String = "ColumnWidthManager") {
         try {
+            if (widths.isEmpty()) {
+                Log.w(tag, "Попытка сохранить пустые размеры колонок - пропускаем")
+                return
+            }
             val sharedPrefs = context.getSharedPreferences(PREFS_ARMATURE, Context.MODE_PRIVATE)
-            sharedPrefs.edit().putString(KEY_ARMATURE, Gson().toJson(widths)).apply()
-            Log.d(tag, "Арматура колонки сохранены: $widths")
+            val success = sharedPrefs.edit().putString(KEY_ARMATURE, Gson().toJson(widths)).commit()
+            if (success) {
+                Log.d(tag, "Арматура колонки сохранены: $widths")
+            } else {
+                Log.e(tag, "Ошибка: не удалось сохранить колонки арматуры")
+            }
         } catch (e: Exception) {
             Log.e(tag, "Ошибка сохранения колонок арматуры", e)
         }

@@ -1,32 +1,34 @@
 package com.example.vkbookandroid
 
-import android.os.Bundle
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.Color
-import androidx.appcompat.app.AppCompatActivity
-import android.widget.ImageView
-import android.widget.Toast
+import android.graphics.Paint
 import android.graphics.Matrix
-import android.opengl.GLES10
-import android.util.Log
-import com.google.gson.Gson
-import android.os.SystemClock
-import com.google.gson.reflect.TypeToken
-import org.example.pult.model.ArmatureCoords
-import java.io.InputStream
 import android.net.Uri
-// Удалены неиспользуемые импорты: DocumentsContract, BufferedReader, InputStreamReader
+import android.opengl.GLES10
+import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
+import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.isVisible
+import com.example.vkbookandroid.model.ArmatureMarker
+import com.example.vkbookandroid.network.NetworkModule
+import com.example.vkbookandroid.repository.ArmatureRepository
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.example.vkbookandroid.model.ArmatureMarker
-import com.example.vkbookandroid.model.ArmatureCoordsData
-import com.example.vkbookandroid.repository.ArmatureRepository
-import com.example.vkbookandroid.network.NetworkModule
+import org.example.pult.model.ArmatureCoords
+import java.io.InputStream
 
 class PdfViewerActivity : AppCompatActivity() {
     
@@ -48,6 +50,11 @@ class PdfViewerActivity : AppCompatActivity() {
     private var lastReRenderAtMs: Long = 0L
     private var isViewportPinned: Boolean = false
     private var restoreFullButton: android.widget.ImageButton? = null
+    private var markersJob: Job? = null
+    private var markersReady: Boolean = false
+    private var markersLoadingOverlay: android.view.View? = null
+    private var markersLoadingText: TextView? = null
+    private var markersLoadingProgress: ProgressBar? = null
     private val activityJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + activityJob)
     
@@ -61,6 +68,10 @@ class PdfViewerActivity : AppCompatActivity() {
         armatureRepository = ArmatureRepository(this, NetworkModule.getArmatureApiService())
         
         imageView = findViewById(R.id.pdfImageView)
+        markersLoadingOverlay = findViewById(R.id.markersLoadingOverlay)
+        markersLoadingText = findViewById(R.id.markersLoadingText)
+        markersLoadingProgress = findViewById(R.id.markersLoadingProgress)
+        hideMarkersLoading()
         findViewById<android.widget.ImageButton>(R.id.closeButton)?.setOnClickListener { finish() }
         
         
@@ -87,7 +98,7 @@ class PdfViewerActivity : AppCompatActivity() {
         val pdfUri = intent.getStringExtra("pdf_uri")
         val designation = intent.getStringExtra("designation")
         
-        loadMarkers()
+        markersJob = startMarkersLoading()
         (imageView as? ZoomableImageView)?.let { iv ->
             iv.onScaleChanged = { scale ->
                 if (!isViewportPinned) {
@@ -127,8 +138,9 @@ class PdfViewerActivity : AppCompatActivity() {
         imageView.post { updateMaxQualityButtonVisibility() }
     }
     
-    private fun loadMarkers() {
-        uiScope.launch {
+    private fun startMarkersLoading(): Job {
+        markersReady = false
+        return uiScope.launch {
             try {
                 Log.d("PdfViewerActivity", "=== LOADING MARKERS ===")
                 // Загружаем только из filesDir (без автоматической синхронизации с сервером)
@@ -144,18 +156,71 @@ class PdfViewerActivity : AppCompatActivity() {
                 Log.d("PdfViewerActivity", "Converted to new format: ${newFormatMarkers.size} markers")
                 
                 Log.d("PdfViewerActivity", "Markers loaded from local files only (no server sync)")
+                markersReady = true
             } catch (e: Exception) {
                 Log.e("PdfViewerActivity", "Error loading markers from filesDir", e)
                 // Если даже filesDir не работает - пустые маркеры
                 markers = emptyMap()
                 newFormatMarkers = emptyList()
+                markersReady = false
             }
         }
+    }
+
+    private suspend fun ensureMarkersReady(): Boolean {
+        if (markersReady) return true
+        val initialJob = markersJob ?: startMarkersLoading().also { markersJob = it }
+        showMarkersLoading(true, "Загружаем координаты арматуры…")
+        if (waitForJob(initialJob)) {
+            hideMarkersLoading()
+            return true
+        }
+
+        // Повторяем попытку один раз и сообщаем пользователю
+        showMarkersLoading(true, "Повторная попытка загрузки координат…")
+        markersJob = startMarkersLoading()
+        val success = waitForJob(markersJob)
+        if (!success) {
+            hideMarkersLoading()
+            Toast.makeText(
+                this,
+                "Не удалось загрузить координаты арматуры. Проверьте обновление базы.",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            hideMarkersLoading()
+        }
+        return success
+    }
+
+    private suspend fun waitForJob(job: Job?): Boolean {
+        return try {
+            job?.join()
+            markersReady
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun showMarkersLoading(show: Boolean, message: String? = null) {
+        markersLoadingOverlay?.isVisible = show
+        markersLoadingProgress?.isVisible = show
+        if (message != null) {
+            markersLoadingText?.text = message
+        }
+    }
+
+    private fun hideMarkersLoading() {
+        markersLoadingOverlay?.isVisible = false
+        markersLoadingProgress?.isVisible = false
     }
     
     
     private fun loadSchemeFromAssets(pdfPath: String, designation: String?) {
         uiScope.launch {
+            if (!ensureMarkersReady()) {
+                return@launch
+            }
             try {
                 val fileName = pdfPath.substringAfterLast('/')
                 currentPdfName = fileName
@@ -182,6 +247,9 @@ class PdfViewerActivity : AppCompatActivity() {
 
     private fun loadSchemeFromUri(uri: Uri, designation: String?) {
         uiScope.launch {
+            if (!ensureMarkersReady()) {
+                return@launch
+            }
             try {
                 currentPdfName = uri.lastPathSegment?.substringAfterLast('/')?.substringAfter(":")
                 val input = withContext(Dispatchers.IO) { contentResolver.openInputStream(uri) }

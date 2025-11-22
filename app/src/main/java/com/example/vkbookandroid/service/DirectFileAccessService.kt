@@ -2,6 +2,7 @@ package com.example.vkbookandroid.service
 
 import android.content.Context
 import android.util.Log
+import com.example.vkbookandroid.FileHashManager
 import com.example.vkbookandroid.network.NetworkModule
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ import java.io.FileOutputStream
 class DirectFileAccessService(private val context: Context) {
     
     private val tag = "DirectFileAccessService"
+    private val fileHashManager = FileHashManager(context)
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
@@ -199,9 +201,21 @@ class DirectFileAccessService(private val context: Context) {
                             }
                         }
                         
+                        val verified = FileDownloadSecurity.verifyAndPersistFileHash(
+                            filename = filename,
+                            file = targetFile,
+                            hashManager = fileHashManager,
+                            metadata = null
+                        )
+                        
+                        if (verified) {
                         Log.d(tag, "File downloaded successfully: ${targetFile.absolutePath} (${targetFile.length()} bytes)")
+                        } else {
+                            Log.e(tag, "File hash verification failed: $filename")
+                        }
+                        
                         response.close()
-                        return@withContext true
+                        return@withContext verified
                     }
                 }
                 

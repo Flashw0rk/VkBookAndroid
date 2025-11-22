@@ -11,9 +11,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.ResponseBody
 import java.io.File
 import java.io.FileOutputStream
-import com.google.gson.JsonElement
-import com.google.gson.JsonObject
-import com.google.gson.JsonArray
+import com.example.vkbookandroid.FileHashManager
 
 /**
  * Сервис для работы с файлами из папки /opt/vkbook-server/updates
@@ -23,7 +21,7 @@ class UpdatesFileService(private val context: Context) {
     
     private val tag = "UpdatesFileService"
     private val apiService: ArmatureApiService = NetworkModule.getArmatureApiService()
-    private val gson = NetworkModule.gson
+    private val fileHashManager = FileHashManager(context)
     
     /**
      * Синхронизировать все файлы из папки updates
@@ -37,7 +35,7 @@ class UpdatesFileService(private val context: Context) {
                 val result = UpdatesSyncResult()
                 
                 // Пробуем разные варианты получения списка файлов
-                val files = getUpdatesFilesList()
+                val files = UpdatesMetadataProvider.ensureMetadata(forceRefresh = true)
                 
                 if (files.isEmpty()) {
                     Log.w(tag, "No files found in updates directory")
@@ -82,40 +80,6 @@ class UpdatesFileService(private val context: Context) {
     }
     
     /**
-     * Получить список файлов используя новый endpoint /api/updates/check
-     */
-    private suspend fun getUpdatesFilesList(): List<UpdateFileMetadata> {
-        return try {
-            Log.d(tag, "🚀 Requesting /api/updates/check for metadata")
-            val response = apiService.checkUpdates()
-            if (!response.isSuccessful) {
-                Log.e(tag, "❌ /api/updates/check failed: HTTP ${response.code()}")
-                if (response.code() == 429) {
-                    Log.w(tag, "⚠️ Rate limit exceeded, will retry later")
-                }
-                return emptyList()
-            }
-            val body = response.body()
-            if (body == null) {
-                Log.w(tag, "❌ /api/updates/check returned null body")
-                return emptyList()
-            }
-            // Читаем body до того, как response будет закрыт автоматически
-            val json = body.string()
-            if (json.isBlank()) {
-                Log.w(tag, "❌ /api/updates/check returned empty body")
-                return emptyList()
-            }
-            val files = parseUpdatesCheckPayload(json)
-            Log.d(tag, "✅ Parsed ${files.size} entries from /api/updates/check")
-            files
-        } catch (e: Exception) {
-            Log.e(tag, "❌ Exception while parsing /api/updates/check", e)
-            emptyList()
-        }
-    }
-    
-    /**
      * Скачать файл и разместить в соответствующей папке
      */
     private suspend fun downloadAndPlaceFile(fileMetadata: UpdateFileMetadata): Boolean {
@@ -138,6 +102,11 @@ class UpdatesFileService(private val context: Context) {
                 Log.d(tag, "Created directory: ${targetDir.absolutePath} (success=$created)")
             } else {
                 Log.d(tag, "Target directory already exists")
+            }
+
+            if (!UpdateFileDiffer.shouldDownloadFile(filename, fileMetadata, targetFile, fileHashManager)) {
+                Log.d(tag, "⏭️  Skipping download (already up-to-date): $filename")
+                return true
             }
             
             // Пробуем скачать из updates
@@ -163,14 +132,16 @@ class UpdatesFileService(private val context: Context) {
                     Log.d(tag, "   Readable: ${targetFile.canRead()}")
                 }
                 
-                // Проверяем целостность
-                if (targetFile.exists() && targetFile.length() > 0) {
-                    Log.d(tag, "✅ File integrity OK: $filename")
-                    true
-                } else {
-                    Log.e(tag, "❌ File integrity check failed: $filename")
-                    false
+                val verified = FileDownloadSecurity.verifyAndPersistFileHash(
+                    filename = filename,
+                    file = targetFile,
+                    hashManager = fileHashManager,
+                    metadata = fileMetadata
+                )
+                if (!verified) {
+                    Log.e(tag, "❌ Hash verification failed: $filename")
                 }
+                verified
             } else {
                 Log.e(tag, "❌ Failed to download file: $filename")
                 false
@@ -181,7 +152,7 @@ class UpdatesFileService(private val context: Context) {
             false
         }
     }
-    
+
     /**
      * Скачать файл используя новый endpoint /api/updates/download
      * Использует URLEncoder UTF-8 для корректной обработки кириллицы и спецсимволов
@@ -284,61 +255,6 @@ class UpdatesFileService(private val context: Context) {
         }
     }
 
-    private fun parseUpdatesCheckPayload(json: String?): List<UpdateFileMetadata> {
-        if (json.isNullOrBlank()) return emptyList()
-        return runCatching {
-            val element = gson.fromJson(json, JsonElement::class.java) ?: return emptyList()
-            when {
-                element.isJsonArray -> parseMetadataArray(element.asJsonArray)
-                element.isJsonObject -> parseMetadataObject(element.asJsonObject)
-                else -> emptyList()
-            }
-        }.getOrElse {
-            Log.e(tag, "Failed to parse updates payload", it)
-            emptyList()
-        }
-    }
-
-    private fun parseMetadataArray(array: JsonArray): List<UpdateFileMetadata> {
-        return array.mapNotNull { parseMetadataElement(it) }
-    }
-
-    private fun parseMetadataObject(obj: JsonObject): List<UpdateFileMetadata> {
-        val arrayKeys = listOf("data", "files", "items", "result", "updates")
-        arrayKeys.forEach { key ->
-            if (obj.has(key) && obj.get(key).isJsonArray) {
-                return parseMetadataArray(obj.getAsJsonArray(key))
-            }
-        }
-
-        if (obj.has("file") && obj.get("file").isJsonObject) {
-            return listOfNotNull(parseMetadataElement(obj.getAsJsonObject("file")))
-        }
-
-        return listOfNotNull(parseMetadataElement(obj))
-    }
-
-    private fun parseMetadataElement(element: JsonElement?): UpdateFileMetadata? {
-        if (element == null || !element.isJsonObject) return null
-        val obj = element.asJsonObject
-        val filename = when {
-            obj.has("filename") -> obj.get("filename").asString
-            obj.has("name") -> obj.get("name").asString
-            else -> ""
-        }
-        if (filename.isBlank()) return null
-
-        return UpdateFileMetadata(
-            filename = filename,
-            size = obj.get("size")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong,
-            lastModified = obj.get("lastModified")?.asString,
-            hash = obj.get("hash")?.asString,
-            version = obj.get("version")?.asString,
-            hasUpdates = obj.get("hasUpdates")?.asBoolean,
-            etag = obj.get("etag")?.asString,
-            contentType = obj.get("contentType")?.asString
-        )
-    }
 }
 
 /**

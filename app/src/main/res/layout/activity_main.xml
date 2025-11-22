@@ -40,7 +40,7 @@
             android:backgroundTint="#2196F3"
             android:background="@drawable/scroll_button_background"
             android:src="@android:drawable/ic_menu_preferences"
-            android:tint="@android:color/white"
+            app:tint="@android:color/white"
             android:scaleType="centerInside"
             android:padding="6dp"
             android:contentDescription="Настройки сервера"

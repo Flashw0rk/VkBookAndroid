@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.pm.PackageInfoCompat
 
 /**
  * Экран "О приложении": показывает версию (name/code) и позволяет быстро скопировать информацию.
@@ -21,7 +22,7 @@ class AboutActivity : AppCompatActivity() {
         // Получаем версию приложения из PackageManager
         val pInfo = packageManager.getPackageInfo(packageName, 0)
         val versionName = pInfo.versionName
-        val versionCode = pInfo.longVersionCode
+        val versionCode = PackageInfoCompat.getLongVersionCode(pInfo)
         val versionText = "Версия: ${'$'}versionName (${ '$'}versionCode)"
 
         tvVersion.text = versionText

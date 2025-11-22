@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.vkbookandroid.network.NetworkModule
 import com.example.vkbookandroid.repository.ArmatureRepository
 import com.example.vkbookandroid.FileHashManager
+import com.example.vkbookandroid.network.model.UpdateFileMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -49,6 +50,9 @@ class SyncService(private val context: Context) {
                     Log.w(tag, "Server health check failed, trying direct connection test...")
                     val directTest = NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
                     Log.d(tag, "Direct connection test result: $directTest")
+                    
+                    // ⚠️ ВАЖНО: Если testConnection вернул true при 429, это rate limit, не спящий сервер!
+                    // Но testConnection уже возвращает true при 429, так что это нормально
                     return@withContext directTest
                 }
                 
@@ -56,7 +60,9 @@ class SyncService(private val context: Context) {
                 isHealthy
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 Log.w(tag, "Rate limit reached during server connection check")
-                // При rate limit считаем сервер доступным, но это будет обработано в syncAll
+                // ⚠️ ВАЖНО: При rate limit НЕ считаем сервер спящим!
+                // Возвращаем true, чтобы syncAll мог обработать rate limit правильно
+                // Но это НЕ означает, что нужно начинать процесс "пробуждения"
                 return@withContext true
             } catch (e: Exception) {
                 Log.e(tag, "=== SERVER CONNECTION FAILED ===", e)
@@ -64,18 +70,52 @@ class SyncService(private val context: Context) {
                 Log.e(tag, "Exception message: ${e.message}")
                 e.printStackTrace()
                 
+                // ⚠️ ВАЖНО: Проверяем, не является ли это rate limit в замаскированном виде
+                // (например, timeout при обработке rate limit на сервере)
+                if (isRateLimitRelatedException(e)) {
+                    Log.w(tag, "Exception appears to be rate limit related: ${e.message}")
+                    // При rate limit возвращаем true, чтобы не начинать процесс "пробуждения"
+                    return@withContext true
+                }
+                
                 // Попробуем прямой тест подключения как fallback
                 try {
                     Log.d(tag, "Trying fallback direct connection test...")
                     val directTest = NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
                     Log.d(tag, "Fallback connection test result: $directTest")
+                    
+                    // Если fallback вернул true, это может быть rate limit (429)
+                    // Но testConnection уже обрабатывает 429 правильно
                     return@withContext directTest
                 } catch (fallbackException: Exception) {
                     Log.e(tag, "Fallback connection test also failed", fallbackException)
+                    
+                    // Проверяем, не rate limit ли это
+                    if (isRateLimitRelatedException(fallbackException)) {
+                        Log.w(tag, "Fallback exception appears to be rate limit related")
+                        // При rate limit возвращаем true
+                        return@withContext true
+                    }
+                    
                     false
                 }
             }
         }
+    }
+    
+    /**
+     * Проверить, связано ли исключение с rate limit
+     * (может быть замаскировано под timeout или connection exception)
+     */
+    private fun isRateLimitRelatedException(e: Exception): Boolean {
+        val message = e.message?.lowercase() ?: ""
+        
+        // Проверяем по сообщению об ошибке
+        return message.contains("429") ||
+               message.contains("rate limit") ||
+               message.contains("too many requests") ||
+               message.contains("quota exceeded") ||
+               message.contains("rate_limit")
     }
     
     /**
@@ -101,15 +141,16 @@ class SyncService(private val context: Context) {
                     Log.d(tag, "Serialized JSON: $json")
                     jsonFile.writeText(json)
                     
-                    // Проверяем целостность JSON файла
-                    if (jsonFile.exists() && jsonFile.length() > 0) {
-                        val fileHash = fileHashManager.calculateFileHash(jsonFile)
-                        if (fileHash != null) {
-                            fileHashManager.saveFileHash("armature_coords.json", fileHash)
-                            Log.d(tag, "JSON file integrity verified (SHA-256: ${fileHash.take(16)}...)")
-                        } else {
-                            Log.w(tag, "Failed to calculate hash for armature_coords.json")
-                        }
+                    // Проверяем целостность JSON файла и сохраняем хэш
+                    val jsonHashVerified = FileDownloadSecurity.verifyAndPersistFileHash(
+                        filename = "armature_coords.json",
+                        file = jsonFile,
+                        metadata = null,
+                        hashManager = fileHashManager,
+                        errorCollector = result.errorMessages
+                    )
+                    if (jsonHashVerified) {
+                        Log.d(tag, "JSON file integrity verified via SHA-256")
                     }
                     
                     Log.d(tag, "Armature coords synced successfully")
@@ -149,6 +190,9 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "=== STARTING EXCEL FILES SYNC ===")
                 Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 
+                val metadataList = UpdatesMetadataProvider.ensureMetadata()
+                val metadataMap = metadataList.associateBy { it.filename.removePrefix(MetadataConstants.UPDATES_PREFIX) }
+
                 val excelFiles = getArmatureRepository().getExcelFilesFromServer()
                 Log.d(tag, "Found ${excelFiles.size} Excel files on server: $excelFiles")
                 
@@ -180,33 +224,20 @@ class SyncService(private val context: Context) {
                 var skippedCount = 0
                 for ((index, filename) in excelFiles.withIndex()) {
                     try {
-                        // Добавляем задержку между запросами для избежания Rate Limit (429)
+                        val metadata = metadataMap[filename]
+
+                        if (!shouldDownloadFile(filename, metadata)) {
+                            Log.d(tag, "Skipping unchanged Excel file: $filename")
+                            skippedCount++
+                            continue
+                        }
+
                         if (index > 0) {
-                            kotlinx.coroutines.delay(800) // 800ms между файлами
+                            kotlinx.coroutines.delay(800)
                             Log.d(tag, "Delay 800ms before next file to avoid rate limit")
                         }
-                        
+
                         Log.d(tag, "=== PROCESSING EXCEL FILE: $filename ===")
-                        
-                        // Проверяем, нужно ли загружать файл (сравниваем size и lastModified)
-                        val localFile = File(context.filesDir, "data/$filename")
-                        val serverFileInfo = serverFileInfos.find { it.filename == filename }
-                        
-                        if (localFile.exists() && serverFileInfo != null) {
-                            val localSize = localFile.length()
-                            val serverSize = serverFileInfo.size
-                            
-                            // Сравниваем размер
-                            if (localSize == serverSize) {
-                                Log.d(tag, "File $filename unchanged (size match: $localSize bytes), skipping download")
-                                skippedCount++
-                                successCount++
-                                continue
-                            } else {
-                                Log.d(tag, "File $filename changed: local=$localSize bytes, server=$serverSize bytes")
-                            }
-                        }
-                        
                         Log.d(tag, "Requesting file from server...")
                         
                         val responseBody = getArmatureRepository().downloadExcelFile(filename)
@@ -255,15 +286,16 @@ class SyncService(private val context: Context) {
                                 }
                             }
                             
-                            // Проверяем целостность загруженного файла
-                            if (file.exists() && file.length() > 0) {
-                                val fileHash = fileHashManager.calculateFileHash(file)
-                                if (fileHash != null) {
-                                    fileHashManager.saveFileHash(filename, fileHash)
-                                    Log.d(tag, "File integrity verified: $filename (SHA-256: ${fileHash.take(16)}...)")
-                                } else {
-                                    Log.w(tag, "Failed to calculate hash for: $filename")
-                                }
+                            val hashVerified = FileDownloadSecurity.verifyAndPersistFileHash(
+                                filename = filename,
+                                file = file,
+                                metadata = metadata,
+                                hashManager = fileHashManager,
+                                errorCollector = result.errorMessages
+                            )
+                            if (!hashVerified) {
+                                Log.e(tag, "Hash verification failed, skipping file $filename")
+                                continue
                             }
                             
                             Log.d(tag, "Download completed: $filename")
@@ -319,15 +351,18 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "Skipped (unchanged): $skippedCount")
                 Log.d(tag, "Updated files: ${result.updatedFiles.filter { it.endsWith(".xlsx") }}")
                 
-                if (successCount == 0) {
+                val totalProcessed = successCount + skippedCount
+                if (totalProcessed == 0 && excelFiles.isNotEmpty()) {
                     Log.e(tag, "ERROR: No Excel files were processed successfully!")
                     Log.e(tag, "This means either:")
                     Log.e(tag, "1. Server doesn't have the files")
                     Log.e(tag, "2. Download endpoints are not working")
                     Log.e(tag, "3. Network/connection issues")
+                } else if (skippedCount == excelFiles.size && excelFiles.isNotEmpty()) {
+                    Log.d(tag, "✅ All Excel files are up-to-date (no downloads needed)")
                 }
                 
-                successCount > 0
+                totalProcessed > 0
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 Log.w(tag, "Rate limit reached while syncing Excel files")
                 result.rateLimitReached = true
@@ -351,6 +386,9 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "=== STARTING PDF FILES SYNC ===")
                 Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 
+                val metadataList = UpdatesMetadataProvider.ensureMetadata()
+                val metadataMap = metadataList.associateBy { it.filename.removePrefix(MetadataConstants.UPDATES_PREFIX) }
+
                 val pdfFiles = getArmatureRepository().getPdfFilesFromServer()
                 Log.d(tag, "Found ${pdfFiles.size} PDF files on server: $pdfFiles")
                 
@@ -376,6 +414,13 @@ class SyncService(private val context: Context) {
                 var skippedCount = 0
                 for ((index, filename) in pdfFiles.withIndex()) {
                     try {
+                        val metadata = metadataMap[filename]
+                        if (!shouldDownloadFile(filename, metadata)) {
+                            Log.d(tag, "Skipping unchanged PDF file: $filename")
+                            skippedCount++
+                            continue
+                        }
+
                         // Добавляем задержку между запросами для избежания Rate Limit (429)
                         if (index > 0) {
                             kotlinx.coroutines.delay(800) // 800ms между файлами
@@ -383,26 +428,6 @@ class SyncService(private val context: Context) {
                         }
                         
                         Log.d(tag, "=== PROCESSING PDF FILE: $filename ===")
-                        
-                        // Проверяем, нужно ли загружать файл (сравниваем size)
-                        val localFile = File(context.filesDir, "data/$filename")
-                        val serverFileInfo = serverPdfInfos.find { it.filename == filename }
-                        
-                        if (localFile.exists() && serverFileInfo != null) {
-                            val localSize = localFile.length()
-                            val serverSize = serverFileInfo.size
-                            
-                            // Сравниваем размер
-                            if (localSize == serverSize) {
-                                Log.d(tag, "File $filename unchanged (size match: $localSize bytes), skipping download")
-                                skippedCount++
-                                successCount++
-                                continue
-                            } else {
-                                Log.d(tag, "File $filename changed: local=$localSize bytes, server=$serverSize bytes")
-                            }
-                        }
-                        
                         val responseBody = getArmatureRepository().downloadPdfFile(filename)
                         if (responseBody != null) {
                             val file = File(context.filesDir, "data/$filename")
@@ -415,6 +440,18 @@ class SyncService(private val context: Context) {
                                 outputStream.use { output ->
                                     input.copyTo(output)
                                 }
+                            }
+                            
+                            val hashVerified = FileDownloadSecurity.verifyAndPersistFileHash(
+                                filename = filename,
+                                file = file,
+                                metadata = metadata,
+                                hashManager = fileHashManager,
+                                errorCollector = result.errorMessages
+                            )
+                            if (!hashVerified) {
+                                Log.e(tag, "Hash verification failed, skipping file $filename")
+                                continue
                             }
                             
                             Log.d(tag, "Downloaded PDF file: $filename")
@@ -432,15 +469,18 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "Skipped (unchanged): $skippedCount")
                 Log.d(tag, "Updated files: ${result.updatedFiles.filter { it.endsWith(".pdf") }}")
                 
-                if (successCount == 0) {
+                val totalProcessed = successCount + skippedCount
+                if (totalProcessed == 0 && pdfFiles.isNotEmpty()) {
                     Log.e(tag, "ERROR: No PDF files were processed successfully!")
                     Log.e(tag, "This means either:")
                     Log.e(tag, "1. Server doesn't have the files")
                     Log.e(tag, "2. Download endpoints are not working")
                     Log.e(tag, "3. Network/connection issues")
+                } else if (skippedCount == pdfFiles.size && pdfFiles.isNotEmpty()) {
+                    Log.d(tag, "✅ All PDF files are up-to-date (no downloads needed)")
                 }
                 
-                successCount > 0
+                totalProcessed > 0
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 Log.w(tag, "Rate limit reached while syncing PDF files")
                 result.rateLimitReached = true
@@ -456,6 +496,56 @@ class SyncService(private val context: Context) {
     }
     
     /**
+     * Удалить временный файл "Безымянный-1.pdf" если скачаны другие PDF файлы
+     */
+    private suspend fun cleanupTemporaryPdfFile() {
+        withContext(Dispatchers.IO) {
+            try {
+                val dataDir = File(context.filesDir, "data")
+                val temporaryPdfName = "Безымянный-1.pdf"
+                val temporaryPdfFile = File(dataDir, temporaryPdfName)
+                
+                // Проверяем, существует ли временный файл
+                if (!temporaryPdfFile.exists()) {
+                    Log.d(tag, "Временный PDF файл не найден, пропускаем очистку")
+                    return@withContext
+                }
+                
+                // Получаем список всех PDF файлов (кроме временного)
+                val allPdfFiles = dataDir.listFiles()?.filter { 
+                    it.isFile && it.name.endsWith(".pdf", ignoreCase = true) && 
+                    !it.name.equals(temporaryPdfName, ignoreCase = true)
+                } ?: emptyList()
+                
+                // Если есть другие PDF файлы, удаляем временный
+                if (allPdfFiles.isNotEmpty()) {
+                    Log.d(tag, "Найдено ${allPdfFiles.size} других PDF файлов, удаляем временный файл: $temporaryPdfName")
+                    
+                    // Удаляем только сам PDF файл (без редактирования JSON и Excel)
+                    // Пользователь может сам решить, что делать со ссылками в Excel и JSON
+                    val deleted = temporaryPdfFile.delete()
+                    if (deleted) {
+                        Log.d(tag, "✅ Временный PDF файл удален: $temporaryPdfName")
+                        Log.d(tag, "Примечание: ссылки на файл в Excel и JSON оставлены без изменений")
+                        
+                        // Удаляем только хэш файла из внутреннего кэша
+                        fileHashManager.removeFileHash(temporaryPdfName)
+                    } else {
+                        Log.w(tag, "Не удалось удалить временный PDF файл: $temporaryPdfName")
+                    }
+                } else {
+                    Log.d(tag, "Других PDF файлов не найдено, временный файл оставляем")
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Ошибка при очистке временного PDF файла", e)
+            }
+        }
+    }
+    
+    // Функции редактирования JSON и Excel удалены - программа не редактирует пользовательские файлы
+    // Удаляется только сам PDF файл, ссылки в Excel и JSON остаются без изменений
+    
+    /**
      * Полная синхронизация всех данных
      */
     suspend fun syncAll(onProgress: suspend (Int, String) -> Unit = { _, _ -> }): SyncResult {
@@ -465,15 +555,13 @@ class SyncService(private val context: Context) {
             
             val result = SyncResult()
             
-            // Задержка перед началом синхронизации для стабилизации соединения
-            kotlinx.coroutines.delay(500)
-            Log.d(tag, "Initial delay 500ms before sync to stabilize connection")
-            
             // Проверяем соединение
+            onProgress(5, "Проверка соединения с сервером...")
             Log.d(tag, "Checking server connection...")
             result.serverConnected = checkServerConnection()
             if (!result.serverConnected) {
                 Log.w(tag, "Server not available, skipping sync")
+                onProgress(0, "Сервер недоступен")
                 return@withContext result
             }
             Log.d(tag, "Server connection: OK")
@@ -485,6 +573,7 @@ class SyncService(private val context: Context) {
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 Log.w(tag, "Rate limit detected during health check, stopping sync")
                 result.rateLimitReached = true
+                onProgress(0, "Лимит запросов достигнут")
                 return@withContext result
             }
             
@@ -493,14 +582,15 @@ class SyncService(private val context: Context) {
             Log.d(tag, "Delay 500ms before data sync to avoid rate limit")
             
             // Синхронизируем данные
+            onProgress(10, "Загрузка координат арматур...")
             Log.d(tag, "Starting armature coords sync...")
-            onProgress(33, "Загрузка JSON")
             result.armatureCoordsSynced = syncArmatureCoords(result)
             Log.d(tag, "Armature coords sync result: ${result.armatureCoordsSynced}")
             
             // Если достигнут rate limit, прекращаем синхронизацию
             if (result.rateLimitReached) {
                 Log.w(tag, "Rate limit reached during sync, stopping")
+                onProgress(0, "Лимит запросов достигнут")
                 return@withContext result
             }
             
@@ -508,14 +598,15 @@ class SyncService(private val context: Context) {
             kotlinx.coroutines.delay(1000)
             Log.d(tag, "Delay 1s before Excel sync to avoid rate limit")
             
+            onProgress(40, "Загрузка Excel файлов...")
             Log.d(tag, "Starting Excel files sync...")
-            onProgress(66, "Загрузка Excel")
             result.excelFilesSynced = syncExcelFiles(result)
             Log.d(tag, "Excel files sync result: ${result.excelFilesSynced}")
             
             // Если достигнут rate limit, прекращаем синхронизацию
             if (result.rateLimitReached) {
                 Log.w(tag, "Rate limit reached during sync, stopping")
+                onProgress(0, "Лимит запросов достигнут")
                 return@withContext result
             }
             
@@ -523,10 +614,17 @@ class SyncService(private val context: Context) {
             kotlinx.coroutines.delay(1000)
             Log.d(tag, "Delay 1s before PDF sync to avoid rate limit")
             
+            onProgress(70, "Загрузка PDF схем...")
             Log.d(tag, "Starting PDF files sync...")
-            onProgress(100, "Загрузка PDF")
             result.pdfFilesSynced = syncPdfFiles(result)
             Log.d(tag, "PDF files sync result: ${result.pdfFilesSynced}")
+            
+            // Удаляем временный файл "Безымянный-1.pdf" если скачаны другие PDF
+            if (result.pdfFilesSynced) {
+                cleanupTemporaryPdfFile()
+            }
+            
+            onProgress(95, "Завершение синхронизации...")
             
             result.overallSuccess = result.armatureCoordsSynced || result.excelFilesSynced || result.pdfFilesSynced
             
@@ -539,6 +637,11 @@ class SyncService(private val context: Context) {
             
             result
         }
+    }
+
+    private fun shouldDownloadFile(filename: String, metadata: UpdateFileMetadata?): Boolean {
+        val targetFile = File(context.filesDir, "data/$filename")
+        return UpdateFileDiffer.shouldDownloadFile(filename, metadata, targetFile, fileHashManager)
     }
     
     /**

@@ -372,7 +372,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         }
 
         // Настройка текста/подсказки (используем AppCompat id, а не android:id)
-        val searchAutoComplete = searchView.findViewById<androidx.appcompat.widget.SearchView.SearchAutoComplete>(
+        val searchAutoComplete = searchView.findViewById<android.widget.AutoCompleteTextView>(
             androidx.appcompat.R.id.search_src_text
         )
         searchAutoComplete?.apply {
