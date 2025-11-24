@@ -18,6 +18,7 @@ import com.example.vkbookandroid.service.SyncService
 import com.example.vkbookandroid.network.NetworkModule
 import com.example.vkbookandroid.utils.AutoSyncSettings
 import com.example.vkbookandroid.security.AdminAccessManager
+import com.example.vkbookandroid.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,10 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 
 class MainActivity : AppCompatActivity() {
     
@@ -58,8 +63,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var syncService: SyncService
     private lateinit var dataRefreshManager: DataRefreshManager
     private var syncJob: Job? = null
-    private var isWaitingServerWake = false
     private var syncButtonDefaultText: String = ""
+    private var syncMode: SyncMode = SyncMode.IDLE
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
     private val navigationPrefs by lazy { getSharedPreferences(NAVIGATION_PREFS, MODE_PRIVATE) }
@@ -67,6 +72,12 @@ class MainActivity : AppCompatActivity() {
     // Состояние инициализации
     private var isInitializationComplete = false
     private val initializationListeners = mutableListOf<() -> Unit>()
+    
+    // Отслеживание сети для режима ожидания пробуждения
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var isWaitingForServer = false
+    private var networkAvailableDuringWait = false
+    private val connectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
     
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         android.util.Log.d("MainActivity", "=== settingsLauncher получил результат ===")
@@ -182,6 +193,7 @@ class MainActivity : AppCompatActivity() {
         // Инициализация синхронизации
         btnSync = findViewById(R.id.btnSync)
         syncButtonDefaultText = btnSync.text.toString()
+        applySyncButtonMode(SyncMode.IDLE)
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
         progressSync = findViewById(R.id.progressSync)
@@ -200,6 +212,13 @@ class MainActivity : AppCompatActivity() {
         
         // КРИТИЧНО: Настраиваем отслеживание файлов для автоматического обновления
         setupFileWatching()
+        
+        // ОТПРАВЛЯЕМ ЛЕГКОВЕСНЫЙ PING ДЛЯ ПРОБУЖДЕНИЯ СЕРВЕРА
+        // Это делается всегда при запуске, независимо от настроек
+        // Запрос не блокирует UI и не ждет ответа - просто "разбудит" сервер
+        if (::syncService.isInitialized) {
+            syncService.wakeupServerPing()
+        }
         
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ ПРИ ЗАПУСКЕ
         if (AutoSyncSettings.isSyncOnStartupEnabled(this)) {
@@ -231,6 +250,17 @@ class MainActivity : AppCompatActivity() {
         com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
         com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
         com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Останавливаем FileWatcher при уходе в фон для экономии батареи
+        dataRefreshManager.pauseAllWatchers()
+        android.util.Log.d("MainActivity", "FileWatcher paused (app in background)")
+        // Отменяем NetworkCallback при уходе в фон (если не ждем сервер)
+        if (!isWaitingForServer) {
+            unregisterNetworkCallback()
+        }
     }
     
     override fun onResume() {
@@ -459,28 +489,48 @@ class MainActivity : AppCompatActivity() {
      * Настройка кнопки синхронизации
      */
     private fun setupSyncButton() {
-        // Добавляем подсказку
-        btnSync.setOnLongClickListener {
-            Toast.makeText(this, "Обновление баз данных с сервера", Toast.LENGTH_SHORT).show()
-            true
-        }
-        
         // РУЧНАЯ СИНХРОНИЗАЦИЯ - автообновления отключены
         // Добавляем диагностику по двойному тапу
         var lastTapTime = 0L
         btnSync.setOnClickListener {
-            if (isWaitingServerWake) {
+            if (syncMode == SyncMode.WAITING_SERVER || syncMode == SyncMode.SYNCING) {
                 cancelPendingSync()
                 return@setOnClickListener
             }
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < 500) {
-                diagnoseFiles()
-                Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
+                if (BuildConfig.DEBUG) {
+                    diagnoseFiles()
+                    Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
+                } else {
+                    // В релизных сборках скрываем отладочную диагностику и просто запускаем синхронизацию
+                    startSync()
+                }
             } else {
                 startSync()
             }
             lastTapTime = currentTime
+        }
+        
+        // Длинное нажатие - меню с подсказкой и хешами
+        btnSync.setOnLongClickListener {
+            val items = arrayOf(
+                "Показать подсказку",
+                "Показать хеши"
+            )
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setItems(items) { dialog, which ->
+                    when (which) {
+                        0 -> Toast.makeText(this, "Обновление баз данных с сервера", Toast.LENGTH_SHORT).show()
+                        1 -> {
+                            val hashDialog = HashInfoDialog.newInstance()
+                            hashDialog.show(supportFragmentManager, "HashInfoDialog")
+                        }
+                    }
+                    dialog.dismiss()
+                }
+                .show()
+            true
         }
     }
     
@@ -492,14 +542,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupHashInfoButton() {
-        // Добавляем длинное нажатие на кнопку синхронизации для просмотра хешей
-        btnSync.setOnLongClickListener {
-            val hashDialog = HashInfoDialog.newInstance()
-            hashDialog.show(supportFragmentManager, "HashInfoDialog")
-            true
-        }
-
-        // Убираем скрытую активацию режима разработчика
+        // Убрано - функционал перенесен в setupSyncButton()
     }
     
     private fun loadServerSettings() {
@@ -512,7 +555,14 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun checkConnectionOnStartup() {
-        // Проверяем соединение при запуске
+        // Проверяем соединение при запуске (только для информации)
+        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос
+        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this)) {
+            updateSyncStatus("Офлайн режим")
+            applySyncButtonMode(SyncMode.IDLE)
+            return
+        }
+        
         uiScope.launch {
             updateSyncStatus("Проверка соединения...")
             val isConnected = withContext(Dispatchers.IO) {
@@ -520,11 +570,10 @@ class MainActivity : AppCompatActivity() {
             }
             if (isConnected) {
                 updateSyncStatus("Готов к обновлению")
-                btnSync.isEnabled = true
             } else {
                 updateSyncStatus("Сервер недоступен")
-                btnSync.isEnabled = false
             }
+            applySyncButtonMode(SyncMode.IDLE)
         }
     }
     
@@ -536,30 +585,32 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startSync() {
         if (syncJob?.isActive == true) return
+        
+        // НЕ проверяем сеть здесь - пусть попытки продолжаются даже без сети
+        // Это позволяет "разбудить" сервер даже при временных проблемах с сетью
+        
         syncJob = uiScope.launch {
+            applySyncButtonMode(SyncMode.WAITING_SERVER)
             try {
                 val serverReady = waitForServerWakeup()
                 if (!serverReady) {
-                    updateSyncStatus("Сервер недоступен", 0)
+                    updateSyncStatus("Сервер недоступен, попробуйте позже", 0)
                     hideSyncProgress()
-                    resetSyncButtonState()
-                    return@launch
-                }
-                
-                btnSync.isEnabled = false
-                btnSync.text = syncButtonDefaultText
-                showSyncProgress()
-                updateSyncStatus("Подключение к серверу...", 0)
-                
-                val result = withContext(Dispatchers.IO) {
-                    syncService.syncAll { percent, type ->
-                        withContext(Dispatchers.Main) {
-                            updateSyncStatus(type, percent)
+                    Toast.makeText(this@MainActivity, "Сервер недоступен, попробуйте позже", Toast.LENGTH_SHORT).show()
+                } else {
+                    applySyncButtonMode(SyncMode.SYNCING)
+                    showSyncProgress()
+                    updateSyncStatus("Подключение к серверу...", 0)
+                    
+                    val result = withContext(Dispatchers.IO) {
+                        syncService.syncAll { percent, type ->
+                            withContext(Dispatchers.Main) {
+                                updateSyncStatus(type, percent)
+                            }
                         }
                     }
-                }
-                
-                when {
+                    
+                    when {
                     result.rateLimitReached -> {
                         updateSyncStatus("Лимит запросов достигнут", 100)
                         hideSyncProgress()
@@ -595,6 +646,7 @@ class MainActivity : AppCompatActivity() {
                         hideSyncProgress()
                         Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
                     }
+                    }
                 }
             } catch (ce: CancellationException) {
                 updateSyncStatus("Обновление отменено", 0)
@@ -604,9 +656,7 @@ class MainActivity : AppCompatActivity() {
                 hideSyncProgress()
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                if (!isWaitingServerWake) {
-                    resetSyncButtonState()
-                }
+                applySyncButtonMode(SyncMode.IDLE)
                 syncJob = null
             }
         }
@@ -626,6 +676,10 @@ class MainActivity : AppCompatActivity() {
         tvSyncStatus.text = status
         progressSync.progress = percent
         tvProgressPercent.text = "$percent%"
+        // Устанавливаем фокус для работы marquee при длинном тексте
+        if (status.length > 20) {
+            tvSyncStatus.isSelected = true
+        }
     }
     
     /**
@@ -646,90 +700,201 @@ class MainActivity : AppCompatActivity() {
         tvProgressPercent.visibility = android.view.View.GONE
     }
 
-    private fun resetSyncButtonState() {
-        btnSync.isEnabled = true
-        btnSync.text = syncButtonDefaultText
-    }
-
     private fun cancelPendingSync() {
+        if (syncJob == null) return
         syncJob?.cancel()
-        exitServerWarmupState()
-        resetSyncButtonState()
         updateSyncStatus("Обновление отменено", 0)
         hideSyncProgress()
-    }
-
-    private fun enterServerWarmupState() {
-        if (isWaitingServerWake) return
-        isWaitingServerWake = true
-        btnSync.text = "Отменить обновление"
-        btnSync.isEnabled = true
-    }
-
-    private fun exitServerWarmupState() {
-        if (!isWaitingServerWake) return
-        isWaitingServerWake = false
-        btnSync.text = syncButtonDefaultText
+        applySyncButtonMode(SyncMode.IDLE)
+        // Отменяем NetworkCallback при отмене синхронизации
+        isWaitingForServer = false
+        unregisterNetworkCallback()
     }
 
     private suspend fun waitForServerWakeup(): Boolean {
-        updateSyncStatus("Проверяем соединение...")
-        val readyImmediately = withContext(Dispatchers.IO) {
-            runCatching { syncService.checkServerConnection() }
-                .onFailure { e ->
-                    Log.w("MainActivity", "Initial server check failed: ${e.message}")
-                    // ⚠️ ВАЖНО: Проверяем, не rate limit ли это
-                    if (isRateLimitRelatedException(e)) {
-                        Log.w("MainActivity", "Rate limit detected in initial check")
-                        // При rate limit НЕ начинаем процесс пробуждения
-                        updateSyncStatus("Достигнут лимит запросов. Подождите 30-60 секунд.")
+        // НЕ проверяем сеть - пусть попытки продолжаются даже без сети
+        // Это позволяет "разбудить" сервер даже при временных проблемах с сетью
+        
+        // Регистрируем NetworkCallback для отслеживания изменений сети
+        isWaitingForServer = true
+        networkAvailableDuringWait = false
+        registerNetworkCallback()
+        
+        try {
+            updateSyncStatus("Проверяем соединение...")
+            val readyImmediately = withContext(Dispatchers.IO) {
+                runCatching { syncService.checkServerConnectionForWakeup() }
+                    .onFailure { e ->
+                        val errorMessage = getNetworkErrorMessage(e)
+                        Log.w("MainActivity", "Initial server check failed: ${e.message}")
+                        if (isRateLimitRelatedException(e)) {
+                            Log.w("MainActivity", "Rate limit detected in initial check")
+                            updateSyncStatus("Достигнут лимит запросов. Подождите 30-60 секунд.")
+                        } else {
+                            updateSyncStatus("Ошибка: $errorMessage")
+                        }
+                    }
+                    .getOrDefault(false)
+            }
+            
+            if (readyImmediately) {
+                return true
+            }
+            
+            // Exponential backoff: начинаем с 5 секунд, увеличиваем до максимума 30 секунд
+            var delayMs = 5000L // Начинаем с 5 секунд
+            val maxAttempts = 8
+            val maxDelayMs = 30000L // Максимум 30 секунд
+            
+            // Показываем прогресс-бар во время ожидания
+            showSyncProgress()
+            
+            repeat(maxAttempts) { attempt ->
+                if (!currentCoroutineContext().isActive) return false
+                
+                // Если сеть появилась во время ожидания, пробуем сразу
+                if (networkAvailableDuringWait && attempt > 0) {
+                    Log.d("MainActivity", "Network became available, trying connection immediately")
+                    networkAvailableDuringWait = false // Сбрасываем флаг
+                    // Пропускаем задержку и сразу проверяем соединение
+                } else {
+                    // НЕ проверяем сеть - продолжаем попытки даже без сети
+                    // Запросы будут быстро завершаться по таймауту, не блокируя систему
+                    
+                    // Показываем прогресс с временем до следующей попытки
+                    val delaySeconds = (delayMs / 1000).toInt()
+                    val progressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95) // До 95%, остальное после успеха
+                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (следующая через ${delaySeconds} сек)", progressPercent)
+                    
+                    // Exponential backoff с jitter (случайная задержка ±20% для распределения нагрузки)
+                    val jitter = (delayMs * 0.2 * (Math.random() - 0.5)).toLong()
+                    val actualDelay = (delayMs + jitter).coerceIn(1000L, maxDelayMs)
+                    
+                    // Показываем обратный отсчет каждую секунду
+                    val totalSeconds = (actualDelay / 1000).toInt()
+                    for (second in totalSeconds downTo 1) {
+                        if (!currentCoroutineContext().isActive) return false
+                        // Если сеть появилась, прерываем отсчет
+                        if (networkAvailableDuringWait) {
+                            Log.d("MainActivity", "Network became available during countdown, breaking")
+                            networkAvailableDuringWait = false
+                            break
+                        }
+                        updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (через ${second} сек)", progressPercent)
+                        delay(1000)
                     }
                 }
-                .getOrDefault(false)
-        }
-        
-        // ⚠️ ВАЖНО: Если checkServerConnection вернул true, это может быть:
-        // 1. Сервер доступен (хорошо)
-        // 2. Rate limit (checkServerConnection возвращает true при rate limit)
-        // Нужно проверить, не rate limit ли это, перед началом синхронизации
-        
-        if (readyImmediately) {
-            // Проверяем, не rate limit ли это, делая дополнительную проверку
-            // Если это rate limit, syncAll обработает это правильно
-            return true
-        }
-        
-        // ⚠️ ВАЖНО: Начинаем процесс пробуждения ТОЛЬКО если сервер действительно не отвечает
-        // (не rate limit, не доступен)
-        enterServerWarmupState()
-        return try {
-            repeat(6) { attempt ->
+                
                 if (!currentCoroutineContext().isActive) return false
-                updateSyncStatus("Происходит включение сервера, базы данных скоро обновятся. Попытка ${attempt + 1}/6")
-                delay(5000)
-                if (!currentCoroutineContext().isActive) return false
+                
+                // Вычисляем progressPercent для текущей попытки
+                val currentProgressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95)
+                
+                // Проверка соединения в фоне (параллельный поток, БЕЗ проверки сети)
                 val isReady = withContext(Dispatchers.IO) {
-                    runCatching { syncService.checkServerConnection() }
+                    runCatching { syncService.checkServerConnectionForWakeup() }
                         .onFailure { e ->
+                            val errorMessage = getNetworkErrorMessage(e)
                             Log.w("MainActivity", "Server wake check failed on attempt ${attempt + 1}: ${e.message}")
-                            // ⚠️ ВАЖНО: Проверяем, не rate limit ли это
                             if (isRateLimitRelatedException(e)) {
                                 Log.w("MainActivity", "Rate limit detected during wakeup check - stopping wakeup process")
-                                updateSyncStatus("Достигнут лимит запросов. Прекращаем попытки пробуждения.")
-                                // При rate limit прекращаем процесс пробуждения
+                                withContext(Dispatchers.Main) {
+                                    updateSyncStatus("Достигнут лимит запросов. Прекращаем попытки пробуждения.")
+                                }
                                 return@withContext false
+                            } else {
+                                // Показываем конкретную ошибку
+                                withContext(Dispatchers.Main) {
+                                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts: $errorMessage", currentProgressPercent)
+                                }
                             }
                         }
                         .getOrDefault(false)
                 }
+                
                 if (isReady) {
-                    updateSyncStatus("Сервер активен, начинаем обновление…")
+                    updateSyncStatus("Сервер активен, начинаем обновление…", 100)
                     return true
                 }
+                
+                // Увеличиваем задержку для следующей попытки (exponential backoff)
+                delayMs = minOf(delayMs * 2, maxDelayMs)
             }
-            false
+            
+            // После 8 неудачных попыток
+            hideSyncProgress()
+            return false
         } finally {
-            exitServerWarmupState()
+            // Отменяем регистрацию NetworkCallback
+            unregisterNetworkCallback()
+            isWaitingForServer = false
+        }
+    }
+    
+    /**
+     * Регистрация NetworkCallback для отслеживания изменений сети
+     */
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) {
+            return // Уже зарегистрирован
+        }
+        
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.d("MainActivity", "Network became available during server wakeup")
+                if (isWaitingForServer) {
+                    networkAvailableDuringWait = true
+                }
+            }
+            
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                                 networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                if (hasInternet && isWaitingForServer) {
+                    Log.d("MainActivity", "Network validated and available during server wakeup")
+                    networkAvailableDuringWait = true
+                }
+            }
+        }
+        
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            .build()
+        
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
+        Log.d("MainActivity", "NetworkCallback registered for server wakeup")
+    }
+    
+    /**
+     * Отмена регистрации NetworkCallback
+     */
+    private fun unregisterNetworkCallback() {
+        networkCallback?.let {
+            try {
+                connectivityManager.unregisterNetworkCallback(it)
+                Log.d("MainActivity", "NetworkCallback unregistered")
+            } catch (e: Exception) {
+                Log.w("MainActivity", "Error unregistering NetworkCallback: ${e.message}")
+            }
+            networkCallback = null
+        }
+    }
+    
+    /**
+     * Получить понятное сообщение об ошибке сети
+     */
+    private fun getNetworkErrorMessage(e: Throwable): String {
+        return when {
+            e is java.net.SocketTimeoutException -> "Таймаут соединения"
+            e is java.net.UnknownHostException -> "Сервер не найден (проверьте адрес)"
+            e is java.net.ConnectException -> "Не удалось подключиться к серверу"
+            e is java.net.NoRouteToHostException -> "Нет маршрута к серверу"
+            e is javax.net.ssl.SSLException -> "Ошибка SSL соединения"
+            e.message?.contains("timeout", ignoreCase = true) == true -> "Таймаут запроса"
+            e.message?.contains("connection", ignoreCase = true) == true -> "Ошибка соединения"
+            e.message?.contains("network", ignoreCase = true) == true -> "Проблема с сетью"
+            else -> "Ошибка сети: ${e.message ?: "Неизвестная ошибка"}"
         }
     }
     
@@ -1265,6 +1430,8 @@ class MainActivity : AppCompatActivity() {
         // Очищаем ресурсы DataRefreshManager
         dataRefreshManager.cleanup()
         uiJob.cancel()
+        // Отменяем NetworkCallback при уничтожении активности
+        unregisterNetworkCallback()
     }
     
     /**
@@ -1467,6 +1634,44 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_TAB_GLOBAL = 1
     }
 
+    private fun applySyncButtonMode(mode: SyncMode) {
+        syncMode = mode
+        if (!::btnSync.isInitialized) return
+        
+        when (mode) {
+            SyncMode.IDLE -> {
+                btnSync.text = syncButtonDefaultText
+                btnSync.isEnabled = true
+                btnSync.isSelected = false
+                btnSync.isActivated = false
+                btnSync.isPressed = false
+                btnSync.alpha = 1f
+            }
+            SyncMode.WAITING_SERVER -> {
+                btnSync.text = getString(R.string.sync_button_cancel_update)
+                btnSync.isEnabled = true
+                btnSync.isSelected = true
+                btnSync.isActivated = true
+                btnSync.isPressed = true
+                btnSync.alpha = 0.85f
+            }
+            SyncMode.SYNCING -> {
+                btnSync.text = getString(R.string.sync_button_cancel_update)
+                btnSync.isEnabled = true
+                btnSync.isSelected = true
+                btnSync.isActivated = true
+                btnSync.isPressed = true
+                btnSync.alpha = 0.85f
+            }
+        }
+    }
+    
+    private enum class SyncMode {
+        IDLE,
+        WAITING_SERVER,
+        SYNCING
+    }
+    
     private fun adjustTabsLayoutSpacing() {
         if (!::tabLayout.isInitialized) return
         val displayMetrics = resources.displayMetrics

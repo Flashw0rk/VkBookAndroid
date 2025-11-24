@@ -1,6 +1,7 @@
 package com.example.vkbookandroid
 
 import android.content.Context
+import android.os.FileObserver
 import android.util.Log
 import kotlinx.coroutines.*
 import java.io.File
@@ -8,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Менеджер для управления ленивой загрузкой и автоматическим обновлением данных
+ * Использует FileObserver (event-based) для эффективного отслеживания изменений файлов
  */
 class DataRefreshManager(private val context: Context) {
     
@@ -18,7 +20,7 @@ class DataRefreshManager(private val context: Context) {
     
     companion object {
         private const val TAG = "DataRefreshManager"
-        private const val CHECK_INTERVAL_MS = 5000L // Проверяем каждые 5 секунд
+        // УДАЛЕНО: CHECK_INTERVAL_MS - больше не нужен, используем FileObserver (event-based)
     }
     
     /**
@@ -48,9 +50,9 @@ class DataRefreshManager(private val context: Context) {
         // Добавляем callback
         refreshCallbacks.getOrPut(filePath) { mutableListOf() }.add(onFileChanged)
         
-        // Создаем или обновляем watcher
+        // Создаем или обновляем watcher (используем FileObserver - event-based)
         val watcher = fileWatchers.getOrPut(filePath) {
-            FileWatcher(filePath, CHECK_INTERVAL_MS)
+            FileWatcher(filePath)
         }
         
         if (!watcher.isActive()) {
@@ -114,42 +116,125 @@ class DataRefreshManager(private val context: Context) {
     
     /**
      * Watcher для отслеживания изменений файла
+     * Использует FileObserver (event-based) вместо polling для экономии CPU и батареи
      */
     private inner class FileWatcher(
-        private val filePath: String,
-        private val checkInterval: Long
+        private val filePath: String
     ) {
         private var lastModified: Long = 0L
         private var isRunning = false
-        private var job: Job? = null
+        private var fileObserver: FileObserver? = null
+        private val file = File(filePath)
+        private val parentDir = file.parentFile
         
         fun start() {
             if (isRunning) return
             
             isRunning = true
-            val file = File(filePath)
             lastModified = if (file.exists()) file.lastModified() else 0L
             
-            job = coroutineScope.launch {
-                while (isActive && isRunning) {
-                    try {
-                        checkForChanges()
-                        delay(checkInterval)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error in file watcher for $filePath", e)
-                        delay(checkInterval)
+            // Используем FileObserver для event-based отслеживания (0% CPU когда файл не меняется)
+            if (parentDir != null && parentDir.exists()) {
+                fileObserver = object : FileObserver(parentDir.absolutePath, FileObserver.MODIFY or FileObserver.CREATE) {
+                    override fun onEvent(event: Int, path: String?) {
+                        // Проверяем что событие относится к нашему файлу
+                        if (isPaused) return // Не обрабатываем если приложение в фоне
+                        
+                        val changedFile = if (path != null) {
+                            File(parentDir, path)
+                        } else {
+                            null
+                        }
+                        
+                        // Проверяем что изменился именно наш файл
+                        if (changedFile != null && changedFile.absolutePath == file.absolutePath) {
+                            handleFileChange()
+                        } else if (path == null && file.exists()) {
+                            // Если path == null, это может быть событие для всего каталога
+                            // Проверяем наш файл
+                            handleFileChange()
+                        }
+                    }
+                }
+                
+                fileObserver?.startWatching()
+                Log.d(TAG, "FileObserver started for $filePath (event-based, 0% CPU when idle)")
+            } else {
+                // Fallback на polling если директория не существует (редкий случай)
+                Log.w(TAG, "Parent directory not found for $filePath, using polling fallback")
+                startPollingFallback()
+            }
+        }
+        
+        private fun handleFileChange() {
+            if (isPaused) return
+            
+            val file = File(filePath)
+            if (!file.exists()) return
+            
+            val currentModified = file.lastModified()
+            if (currentModified > lastModified) {
+                val timeDiff = currentModified - lastModified
+                Log.d(TAG, "File changed detected via FileObserver: $filePath (${timeDiff}ms ago)")
+                
+                // Логирование для Battery Historian
+                Log.d("Battery", "FileWatcher: file changed: $filePath")
+                
+                lastModified = currentModified
+                
+                // Уведомляем все callback'и в главном потоке
+                coroutineScope.launch(Dispatchers.Main) {
+                    refreshCallbacks[filePath]?.forEach { callback ->
+                        try {
+                            callback()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error in file change callback for $filePath", e)
+                        }
                     }
                 }
             }
-            
-            Log.d(TAG, "File watcher started for $filePath")
+        }
+        
+        // Fallback на polling если FileObserver не может быть использован
+        private fun startPollingFallback() {
+            val fallbackJob = coroutineScope.launch {
+                while (isActive && isRunning) {
+                    try {
+                        if (!isPaused) {
+                            val file = File(filePath)
+                            if (file.exists()) {
+                                val currentModified = file.lastModified()
+                                if (currentModified > lastModified) {
+                                    Log.d(TAG, "File changed detected via polling fallback: $filePath")
+                                    lastModified = currentModified
+                                    
+                                    // Уведомляем callback'и
+                                    withContext(Dispatchers.Main) {
+                                        refreshCallbacks[filePath]?.forEach { callback ->
+                                            try {
+                                                callback()
+                                            } catch (e: Exception) {
+                                                Log.e(TAG, "Error in file change callback for $filePath", e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        delay(10000) // 10 секунд для fallback (реже чем раньше)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in polling fallback for $filePath", e)
+                        delay(10000)
+                    }
+                }
+            }
         }
         
         fun stop() {
             isRunning = false
-            job?.cancel()
-            job = null
-            Log.d(TAG, "File watcher stopped for $filePath")
+            fileObserver?.stopWatching()
+            fileObserver = null
+            Log.d(TAG, "FileObserver stopped for $filePath")
         }
         
         fun isActive(): Boolean {
@@ -162,31 +247,6 @@ class DataRefreshManager(private val context: Context) {
             
             val currentModified = file.lastModified()
             return currentModified > lastModified
-        }
-        
-        private suspend fun checkForChanges() {
-            // ⚠️ ВАЖНО: Не проверяем файлы если приложение в фоне (экономия батареи)
-            if (isPaused) {
-                return
-            }
-            
-            val file = File(filePath)
-            if (!file.exists()) return
-            
-            val currentModified = file.lastModified()
-            if (currentModified > lastModified) {
-                Log.d(TAG, "File changed detected: $filePath (${currentModified - lastModified}ms ago)")
-                lastModified = currentModified
-                
-                // Уведомляем все callback'и
-                refreshCallbacks[filePath]?.forEach { callback ->
-                    try {
-                        callback()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error in file change callback for $filePath", e)
-                    }
-                }
-            }
         }
     }
 }

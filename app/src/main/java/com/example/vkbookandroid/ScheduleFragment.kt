@@ -36,8 +36,8 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     private lateinit var calendarRecyclerView: RecyclerView
     private lateinit var horizontalScrollView: HorizontalScrollView
     private lateinit var yearTextView: TextView
-    private lateinit var btnPrevYear: Button
-    private lateinit var btnNextYear2: Button
+    private lateinit var btnPrevYear: ImageButton
+    private lateinit var btnNextYear2: ImageButton
     private lateinit var btnToday: Button
     private lateinit var btnZoomIn: Button
     private lateinit var btnZoomOut: Button
@@ -243,9 +243,14 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     }
     
     private fun applyThemeToButtons() {
+        val textButtons = listOf(btnZoomIn, btnZoomOut, btnToday)
+        val iconButtons = listOf(btnPrevYear, btnNextYear2)
+        val density = resources.displayMetrics.density
+        val iconPadding = (6 * density).toInt()
+        
         if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
-            // Классическая тема - восстанавливаем оригинальные фиолетовые кнопки
-            listOf(btnZoomIn, btnZoomOut, btnPrevYear, btnNextYear2, btnToday).forEach { button ->
+            // Классическая тема - восстанавливаем оригинальные фиолетовые кнопки (кроме стрелок)
+            textButtons.forEach { button ->
                 // ИСПРАВЛЕНИЕ: Используем setBackgroundResource вместо backgroundTintList
                 button.setBackgroundResource(R.drawable.bg_zoom_button)
                 button.setTextColor(android.graphics.Color.WHITE)
@@ -260,11 +265,17 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                 button.minHeight = 0
                 button.minWidth = 0
             }
+            
+            iconButtons.forEach { button ->
+                button.setBackgroundResource(R.drawable.scroll_button_background)
+                button.setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
+                button.imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+            }
             return
         }
         
-        // Применяем тему ко всем кнопкам (другие темы)
-        listOf(btnZoomIn, btnZoomOut, btnPrevYear, btnNextYear2, btnToday).forEach { button ->
+        // Применяем тему к текстовым кнопкам (другие темы)
+        textButtons.forEach { button ->
             // Сбрасываем Material tint
             (button as? com.google.android.material.button.MaterialButton)?.apply {
                 backgroundTintList = null
@@ -284,6 +295,16 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             button.setPadding(paddingH, paddingV, paddingH, paddingV)
             button.minHeight = 0
             button.minWidth = 0
+        }
+        
+        // Отдельно оформляем иконки стрелок, чтобы они оставались центрированными
+        iconButtons.forEach { button ->
+            val drawable = com.example.vkbookandroid.theme.AppTheme.createButtonDrawable()
+            drawable?.let { button.background = it }
+            button.setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
+            button.imageTintList = android.content.res.ColorStateList.valueOf(
+                com.example.vkbookandroid.theme.AppTheme.getButtonTextColor()
+            )
         }
     }
     

@@ -10,21 +10,24 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="4dp"
+        android:paddingStart="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="1dp"
         android:background="#ffffff"
         android:elevation="2dp"
         android:gravity="center_vertical">
 
-        <Button
+        <ImageButton
             android:id="@+id/btnPrevYear"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="◀"
-            android:textSize="16sp"
-            android:minWidth="36dp"
-            android:minHeight="0dp"
-            android:includeFontPadding="true"
-            android:gravity="center"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:contentDescription="Предыдущий год"
+            android:background="@drawable/scroll_button_background"
+            android:padding="4dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_arrow_left"
+            android:soundEffectsEnabled="false"
             android:translationY="-1.5dp" />
 
         <Button
@@ -36,9 +39,9 @@
             android:textSize="16sp"
             android:minWidth="72dp"
             android:minHeight="0dp"
-            android:includeFontPadding="true"
+            android:includeFontPadding="false"
             android:gravity="center"
-            android:translationY="-1.5dp" />
+            android:translationY="-2.3dp" />
 
 
         <TextView
@@ -56,17 +59,17 @@
             android:gravity="center"
             android:textColor="#333333" />
 
-        <Button
+        <ImageButton
             android:id="@+id/btnNextYear2"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
             android:layout_marginStart="2mm"
-            android:text="▶"
-            android:textSize="16sp"
-            android:minWidth="36dp"
-            android:minHeight="0dp"
-            android:includeFontPadding="true"
-            android:gravity="center"
+            android:contentDescription="Следующий год"
+            android:background="@drawable/scroll_button_background"
+            android:padding="4dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_arrow_right"
+            android:soundEffectsEnabled="false"
             android:translationY="-1.5dp" />
 
         <Button
@@ -98,26 +101,6 @@
             android:includeFontPadding="false"
             android:gravity="center"
             android:translationY="-1.5dp" />
-
-    </LinearLayout>
-
-    <!-- Информационная панель -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        android:background="#e3f2fd">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="📅 График смен РУ ВК-50"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:textColor="#1976d2" />
 
     </LinearLayout>
 

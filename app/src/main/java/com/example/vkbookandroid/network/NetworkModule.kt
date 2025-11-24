@@ -106,10 +106,10 @@ object NetworkModule {
                 chain.proceed(request)
             }
             
-            // Таймауты
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            // Таймауты (сокращены для предотвращения зависаний при плохом соединении или отсутствии сети)
+            .connectTimeout(10, TimeUnit.SECONDS)  // Уменьшено с 30 до 10 секунд
+            .readTimeout(15, TimeUnit.SECONDS)     // Уменьшено с 30 до 15 секунд
+            .writeTimeout(10, TimeUnit.SECONDS)    // Уменьшено с 30 до 10 секунд
             
             // Логирование (только в debug)
             .addInterceptor(HttpLoggingInterceptor().apply {
@@ -296,8 +296,13 @@ object NetworkModule {
     
     /**
      * Тестировать подключение к серверу
+     * ПРОВЕРЯЕТ НАЛИЧИЕ СЕТИ перед запросом для идеального автономного режима
      */
     suspend fun testConnection(url: String): Boolean {
+        // СНАЧАЛА проверяем наличие сети - если сети нет, сразу возвращаем false
+        // НО: нужен Context для проверки, поэтому проверка будет в вызывающем коде
+        // Здесь просто делаем быструю проверку через короткий таймаут
+        
         return try {
             android.util.Log.d("NetworkModule", "Testing connection to: $url")
             

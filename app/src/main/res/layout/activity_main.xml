@@ -14,7 +14,8 @@
         android:padding="8dp"
         android:background="#F5F5F5"
         android:gravity="center_vertical"
-        android:minHeight="48dp">
+        android:minHeight="48dp"
+        android:maxHeight="48dp">
 
         <Button
             android:id="@+id/btnSync"
@@ -52,29 +53,42 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="12dp"
+            android:layout_marginEnd="4dp"
             android:text="Готов к обновлению"
             android:textSize="12sp"
-            android:textColor="#666666" />
-
-        <ProgressBar
-            android:id="@+id/progressSync"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="120dp"
-            android:layout_height="10dp"
-            android:layout_marginStart="8dp"
-            android:indeterminate="false"
-            android:max="100"
-            android:progress="0"
-            android:visibility="gone" />
+            android:textColor="#666666"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:gravity="center_vertical|start"
+            android:minHeight="20dp"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:scrollHorizontally="false" />
 
         <TextView
             android:id="@+id/tvProgressPercent"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
             android:text="0%"
             android:textSize="12sp"
             android:textColor="#666666"
+            android:visibility="gone"
+            android:minWidth="32dp"
+            android:gravity="center" />
+
+        <ProgressBar
+            android:id="@+id/progressSync"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="0dp"
+            android:layout_height="8dp"
+            android:layout_weight="0.3"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:indeterminate="false"
+            android:max="100"
+            android:progress="0"
             android:visibility="gone" />
 
     </LinearLayout>

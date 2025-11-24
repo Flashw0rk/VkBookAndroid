@@ -62,30 +62,59 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         private const val KEY_PERSONAL_TASKS = "personal_tasks"
     }
     private val tickHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lastCheckedHour = -1 // Для оптимизации - обновляем только при изменении часа
     private val tickRunnable = object : Runnable {
         override fun run() {
-            // Обновляем текущую дату/время и активность задач
-            if (isAdded) {
+            if (!isAdded) {
+                scheduleNextTick()
+                return
+            }
+            
+            val now = LocalDateTime.now()
+            val currentHour = now.hour
+            val currentMinute = now.minute
+            
+            // ОПТИМИЗАЦИЯ: Обновляем только если час действительно изменился
+            if (currentHour != lastCheckedHour) {
+                // Логирование для Battery Historian
+                Log.d("Battery", "ChecksScheduleFragment: hour changed from $lastCheckedHour to $currentHour")
+                
                 updateNow()
                 
-                // Оптимизация: обновляем только изменившиеся часы
-                val nowH = LocalDateTime.now().hour
-                if (nowH != lastNowHour) {
-                    val oldPos = lastNowHour
-                    lastNowHour = nowH
-                    if (oldPos in 0..23) {
-                        hoursAdapter.notifyItemChanged(oldPos)
-                    }
-                    hoursAdapter.notifyItemChanged(nowH)
-                } else {
-                    // Если час не изменился, просто обновляем текущий для рамки
-                    hoursAdapter.notifyItemChanged(nowH)
+                // Обновляем часы в адаптере
+                val oldPos = lastCheckedHour
+                lastCheckedHour = currentHour
+                if (oldPos in 0..23) {
+                    hoursAdapter.notifyItemChanged(oldPos)
                 }
+                hoursAdapter.notifyItemChanged(currentHour)
                 
-                // Обновляем активность задач с учетом выбранных дней/часов
+                // Обновляем активность задач только при изменении часа
                 updateTasksActiveStatus()
             }
-            tickHandler.postDelayed(this, 60_000L)
+            // Если час не изменился, ничего не делаем (экономия CPU)
+            
+            scheduleNextTick()
+        }
+        
+        private fun scheduleNextTick() {
+            // Планируем следующую проверку на начало следующего часа (или через минуту если час скоро изменится)
+            val now = LocalDateTime.now()
+            val currentMinute = now.minute
+            val currentSecond = now.second
+            
+            // Если до следующего часа меньше 2 минут, проверяем через минуту
+            // Иначе планируем на начало следующего часа
+            val delayMs = if (currentMinute >= 58) {
+                60_000L // Проверяем через минуту
+            } else {
+                // Планируем на начало следующего часа
+                val minutesUntilNextHour = 60 - currentMinute
+                val secondsUntilNextHour = minutesUntilNextHour * 60 - currentSecond
+                (secondsUntilNextHour * 1000).toLong()
+            }
+            
+            tickHandler.postDelayed(this, delayMs)
         }
     }
 
@@ -721,6 +750,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
 
     private fun startTicks() {
         tickHandler.removeCallbacksAndMessages(null)
+        // Инициализируем lastCheckedHour текущим часом
+        lastCheckedHour = LocalDateTime.now().hour
+        // Запускаем сразу для первого обновления
         tickHandler.post(tickRunnable)
     }
 
@@ -744,6 +776,14 @@ private fun lighten(color: Int, factor: Float): Int {
     val newB = (b + (255 - b) * factor).toInt().coerceIn(0, 255)
     
     return android.graphics.Color.rgb(newR, newG, newB)
+}
+
+/**
+ * Проверка системного темного режима Android
+ */
+private fun isSystemDarkMode(context: Context): Boolean {
+    val nightModeFlags = context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+    return nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES
 }
 
 // ===== Шкала часов =====
@@ -1824,12 +1864,19 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 layoutParams = LinearLayout.LayoutParams(colWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
                 minimumHeight = context.dpToPx(50)
                 
-                val borderColor = if (AppTheme.isNuclearTheme()) Color.parseColor("#2DCBE0") else AppTheme.getBorderColor()
+                // Умеренно желтая рамка для активных задач в теме Росатом в темном режиме
+                val shouldUseYellowBorder = AppTheme.isRosatomTheme() && isSystemDarkMode(context) && item.isActive
+                val borderColor = when {
+                    shouldUseYellowBorder -> Color.parseColor("#FFC107") // Умеренно желтый
+                    AppTheme.isNuclearTheme() -> Color.parseColor("#2DCBE0")
+                    else -> AppTheme.getBorderColor()
+                }
+                val strokeWidth = if (shouldUseYellowBorder) context.dpToPx(3) else context.dpToPx(2)
+                
                 val drawable = createCellDrawableCompat(context, bgColor, borderColor)
                 if (drawable != null) {
-                    // Увеличиваем толщину границы для лучшей видимости
                     (drawable as? android.graphics.drawable.GradientDrawable)?.setStroke(
-                        context.dpToPx(2), // 2dp для всех границ
+                        strokeWidth,
                         borderColor
                     )
                     background = drawable
@@ -1928,12 +1975,19 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 setPadding(context.dpToPx(4), context.dpToPx(4), context.dpToPx(4), context.dpToPx(4))
                 minimumHeight = context.dpToPx(50)
                 
-                val borderColor = if (AppTheme.isNuclearTheme()) Color.parseColor("#2DCBE0") else AppTheme.getBorderColor()
+                // Умеренно желтая рамка для активных задач в теме Росатом в темном режиме
+                val shouldUseYellowBorder = AppTheme.isRosatomTheme() && isSystemDarkMode(context) && item.isActive
+                val borderColor = when {
+                    shouldUseYellowBorder -> Color.parseColor("#FFC107") // Умеренно желтый
+                    AppTheme.isNuclearTheme() -> Color.parseColor("#2DCBE0")
+                    else -> AppTheme.getBorderColor()
+                }
+                val strokeWidth = if (shouldUseYellowBorder) context.dpToPx(3) else context.dpToPx(2)
+                
                 val drawable = createCellDrawableCompat(context, bgColor, borderColor)
                 if (drawable != null) {
-                    // Увеличиваем толщину границы для лучшей видимости
                     (drawable as? android.graphics.drawable.GradientDrawable)?.setStroke(
-                        context.dpToPx(2), // 2dp для всех границ
+                        strokeWidth,
                         borderColor
                     )
                     setBackground(drawable)

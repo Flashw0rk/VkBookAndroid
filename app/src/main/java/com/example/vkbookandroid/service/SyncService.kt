@@ -8,9 +8,18 @@ import com.example.vkbookandroid.FileHashManager
 import com.example.vkbookandroid.network.model.UpdateFileMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Сервис для синхронизации данных с сервером
@@ -20,6 +29,10 @@ class SyncService(private val context: Context) {
     // Менеджер хешей для проверки целостности загружаемых файлов
     private val fileHashManager = FileHashManager(context)
     private val tag = "SyncService"
+    
+    // Кэширование wakeup ping для предотвращения частых запросов
+    private var lastWakeupPingTime = 0L
+    private val WAKEUP_PING_INTERVAL_MS = 5 * 60 * 1000L // 5 минут
     
     init {
         Log.d(tag, "SyncService initialized. Current NetworkModule base URL: ${NetworkModule.baseUrl}")
@@ -34,9 +47,103 @@ class SyncService(private val context: Context) {
     }
     
     /**
-     * Проверить доступность сервера
+     * Легковесный ping для пробуждения сервера без ожидания ответа
+     * Используется при старте приложения для "разбудить" сервер
+     * Не блокирует UI и не ждет ответа - просто отправляет запрос и забывает
+     * ПРОВЕРЯЕТ НАЛИЧИЕ СЕТИ перед отправкой запроса для идеального автономного режима
+     * КЭШИРУЕТ запросы - не отправляет чаще 1 раза в 5 минут
+     */
+    fun wakeupServerPing() {
+        // Кэширование: не отправляем ping если недавно уже отправляли
+        val now = System.currentTimeMillis()
+        if (now - lastWakeupPingTime < WAKEUP_PING_INTERVAL_MS) {
+            Log.d(tag, "Wakeup ping skipped (recently sent ${(now - lastWakeupPingTime) / 1000} seconds ago)")
+            return
+        }
+        
+        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос вообще
+        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(context)) {
+            Log.d(tag, "Network not available, skipping wakeup ping (offline mode)")
+            return
+        }
+        
+        // Обновляем время последнего ping
+        lastWakeupPingTime = now
+        
+        // Логирование для Battery Historian
+        Log.d("Battery", "SyncService: wakeup ping sent")
+        
+        // Запускаем в фоне без блокировки UI
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                Log.d(tag, "=== SENDING WAKEUP PING TO SERVER ===")
+                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
+                
+                // Создаем клиент с очень коротким таймаутом для быстрого "ping"
+                val pingClient = OkHttpClient.Builder()
+                    .connectTimeout(2, TimeUnit.SECONDS)
+                    .readTimeout(2, TimeUnit.SECONDS)
+                    .writeTimeout(2, TimeUnit.SECONDS)
+                    .addInterceptor { chain ->
+                        val builder = chain.request().newBuilder()
+                            .addHeader("X-API-Key", com.example.vkbookandroid.BuildConfig.API_KEY)
+                            .addHeader("Accept", "application/json")
+                            .addHeader("User-Agent", "VkBookAndroid/${com.example.vkbookandroid.BuildConfig.VERSION_NAME}")
+                        chain.proceed(builder.build())
+                    }
+                    .build()
+                
+                val baseUrl = NetworkModule.getCurrentBaseUrl().trimEnd('/')
+                val healthUrl = "$baseUrl/actuator/health"
+                
+                val request = Request.Builder()
+                    .url(healthUrl)
+                    .get()
+                    .build()
+                
+                // Отправляем запрос, но не ждем ответа - просто "fire and forget"
+                pingClient.newCall(request).enqueue(object : Callback {
+                    override fun onFailure(call: Call, e: IOException) {
+                        // Игнорируем ошибки - это просто ping для пробуждения
+                        Log.d(tag, "Wakeup ping sent (server may be sleeping, that's OK)")
+                    }
+                    
+                    override fun onResponse(call: Call, response: Response) {
+                        // Игнорируем ответ - главное что запрос отправлен
+                        Log.d(tag, "Wakeup ping sent successfully (response code: ${response.code})")
+                        response.close()
+                    }
+                })
+                
+                Log.d(tag, "=== WAKEUP PING SENT (fire-and-forget) ===")
+            } catch (e: Exception) {
+                // Игнорируем все ошибки - это просто ping для пробуждения
+                Log.d(tag, "Wakeup ping error (ignored): ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Проверить доступность сервера (с проверкой сети)
+     * Используется в обычных случаях для предотвращения зависаний
      */
     suspend fun checkServerConnection(): Boolean {
+        // Проверяем наличие сети - если сети нет, сразу возвращаем false
+        // (кроме режима ожидания пробуждения, где используется checkServerConnectionForWakeup)
+        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(context)) {
+            Log.d(tag, "Network not available, server connection check skipped (offline mode)")
+            return false
+        }
+        
+        return checkServerConnectionForWakeup()
+    }
+    
+    /**
+     * Проверить доступность сервера БЕЗ проверки сети
+     * Используется в режиме ожидания пробуждения сервера
+     * Позволяет делать попытки даже без сети (запросы быстро завершатся по таймауту)
+     */
+    suspend fun checkServerConnectionForWakeup(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== CHECKING SERVER CONNECTION ===")
@@ -121,17 +228,19 @@ class SyncService(private val context: Context) {
     /**
      * Синхронизировать armature_coords.json с сервера
      */
-    suspend fun syncArmatureCoords(result: SyncResult): Boolean {
+    suspend fun syncArmatureCoords(result: SyncResult, onProgress: suspend (Int, String) -> Unit = { _, _ -> }): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== STARTING ARMATURE COORDS SYNC ===")
                 Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 Log.d(tag, "Attempting to load armature coords from server...")
                 
+                onProgress(50, "Загрузка JSON...")
                 val serverData = getArmatureRepository().loadArmatureCoordsFromServer()
                 Log.d(tag, "Server data received: $serverData")
                 
                 if (serverData != null) {
+                    onProgress(100, "Загрузка JSON...")
                     Log.d(tag, "Server data markers count: ${serverData.size}")
                     Log.d(tag, "Server data markers: $serverData")
                     
@@ -184,7 +293,7 @@ class SyncService(private val context: Context) {
     /**
      * Синхронизировать Excel файлы с сервера
      */
-    suspend fun syncExcelFiles(result: SyncResult): Boolean {
+    suspend fun syncExcelFiles(result: SyncResult, onProgress: suspend (Int, String) -> Unit = { _, _ -> }): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== STARTING EXCEL FILES SYNC ===")
@@ -239,6 +348,9 @@ class SyncService(private val context: Context) {
 
                         Log.d(tag, "=== PROCESSING EXCEL FILE: $filename ===")
                         Log.d(tag, "Requesting file from server...")
+                        
+                        val fileProgress = ((index + 1) * 100 / excelFiles.size)
+                        onProgress(fileProgress, "Загрузка Excel...")
                         
                         val responseBody = getArmatureRepository().downloadExcelFile(filename)
                         if (responseBody != null) {
@@ -380,7 +492,7 @@ class SyncService(private val context: Context) {
     /**
      * Синхронизировать PDF файлы с сервера
      */
-    suspend fun syncPdfFiles(result: SyncResult): Boolean {
+    suspend fun syncPdfFiles(result: SyncResult, onProgress: suspend (Int, String) -> Unit = { _, _ -> }): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 Log.d(tag, "=== STARTING PDF FILES SYNC ===")
@@ -428,6 +540,10 @@ class SyncService(private val context: Context) {
                         }
                         
                         Log.d(tag, "=== PROCESSING PDF FILE: $filename ===")
+                        
+                        val fileProgress = ((index + 1) * 100 / pdfFiles.size)
+                        onProgress(fileProgress, "Загрузка PDF...")
+                        
                         val responseBody = getArmatureRepository().downloadPdfFile(filename)
                         if (responseBody != null) {
                             val file = File(context.filesDir, "data/$filename")
@@ -550,10 +666,22 @@ class SyncService(private val context: Context) {
      */
     suspend fun syncAll(onProgress: suspend (Int, String) -> Unit = { _, _ -> }): SyncResult {
         return withContext(Dispatchers.IO) {
+            // Логирование для Battery Historian
+            val syncStartTime = System.currentTimeMillis()
+            Log.d("Battery", "SyncService: syncAll started")
+            
             Log.d(tag, "=== STARTING FULL SYNC ===")
             Log.d(tag, "Server URL: ${NetworkModule.getCurrentBaseUrl()}")
             
             val result = SyncResult()
+            
+            // СНАЧАЛА проверяем наличие сети - если сети нет, сразу возвращаем результат
+            if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(context)) {
+                Log.w(tag, "Network not available, skipping sync (offline mode)")
+                result.serverConnected = false
+                onProgress(0, "Офлайн режим")
+                return@withContext result
+            }
             
             // Проверяем соединение
             onProgress(5, "Проверка соединения с сервером...")
@@ -584,7 +712,10 @@ class SyncService(private val context: Context) {
             // Синхронизируем данные
             onProgress(10, "Загрузка координат арматур...")
             Log.d(tag, "Starting armature coords sync...")
-            result.armatureCoordsSynced = syncArmatureCoords(result)
+            result.armatureCoordsSynced = syncArmatureCoords(result) { percent, message ->
+                val totalPercent = 10 + (percent * 30 / 100) // 10-40%
+                onProgress(totalPercent, message)
+            }
             Log.d(tag, "Armature coords sync result: ${result.armatureCoordsSynced}")
             
             // Если достигнут rate limit, прекращаем синхронизацию
@@ -600,7 +731,10 @@ class SyncService(private val context: Context) {
             
             onProgress(40, "Загрузка Excel файлов...")
             Log.d(tag, "Starting Excel files sync...")
-            result.excelFilesSynced = syncExcelFiles(result)
+            result.excelFilesSynced = syncExcelFiles(result) { percent, message ->
+                val totalPercent = 40 + (percent * 30 / 100) // 40-70%
+                onProgress(totalPercent, message)
+            }
             Log.d(tag, "Excel files sync result: ${result.excelFilesSynced}")
             
             // Если достигнут rate limit, прекращаем синхронизацию
@@ -616,7 +750,10 @@ class SyncService(private val context: Context) {
             
             onProgress(70, "Загрузка PDF схем...")
             Log.d(tag, "Starting PDF files sync...")
-            result.pdfFilesSynced = syncPdfFiles(result)
+            result.pdfFilesSynced = syncPdfFiles(result) { percent, message ->
+                val totalPercent = 70 + (percent * 25 / 100) // 70-95%
+                onProgress(totalPercent, message)
+            }
             Log.d(tag, "PDF files sync result: ${result.pdfFilesSynced}")
             
             // Удаляем временный файл "Безымянный-1.pdf" если скачаны другие PDF
@@ -627,6 +764,10 @@ class SyncService(private val context: Context) {
             onProgress(95, "Завершение синхронизации...")
             
             result.overallSuccess = result.armatureCoordsSynced || result.excelFilesSynced || result.pdfFilesSynced
+            
+            // Логирование для Battery Historian
+            val syncDuration = System.currentTimeMillis() - syncStartTime
+            Log.d("Battery", "SyncService: syncAll completed in ${syncDuration}ms, success=${result.overallSuccess}, files=${result.updatedFiles.size}")
             
             Log.d(tag, "=== FULL SYNC COMPLETED ===")
             Log.d(tag, "Overall success: ${result.overallSuccess}")

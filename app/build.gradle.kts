@@ -76,6 +76,16 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+    
+    // Конфигурация тестов
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+        animationsDisabled = true
+    }
+    
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

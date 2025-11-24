@@ -1,4 +1,6 @@
 <resources>
     <string name="app_name">ВК-50</string>
     <string name="remote_base_url">https://your-server-domain.com/</string>
+    <string name="sync_button_cancel_wait">Отменить ожидание сервера</string>
+    <string name="sync_button_cancel_update">Отменить обновление</string>
 </resources>
