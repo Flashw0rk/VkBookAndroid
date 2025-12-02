@@ -71,6 +71,8 @@ object AppTheme {
     
     fun isRosatomTheme(): Boolean = currentThemeId == THEME_ROSATOM
     
+    fun isGlassTheme(): Boolean = currentThemeId == THEME_MODERN_GLASS
+    
     /**
      * Получить название темы
      */

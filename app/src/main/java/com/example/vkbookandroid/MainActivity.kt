@@ -743,7 +743,7 @@ class MainActivity : AppCompatActivity() {
             
             // Exponential backoff: начинаем с 5 секунд, увеличиваем до максимума 30 секунд
             var delayMs = 5000L // Начинаем с 5 секунд
-            val maxAttempts = 8
+            val maxAttempts = 10
             val maxDelayMs = 30000L // Максимум 30 секунд
             
             // Показываем прогресс-бар во время ожидания
@@ -821,7 +821,7 @@ class MainActivity : AppCompatActivity() {
                 delayMs = minOf(delayMs * 2, maxDelayMs)
             }
             
-            // После 8 неудачных попыток
+            // После 10 неудачных попыток
             hideSyncProgress()
             return false
         } finally {

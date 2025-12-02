@@ -1666,6 +1666,7 @@ class ScheduleCalendarAdapter(
             val isThemeApplied = com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()
             val isNuclearTheme = isThemeApplied && com.example.vkbookandroid.theme.AppTheme.isNuclearTheme()
             val isRosatomTheme = isThemeApplied && com.example.vkbookandroid.theme.AppTheme.isRosatomTheme()
+            val isGlassTheme = isThemeApplied && com.example.vkbookandroid.theme.AppTheme.isGlassTheme()
             val cellWidth = (50 * zoomFactor * itemView.context.resources.displayMetrics.density).toInt()
             val layoutParams = LinearLayout.LayoutParams(cellWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
             layoutParams.setMargins(0, 0, 0, 0)
@@ -1706,8 +1707,9 @@ class ScheduleCalendarAdapter(
                 else -> false
             }
             
+            var isTodayCell = false
+            
             if (row.isMonthRow) {
-                var isTodayCell = false
                 gd.setColor(defaultCellColor)
                 
                 // Подсветка выходных
@@ -1765,20 +1767,21 @@ class ScheduleCalendarAdapter(
                         }
                     }
                     
-                    // Оранжевый фон для сегодняшней даты
+                    // Выделение сегодняшней даты
                     val today = Calendar.getInstance()
                     val todayDay = today.get(Calendar.DAY_OF_MONTH)
                     val todayMonth = today.get(Calendar.MONTH)
                     val todayYear = today.get(Calendar.YEAR)
                     val monthNames = arrayOf("Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь")
-                    if (day == todayDay.toString() && row.name == monthNames[todayMonth] && Calendar.getInstance().get(Calendar.YEAR) == todayYear) {
+                    // ВАЖНО: Проверяем что это текущий год!
+                    if (day == todayDay.toString() && row.name == monthNames[todayMonth] && row.year == todayYear) {
                         // КРИТИЧНО: Для классической темы - исходный цвет сегодня!
                         if (!isThemeApplied) {
                             gd.setColor(Color.parseColor("#FF6B35"))
                             dayView.setTextColor(Color.WHITE)
                         } else {
                             val todayColor = when {
-                                isNuclearTheme -> Color.parseColor("#1FA85E")
+                                isNuclearTheme -> Color.parseColor("#FFD700") // Желтый (золотой)
                                 isRosatomTheme -> Color.parseColor("#FF6B35")
                                 else -> com.example.vkbookandroid.theme.AppTheme.getAccentColor()
                             }
@@ -1848,9 +1851,10 @@ class ScheduleCalendarAdapter(
                 }
             }
             
+            // Устанавливаем границы
             if (isSelectedColumn) {
                 val highlightColor = when {
-                    isNuclearTheme -> Color.parseColor("#7CF7FF")
+                    isNuclearTheme -> Color.parseColor("#FF6B35")
                     isRosatomTheme -> Color.parseColor("#FF6B35")
                     else -> Color.parseColor("#FF6B35")
                 }

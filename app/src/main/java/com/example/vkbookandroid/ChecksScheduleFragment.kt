@@ -187,8 +187,12 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         }
         monthAdapter.setContext(requireContext())
         
-        // Устанавливаем коллбек для обновления задач при изменении выбранных дней
+        // Устанавливаем коллбек для обновления задач и часов при изменении выбранных дней
         monthAdapter.onSelectionChanged = {
+            // Обновляем метки дней на часах 00-07
+            val selectedDates = monthAdapter.getSelectedDates()
+            hoursAdapter.submit(buildHours(selectedDates), resetSelection = false)
+            // Обновляем активность задач
             updateTasksActiveStatus()
         }
         
@@ -312,7 +316,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
      */
     private fun loadChecksScheduleData() {
         // Часы 0..23 - при первой загрузке выделяем текущий интервал
-        hoursAdapter.submit(buildHours(), resetSelection = true)
+        val selectedDates = monthAdapter.getSelectedDates()
+        hoursAdapter.submit(buildHours(selectedDates), resetSelection = true)
         scrollToCurrentHour()
         // Календарь - по умолчанию свернут (только текущая неделя), выделяем сегодняшний день
         updateCalendarView(resetSelection = true)
@@ -787,7 +792,11 @@ private fun isSystemDarkMode(context: Context): Boolean {
 }
 
 // ===== Шкала часов =====
-private data class HourCell(val hour: Int, val isNow: Boolean)
+private data class HourCell(
+    val hour: Int, 
+    val isNow: Boolean,
+    val dayLabel: String? = null // Метка дня для часов 00-07 (например, "Вт")
+)
 
 private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
     private val items = mutableListOf<HourCell>()
@@ -830,11 +839,12 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
     
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val tv = TextView(parent.context)
-        val lp = RecyclerView.LayoutParams((parent.resources.displayMetrics.density*45).toInt(), RecyclerView.LayoutParams.MATCH_PARENT)
+        // Увеличена ширина с 45 до 50dp для размещения метки дня
+        val lp = RecyclerView.LayoutParams((parent.resources.displayMetrics.density*50).toInt(), RecyclerView.LayoutParams.MATCH_PARENT)
         tv.layoutParams = lp
-        tv.textSize = 14f
+        tv.textSize = 12f // Уменьшен размер шрифта с 14 до 12 для двухстрочного текста
         tv.gravity = android.view.Gravity.CENTER
-        tv.setPadding(4,4,4,4)
+        tv.setPadding(2,4,2,4) // Уменьшен горизонтальный padding
         return VH(tv, { hour -> selected.contains(hour) })
     }
     
@@ -860,10 +870,29 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
                 onSelectionChanged?.invoke()
             }
         }
+        
+        // Подсказка при долгом нажатии на часы 00-07
+        if (hour in 0..7) {
+            holder.itemView.setOnLongClickListener {
+                android.widget.Toast.makeText(
+                    holder.itemView.context,
+                    "Часы 00-07 относятся к следующему календарному дню",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                true
+            }
+        } else {
+            holder.itemView.setOnLongClickListener(null)
+        }
     }
     class VH(private val tv: TextView, private val isSelected: (Int) -> Boolean) : RecyclerView.ViewHolder(tv) {
         fun bind(c: HourCell, selected: Boolean) {
-            tv.text = String.format(Locale.getDefault(), "%02d", c.hour)
+            // Если есть метка дня (для часов 00-07), показываем её
+            tv.text = if (c.dayLabel != null) {
+                String.format(Locale.getDefault(), "%02d\n(%s)", c.hour, c.dayLabel)
+            } else {
+                String.format(Locale.getDefault(), "%02d", c.hour)
+            }
             val nowH = LocalDateTime.now().hour
             val activeRange = rangeOf(nowH)
             val currentRange = rangeOf(c.hour)
@@ -1108,7 +1137,7 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                 // Классическая тема - ИСХОДНЫЕ цвета
                 when {
                     d.isToday && selected -> Pair(Color.parseColor("#90CAF9"), Color.parseColor("#1976D2"))
-                    d.isToday -> Pair(Color.parseColor("#FFFFFF"), Color.parseColor("#212121"))
+                    d.isToday -> Pair(Color.parseColor("#FFFFFF"), Color.parseColor("#212121")) // Фон белый, рамка будет черная
                     selected -> Pair(Color.parseColor("#90CAF9"), Color.parseColor("#1976D2"))
                     else -> Pair(lighten(Color.parseColor("#FFFFFF"), 0.3f), Color.parseColor("#212121"))
                 }
@@ -1118,7 +1147,6 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                     val workdayBg = Color.parseColor("#49C9D4")
                     val saturdayBg = Color.parseColor("#34B2F2")
                     val sundayBg = Color.parseColor("#2C91E8")
-                    val todayBg = Color.parseColor("#1FA85E")
                     val selectedBg = Color.parseColor("#2FD2FF")
                     val textPrimary = Color.parseColor("#013349")
                     val textSaturday = Color.parseColor("#02243C")
@@ -1126,7 +1154,21 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                     val selectedText = Color.parseColor("#001E36")
                     when {
                         d.isToday && selected -> Pair(selectedBg, selectedText)
-                        d.isToday -> Pair(todayBg, textPrimary)
+                        d.isToday -> {
+                            // Для сегодняшней даты: фон как у обычного дня, рамка оранжевая
+                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
+                            val bg = when (dayOfWeek) {
+                                6 -> saturdayBg
+                                7 -> sundayBg
+                                else -> workdayBg
+                            }
+                            val text = when (dayOfWeek) {
+                                6 -> textSaturday
+                                7 -> textSunday
+                                else -> textPrimary
+                            }
+                            Pair(bg, text)
+                        }
                         selected -> Pair(selectedBg, selectedText)
                         else -> {
                             val dayOfWeek = d.date.dayOfWeek.value // 1..7
@@ -1142,14 +1184,21 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                     val workdayBg = Color.parseColor("#B3E5FC")
                     val saturdayBg = Color.parseColor("#81D4FA")
                     val sundayBg = Color.parseColor("#4FC3F7")
-                    val todayBg = Color.parseColor("#FF6B35")
                     val selectedBg = Color.parseColor("#0091D5")
                     val textDark = Color.parseColor("#003D5C")
-                    val textToday = Color.parseColor("#FFFFFF")
                     val textSelected = Color.parseColor("#FFFFFF")
                     when {
                         d.isToday && selected -> Pair(selectedBg, textSelected)
-                        d.isToday -> Pair(todayBg, textToday)
+                        d.isToday -> {
+                            // Для сегодняшней даты: фон как у обычного дня, рамка оранжевая
+                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
+                            val bg = when (dayOfWeek) {
+                                6 -> saturdayBg
+                                7 -> sundayBg
+                                else -> workdayBg
+                            }
+                            Pair(bg, textDark)
+                        }
                         selected -> Pair(selectedBg, textSelected)
                         else -> {
                             val dayOfWeek = d.date.dayOfWeek.value // 1..7
@@ -1161,10 +1210,10 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                         }
                     }
                 } else {
+                    // Эргономичная и другие темы
                     val cardColor = AppTheme.getCardBackgroundColor()
                     val textDefault = AppTheme.getTextPrimaryColor()
                     val selectedBg = AppTheme.getSelectedColor()
-                    val todayBg = lighten(cardColor, 0.2f)
                     val normalBg = lighten(cardColor, 0.4f)
                     fun textFor(bg: Int): Int {
                         val luminance = ColorUtils.calculateLuminance(bg)
@@ -1172,7 +1221,7 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
                     }
                     when {
                         d.isToday && selected -> Pair(selectedBg, textFor(selectedBg))
-                        d.isToday -> Pair(todayBg, textFor(todayBg))
+                        d.isToday -> Pair(normalBg, textFor(normalBg)) // Фон как у обычного дня, рамка будет зеленая
                         selected -> Pair(selectedBg, textFor(selectedBg))
                         else -> Pair(normalBg, textFor(normalBg))
                     }
@@ -1180,22 +1229,35 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
             }
             
             // Применяем цвета
-            if (!AppTheme.shouldApplyTheme()) {
-                // Классическая тема - простые цвета без drawable
-                tv.setBackgroundColor(bgColor)
+            if (d.isToday) {
+                // Для сегодняшней даты: создаем drawable вручную с одинаковыми параметрами для всех тем
+                val density = tv.resources.displayMetrics.density
+                val strokeColor = when {
+                    !AppTheme.shouldApplyTheme() -> Color.BLACK // Классическая - черная
+                    AppTheme.isNuclearTheme() -> Color.parseColor("#FF6B35") // Неон - оранжевая
+                    AppTheme.isRosatomTheme() -> Color.parseColor("#FF6B35") // Росатом - оранжевая
+                    AppTheme.isGlassTheme() -> Color.BLACK // Стеклянная - черная
+                    AppTheme.getCurrentThemeId() == 2 -> Color.parseColor("#689F38") // Эргономичная - зеленая
+                    else -> AppTheme.getAccentColor() // Остальные темы - акцентный цвет
+                }
+                val drawable = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    // Скругление как у Росатом (4dp)
+                    cornerRadius = 4f * density
+                    setColor(bgColor)
+                    // Ширина рамки 2dp (как у Росатом)
+                    setStroke((2 * density).toInt(), strokeColor)
+                }
+                tv.background = drawable
                 tv.setTextColor(textColor)
             } else {
-                // Другие темы - с drawable и рамками
-                if (d.isToday) {
-                    val drawable = AppTheme.createCellDrawable(bgColor, AppTheme.getAccentColor())
-                    if (drawable != null) {
-                        drawable.setStroke(6, AppTheme.getAccentColor())
-                        tv.background = drawable
-                    } else {
-                        tv.setBackgroundColor(bgColor)
-                    }
+                // Для обычных дат
+                if (!AppTheme.shouldApplyTheme()) {
+                    // Классическая тема - простые цвета без drawable
+                    tv.setBackgroundColor(bgColor)
                     tv.setTextColor(textColor)
                 } else {
+                    // Другие темы - с drawable
                     val drawable = AppTheme.createCellDrawable(bgColor)
                     if (drawable != null) {
                         tv.background = drawable
@@ -1285,13 +1347,38 @@ private fun ChecksScheduleFragment.updateNow() {
     tvNow.text = "${now.toLocalDate()}  ${String.format(Locale.getDefault(), "%02d:%02d", now.hour, now.minute)}"
 }
 
-private fun ChecksScheduleFragment.buildHours(): List<HourCell> {
-    val nowH = LocalDateTime.now().hour
+private fun ChecksScheduleFragment.buildHours(selectedDates: Set<LocalDate> = emptySet()): List<HourCell> {
+    val now = LocalDateTime.now()
+    val nowH = now.hour
+    val today = now.toLocalDate()
+    
     val orderedHours = buildList {
         for (h in 8..23) add(h)
         for (h in 0..7) add(h)
     }
-    return orderedHours.map { HourCell(it, it == nowH) }
+    
+    return orderedHours.map { hour ->
+        // Часы 00-07 относятся к следующему календарному дню
+        val dayLabel = if (hour in 0..7) {
+            // Вариант 5: Адаптивное отображение
+            when (selectedDates.size) {
+                1 -> {
+                    // Выбран ОДИН день - показываем день недели следующего дня
+                    val selectedDate = selectedDates.first()
+                    val nextDay = selectedDate.plusDays(1)
+                    nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
+                }
+                else -> {
+                    // Выбрано 0 или 2+ дней - показываем универсальную метку
+                    "+1д"
+                }
+            }
+        } else {
+            null
+        }
+        
+        HourCell(hour, hour == nowH, dayLabel)
+    }
 }
 
 // ===== Таблица задач (CSV) =====
@@ -1370,7 +1457,14 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             val isActive = item.reminderRules.any { rule ->
                 selectedDates.any { date ->
                     selectedHours.any { hour ->
-                        val testDateTime = LocalDateTime.of(date, java.time.LocalTime.of(hour, 0))
+                        // ВАЖНО: Часы 00-07 относятся к следующему календарному дню
+                        // Если выбран понедельник и час 02:00, это физически вторник 02:00
+                        val actualDate = if (hour in 0..7) {
+                            date.plusDays(1)
+                        } else {
+                            date
+                        }
+                        val testDateTime = LocalDateTime.of(actualDate, java.time.LocalTime.of(hour, 0))
                         rule.matches(testDateTime)
                     }
                 }
