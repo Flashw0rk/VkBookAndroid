@@ -166,3 +166,5 @@ adb logcat -t "$(date -d '5 minutes ago' +%m-%d\ %H:%M:%S)" -s Battery > recent_
 - В **RELEASE** сборке логи с тегом "Battery" могут быть удалены ProGuard
 - Для production анализа используйте Firebase Performance Monitoring или собственный сервис аналитики
 
+
+

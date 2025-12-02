@@ -243,3 +243,5 @@ fun isNetworkAvailable(context: Context): Boolean {
 - [NetworkCapabilities документация](https://developer.android.com/reference/android/net/NetworkCapabilities)
 - [Android API Deprecation Policy](https://developer.android.com/guide/practices/compatibility)
 
+
+

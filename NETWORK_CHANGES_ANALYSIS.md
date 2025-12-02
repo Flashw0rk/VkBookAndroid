@@ -314,3 +314,5 @@ fun isNetworkAvailable(context: Context): Boolean {
 
 **Вывод:** Изменения правильные и полезные, но есть место для улучшения. Опытные программисты добавили бы exponential backoff и NetworkCallback для отслеживания сети в реальном времени.
 
+
+
