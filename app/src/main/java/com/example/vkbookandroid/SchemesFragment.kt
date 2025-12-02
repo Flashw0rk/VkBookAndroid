@@ -119,6 +119,10 @@ class SchemesFragment : Fragment(), RefreshableFragment, com.example.vkbookandro
     
     private fun applyThemeToButtons() {
         if (!com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()) {
+            // Классическая тема - используем оригинальный фиолетовый drawable
+            buttonPickPdf.setBackgroundResource(R.drawable.bg_zoom_button)
+            buttonPickPdf.setTextColor(android.graphics.Color.WHITE)
+            
             // Схемы: увеличиваем на 2dp (0.5мм)
             val px = buttonPickPdf.context.resources.displayMetrics.density
             val paddingH = ((com.example.vkbookandroid.theme.AppTheme.getButtonPaddingHorizontal() + 2) * px).toInt()
