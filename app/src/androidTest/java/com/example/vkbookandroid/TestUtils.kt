@@ -17,8 +17,9 @@ object TestUtils {
 			onView(allOf(withText("Очистить хеши"), isDisplayed())).perform(click())
 		} catch (_: Throwable) { /* ignore */ }
 		try {
-			pressBack()
+			onView(allOf(withText("Отмена"), isDisplayed())).perform(click())
 		} catch (_: Throwable) { /* ignore */ }
+		// НЕ используем pressBack() - он может закрыть Activity!
 	}
 }
 

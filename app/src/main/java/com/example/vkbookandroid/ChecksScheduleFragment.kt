@@ -212,10 +212,10 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
     
     private fun updateTasksActiveStatus() {
-        val selectedHours = hoursAdapter.getSelectedHours()
+        val selectedCells = hoursAdapter.getSelectedCells()
         val selectedDates = monthAdapter.getSelectedDates()
-        Log.d("ChecksSchedule", "updateTasksActiveStatus: hours=${selectedHours.sorted()}, dates=$selectedDates")
-        tasksAdapter.updateActiveStatus(selectedHours, selectedDates)
+        Log.d("ChecksSchedule", "updateTasksActiveStatus: cells=${selectedCells.size}, dates=$selectedDates")
+        tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
     }
 
     private fun setupEditMode() {
@@ -795,12 +795,13 @@ private fun isSystemDarkMode(context: Context): Boolean {
 private data class HourCell(
     val hour: Int, 
     val isNow: Boolean,
-    val dayLabel: String? = null // Метка дня для часов 00-07 (например, "Вт")
+    val dayLabel: String? = null, // Метка дня для часов 00-07 (например, "Вт")
+    val dayOffset: Int = 0 // Смещение дня: 0 = текущий день, 1 = следующий день
 )
 
 private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
     private val items = mutableListOf<HourCell>()
-    private val selected = mutableSetOf<Int>()
+    private val selectedPositions = mutableSetOf<Int>() // Теперь храним позиции, а не номера часов
     var onSelectionChanged: (() -> Unit)? = null
     
     fun submit(list: List<HourCell>, resetSelection: Boolean = false) { 
@@ -810,17 +811,19 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
         if (resetSelection) {
             val nowH = LocalDateTime.now().hour
             val activeRange = getRangeForHour(nowH)
-            selected.clear()
-            (0..23).forEach { hour ->
-                if (getRangeForHour(hour) == activeRange) {
-                    selected.add(hour)
+            selectedPositions.clear()
+            items.forEachIndexed { index, cell ->
+                if (getRangeForHour(cell.hour) == activeRange) {
+                    selectedPositions.add(index)
                 }
             }
         }
         notifyDataSetChanged()
     }
     
-    fun getSelectedHours(): Set<Int> = selected.toSet()
+    // Возвращаем выбранные ячейки (час + dayOffset)
+    fun getSelectedHours(): Set<Int> = selectedPositions.mapTo(mutableSetOf()) { items[it].hour }
+    fun getSelectedCells(): List<HourCell> = selectedPositions.map { items[it] }
     
     fun setEditMode(enabled: Boolean) { /* Можно добавить логику при необходимости */ }
     override fun getItemCount() = items.size
@@ -845,27 +848,26 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
         tv.textSize = 12f // Уменьшен размер шрифта с 14 до 12 для двухстрочного текста
         tv.gravity = android.view.Gravity.CENTER
         tv.setPadding(2,4,2,4) // Уменьшен горизонтальный padding
-        return VH(tv, { hour -> selected.contains(hour) })
+        return VH(tv)
     }
     
     override fun onBindViewHolder(holder: VH, position: Int) {
         val hour = items[position].hour
         val isNow = items[position].isNow
-        val isSelected = selected.contains(hour)
+        val isSelected = selectedPositions.contains(position)
         holder.bind(items[position], isSelected)
         holder.itemView.setOnClickListener {
             val pos = holder.bindingAdapterPosition
             if (pos != RecyclerView.NO_POSITION) {
-                val clickedHour = items[pos].hour
-                // Переключение выделения для всех часов, включая текущий
-                if (selected.contains(clickedHour)) {
-                    Log.d("ChecksSchedule", "Снят выбор часа: $clickedHour")
-                    selected.remove(clickedHour)
+                // Переключение выделения для ПОЗИЦИИ
+                if (selectedPositions.contains(pos)) {
+                    Log.d("ChecksSchedule", "Снят выбор позиции: $pos (час: ${items[pos].hour}, offset: ${items[pos].dayOffset})")
+                    selectedPositions.remove(pos)
                 } else {
-                    Log.d("ChecksSchedule", "Выбран час: $clickedHour")
-                    selected.add(clickedHour)
+                    Log.d("ChecksSchedule", "Выбрана позиция: $pos (час: ${items[pos].hour}, offset: ${items[pos].dayOffset})")
+                    selectedPositions.add(pos)
                 }
-                Log.d("ChecksSchedule", "Все выбранные часы: ${selected.sorted()}")
+                Log.d("ChecksSchedule", "Все выбранные позиции: ${selectedPositions.sorted()}")
                 notifyItemChanged(pos, true)
                 onSelectionChanged?.invoke()
             }
@@ -874,9 +876,15 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
         // Подсказка при долгом нажатии на часы 00-07
         if (hour in 0..7) {
             holder.itemView.setOnLongClickListener {
+                // Если dayLabel = null для часов 00-07, значит это 1-е число месяца
+                val message = if (items[position].dayLabel == null) {
+                    "Часы 00-07 относятся к текущему дню (1-е число месяца)"
+                } else {
+                    "Часы 00-07 относятся к следующему календарному дню"
+                }
                 android.widget.Toast.makeText(
                     holder.itemView.context,
-                    "Часы 00-07 относятся к следующему календарному дню",
+                    message,
                     android.widget.Toast.LENGTH_SHORT
                 ).show()
                 true
@@ -885,7 +893,7 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
             holder.itemView.setOnLongClickListener(null)
         }
     }
-    class VH(private val tv: TextView, private val isSelected: (Int) -> Boolean) : RecyclerView.ViewHolder(tv) {
+    class VH(private val tv: TextView) : RecyclerView.ViewHolder(tv) {
         fun bind(c: HourCell, selected: Boolean) {
             // Если есть метка дня (для часов 00-07), показываем её
             tv.text = if (c.dayLabel != null) {
@@ -1029,8 +1037,7 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
             super.onBindViewHolder(holder, position, payloads)
         } else {
             // только перекраска при выборе
-            val hour = items[position].hour
-            val isSelected = selected.contains(hour)
+            val isSelected = selectedPositions.contains(position)
             holder.bind(items[position], isSelected)
         }
     }
@@ -1352,32 +1359,51 @@ private fun ChecksScheduleFragment.buildHours(selectedDates: Set<LocalDate> = em
     val nowH = now.hour
     val today = now.toLocalDate()
     
-    val orderedHours = buildList {
-        for (h in 8..23) add(h)
-        for (h in 0..7) add(h)
-    }
+    // Проверяем, выбрано ли 1-е число месяца (и только одна дата)
+    val isFirstDayOfMonth = selectedDates.size == 1 && selectedDates.first().dayOfMonth == 1
     
-    return orderedHours.map { hour ->
-        // Часы 00-07 относятся к следующему календарному дню
-        val dayLabel = if (hour in 0..7) {
-            // Вариант 5: Адаптивное отображение
-            when (selectedDates.size) {
-                1 -> {
-                    // Выбран ОДИН день - показываем день недели следующего дня
-                    val selectedDate = selectedDates.first()
-                    val nextDay = selectedDate.plusDays(1)
-                    nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
-                }
-                else -> {
-                    // Выбрано 0 или 2+ дней - показываем универсальную метку
-                    "+1д"
-                }
+    return if (isFirstDayOfMonth) {
+        // Для 1-го числа: расширенная шкала 32 часа
+        // 00-07 (текущий день) + 08-23 (текущий день) + 00-07 (следующий день)
+        buildList {
+            // Первые 00-07 относятся к ТЕКУЩЕМУ дню (1-е число), dayOffset = 0
+            for (h in 0..7) {
+                add(HourCell(hour = h, isNow = h == nowH, dayLabel = null, dayOffset = 0))
             }
-        } else {
-            null
+            // Часы 08-23 текущего дня, dayOffset = 0
+            for (h in 8..23) {
+                add(HourCell(hour = h, isNow = h == nowH, dayLabel = null, dayOffset = 0))
+            }
+            // Вторые 00-07 относятся к СЛЕДУЮЩЕМУ дню (2-е число), dayOffset = 1
+            val selectedDate = selectedDates.first()
+            val nextDay = selectedDate.plusDays(1)
+            val nextDayLabel = nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
+            for (h in 0..7) {
+                add(HourCell(hour = h, isNow = h == nowH, dayLabel = nextDayLabel, dayOffset = 1))
+            }
         }
-        
-        HourCell(hour, hour == nowH, dayLabel)
+    } else {
+        // Для остальных дней: стандартная шкала 24 часа
+        buildList {
+            for (h in 8..23) add(h)
+            for (h in 0..7) add(h)
+        }.map { hour ->
+            // Часы 00-07 относятся к следующему календарному дню
+            val dayLabel = if (hour in 0..7) {
+                when (selectedDates.size) {
+                    1 -> {
+                        val selectedDate = selectedDates.first()
+                        val nextDay = selectedDate.plusDays(1)
+                        nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
+                    }
+                    else -> "+1д"
+                }
+            } else {
+                null
+            }
+            val dayOffset = if (hour in 0..7) 1 else 0
+            HourCell(hour = hour, isNow = hour == nowH, dayLabel = dayLabel, dayOffset = dayOffset)
+        }
     }
 }
 
@@ -1431,11 +1457,11 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         notifyDataSetChanged()
     }
     
-    fun updateActiveStatus(selectedHours: Set<Int> = emptySet(), selectedDates: Set<LocalDate> = emptySet()) {
-        Log.d("ChecksSchedule", "TasksAdapter.updateActiveStatus: hours=$selectedHours, dates=$selectedDates")
+    fun updateActiveStatus(selectedCells: List<HourCell> = emptyList(), selectedDates: Set<LocalDate> = emptySet()) {
+        Log.d("ChecksSchedule", "TasksAdapter.updateActiveStatus: cells=${selectedCells.size}, dates=$selectedDates")
         
         // Проверяем только если пользователь что-то выбрал
-        if (selectedHours.isEmpty() || selectedDates.isEmpty()) {
+        if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
             Log.d("ChecksSchedule", "Снимаем активность со всех задач (пустой выбор)")
             // Снимаем активность со всех задач
             items.forEach { it.isActive = false }
@@ -1456,15 +1482,10 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             // Это позволяет выйти сразу при первом совпадении
             val isActive = item.reminderRules.any { rule ->
                 selectedDates.any { date ->
-                    selectedHours.any { hour ->
-                        // ВАЖНО: Часы 00-07 относятся к следующему календарному дню
-                        // Если выбран понедельник и час 02:00, это физически вторник 02:00
-                        val actualDate = if (hour in 0..7) {
-                            date.plusDays(1)
-                        } else {
-                            date
-                        }
-                        val testDateTime = LocalDateTime.of(actualDate, java.time.LocalTime.of(hour, 0))
+                    selectedCells.any { cell ->
+                        // Используем dayOffset для определения реальной даты
+                        val actualDate = date.plusDays(cell.dayOffset.toLong())
+                        val testDateTime = LocalDateTime.of(actualDate, java.time.LocalTime.of(cell.hour, 0))
                         rule.matches(testDateTime)
                     }
                 }
