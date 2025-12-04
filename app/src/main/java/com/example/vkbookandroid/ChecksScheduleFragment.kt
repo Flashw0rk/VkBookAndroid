@@ -26,6 +26,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.ColorUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -56,6 +58,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     // Флаг для предотвращения множественных загрузок фона
     private var isLoadingBackground: Boolean = false
     
+    // Job для debounce обновлений задач (предотвращение ANR при частых кликах)
+    private var updateTasksJob: Job? = null
+    
     companion object {
         private const val PREFS_NAME = "ChecksSchedulePrefs"
         private const val KEY_PERSONAL_MODE = "personal_mode"
@@ -81,13 +86,17 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
                 
                 updateNow()
                 
-                // Обновляем часы в адаптере
+                // Обновляем часы в адаптере (32-часовая шкала)
                 val oldPos = lastCheckedHour
                 lastCheckedHour = currentHour
-                if (oldPos in 0..23) {
+                // В новой 32-часовой шкале позиции 0-31
+                if (oldPos in 0..31) {
                     hoursAdapter.notifyItemChanged(oldPos)
                 }
-                hoursAdapter.notifyItemChanged(currentHour)
+                // Текущий час на своей позиции (0-23)
+                if (currentHour in 0..31) {
+                    hoursAdapter.notifyItemChanged(currentHour)
+                }
                 
                 // Обновляем активность задач только при изменении часа
                 updateTasksActiveStatus()
@@ -171,7 +180,7 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
             layoutManager = LinearLayoutManager(requireContext(), LinearLayoutManager.HORIZONTAL, false)
             adapter = hoursAdapter
             setHasFixedSize(true)
-            setItemViewCacheSize(24) // Кэшируем все 24 часа
+            setItemViewCacheSize(32) // Кэшируем все 32 часа (расширенная шкала)
         }
         
         // Устанавливаем коллбек для обновления задач при изменении выбранных часов
@@ -212,10 +221,22 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
     
     private fun updateTasksActiveStatus() {
-        val selectedCells = hoursAdapter.getSelectedCells()
-        val selectedDates = monthAdapter.getSelectedDates()
-        Log.d("ChecksSchedule", "updateTasksActiveStatus: cells=${selectedCells.size}, dates=$selectedDates")
-        tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+        // ОПТИМИЗАЦИЯ: Отменяем предыдущее обновление если оно ещё не выполнено
+        updateTasksJob?.cancel()
+        
+        // Запускаем новое обновление с debounce 300ms
+        // Это предотвращает ANR при быстрых кликах по календарю
+        updateTasksJob = lifecycleScope.launch {
+            delay(300) // Ждём пока пользователь перестанет кликать
+            
+            val selectedCells = hoursAdapter.getSelectedCells()
+            val selectedDates = monthAdapter.getSelectedDates()
+            
+            // Тяжелые вычисления в фоновом потоке
+            withContext(Dispatchers.Default) {
+                tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+            }
+        }
     }
 
     private fun setupEditMode() {
@@ -712,6 +733,10 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     override fun onDestroyView() {
         super.onDestroyView()
         stopTicks()
+        
+        // КРИТИЧНО: Отменяем отложенное обновление задач для предотвращения утечки памяти
+        updateTasksJob?.cancel()
+        updateTasksJob = null
         
         // Очищаем коллбеки для предотвращения утечек памяти
         hoursAdapter.onSelectionChanged = null
@@ -1359,50 +1384,34 @@ private fun ChecksScheduleFragment.buildHours(selectedDates: Set<LocalDate> = em
     val nowH = now.hour
     val today = now.toLocalDate()
     
-    // Проверяем, выбрано ли 1-е число месяца (и только одна дата)
-    val isFirstDayOfMonth = selectedDates.size == 1 && selectedDates.first().dayOfMonth == 1
-    
-    return if (isFirstDayOfMonth) {
-        // Для 1-го числа: расширенная шкала 32 часа
-        // 00-07 (текущий день) + 08-23 (текущий день) + 00-07 (следующий день)
-        buildList {
-            // Первые 00-07 относятся к ТЕКУЩЕМУ дню (1-е число), dayOffset = 0
-            for (h in 0..7) {
-                add(HourCell(hour = h, isNow = h == nowH, dayLabel = null, dayOffset = 0))
-            }
-            // Часы 08-23 текущего дня, dayOffset = 0
-            for (h in 8..23) {
-                add(HourCell(hour = h, isNow = h == nowH, dayLabel = null, dayOffset = 0))
-            }
-            // Вторые 00-07 относятся к СЛЕДУЮЩЕМУ дню (2-е число), dayOffset = 1
-            val selectedDate = selectedDates.first()
-            val nextDay = selectedDate.plusDays(1)
-            val nextDayLabel = nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
-            for (h in 0..7) {
-                add(HourCell(hour = h, isNow = h == nowH, dayLabel = nextDayLabel, dayOffset = 1))
-            }
+    // ВСЕГДА строим расширенную шкалу 32 часа для полного обзора смены:
+    // 00-07 (текущий день) + 08-23 (текущий день) + 00-07 (следующий день)
+    return buildList {
+        // Первые 00-07 относятся к ТЕКУЩЕМУ дню, dayOffset = 0
+        // ИСПРАВЛЕНИЕ БАГА: isNow должен подсвечивать ПЕРВУЮ группу 00-07, если сейчас 00:00-07:59
+        for (h in 0..7) {
+            add(HourCell(hour = h, isNow = (h == nowH), dayLabel = null, dayOffset = 0))
         }
-    } else {
-        // Для остальных дней: стандартная шкала 24 часа
-        buildList {
-            for (h in 8..23) add(h)
-            for (h in 0..7) add(h)
-        }.map { hour ->
-            // Часы 00-07 относятся к следующему календарному дню
-            val dayLabel = if (hour in 0..7) {
-                when (selectedDates.size) {
-                    1 -> {
-                        val selectedDate = selectedDates.first()
-                        val nextDay = selectedDate.plusDays(1)
-                        nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
-                    }
-                    else -> "+1д"
-                }
-            } else {
-                null
+        
+        // Часы 08-23 текущего дня, dayOffset = 0
+        for (h in 8..23) {
+            add(HourCell(hour = h, isNow = (h == nowH), dayLabel = null, dayOffset = 0))
+        }
+        
+        // Вторые 00-07 относятся к СЛЕДУЮЩЕМУ дню, dayOffset = 1
+        // Определяем метку следующего дня
+        val nextDayLabel = when (selectedDates.size) {
+            1 -> {
+                val selectedDate = selectedDates.first()
+                val nextDay = selectedDate.plusDays(1)
+                nextDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
             }
-            val dayOffset = if (hour in 0..7) 1 else 0
-            HourCell(hour = hour, isNow = hour == nowH, dayLabel = dayLabel, dayOffset = dayOffset)
+            else -> "+1д"
+        }
+        
+        for (h in 0..7) {
+            // ВАЖНО: isNow НЕ подсвечивает эти часы, только если следующий день станет текущим
+            add(HourCell(hour = h, isNow = false, dayLabel = nextDayLabel, dayOffset = 1))
         }
     }
 }
@@ -1458,19 +1467,16 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     }
     
     fun updateActiveStatus(selectedCells: List<HourCell> = emptyList(), selectedDates: Set<LocalDate> = emptySet()) {
-        Log.d("ChecksSchedule", "TasksAdapter.updateActiveStatus: cells=${selectedCells.size}, dates=$selectedDates")
-        
         // Проверяем только если пользователь что-то выбрал
         if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
-            Log.d("ChecksSchedule", "Снимаем активность со всех задач (пустой выбор)")
             // Снимаем активность со всех задач
             items.forEach { it.isActive = false }
             applyChanges()
             return
         }
         
-        Log.d("ChecksSchedule", "Проверяем ${items.size} задач на активность")
-        
+        // ОПТИМИЗАЦИЯ: Расчет активности задач
+        // Используем any() вместо тройного вложенного цикла для раннего выхода
         items.forEach { item ->
             // Если нет правил напоминаний - не выделяем
             if (item.reminderRules.isEmpty()) {
@@ -1478,8 +1484,6 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 return@forEach
             }
             
-            // ОПТИМИЗАЦИЯ: Используем any() вместо тройного вложенного цикла
-            // Это позволяет выйти сразу при первом совпадении
             val isActive = item.reminderRules.any { rule ->
                 selectedDates.any { date ->
                     selectedCells.any { cell ->
@@ -1492,9 +1496,6 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             }
                 
             item.isActive = isActive
-            if (isActive) {
-                Log.d("ChecksSchedule", "Задача АКТИВНА: ${item.operation.take(30)}")
-            }
         }
         
         val activeCount = items.count { it.isActive }
@@ -1519,11 +1520,15 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         items.clear()
         items.addAll(newList)
         
-        // ИСПРАВЛЕНИЕ: Используем notifyDataSetChanged() вместо DiffUtil
-        // Причина: payload обновления через DiffUtil не работают корректно 
-        // при переиспользовании ViewHolder, что приводит к тому что 
-        // updateActiveState обновляет неправильные view
-        notifyDataSetChanged()
+        // ВАЖНО: Обновление UI должно быть в main thread
+        // Если мы уже в main thread, вызываем напрямую, иначе через post
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            notifyDataSetChanged()
+        } else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                notifyDataSetChanged()
+            }
+        }
     }
     
     fun setEditMode(enabled: Boolean) { 
@@ -2292,11 +2297,11 @@ private fun ChecksScheduleFragment.scrollToCurrentHour() {
     // ЗАЩИТА: Проверяем что view готов через try-catch
     try {
         val nowH = LocalDateTime.now().hour
-        val orderedHours = buildList {
-            for (h in 8..23) add(h)
-            for (h in 0..7) add(h)
-        }
-        val targetPosition = orderedHours.indexOf(nowH).takeIf { it >= 0 } ?: 0
+        // В новой 32-часовой шкале: [00-07] [08-23] [00-07+1д]
+        // Текущий час находится на позиции = nowH (0-23)
+        // Часы 00-07 текущего дня на позициях 0-7
+        // Часы 08-23 текущего дня на позициях 8-23
+        val targetPosition = nowH
         recyclerHours.post {
             try {
                 (recyclerHours.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(targetPosition, (resources.displayMetrics.widthPixels/2.5).toInt())
