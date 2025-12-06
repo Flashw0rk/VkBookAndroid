@@ -164,13 +164,18 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
         
         // Генерируем данные только при первом показе фрагмента
         if (!isScheduleDataGenerated) {
-            // КРИТИЧНО: Выполняем тяжелые вычисления асинхронно, чтобы не блокировать UI
+            // ОПТИМИЗАЦИЯ: Выполняем тяжелые вычисления асинхронно, чтобы не блокировать UI
+            // Используем view.post для неблокирующей прокрутки
             lifecycleScope.launch(Dispatchers.Default) {
                 generateScheduleData()
                 withContext(Dispatchers.Main) {
                     isScheduleDataGenerated = true
-                    // Центрируем на текущей дате
-                    view?.post { scrollToToday() }
+                    // Центрируем на текущей дате через post для неблокирующей прокрутки
+                    view?.post {
+                        if (isAdded) {
+                            scrollToToday()
+                        }
+                    }
                 }
             }
         }
@@ -640,19 +645,23 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             )
         }
         
-        // КРИТИЧНО: Обновление UI должно происходить в главном потоке
+        // ОПТИМИЗАЦИЯ: Обновление UI через post для неблокирующего обновления
         withContext(Dispatchers.Main) {
-            scheduleAdapter.updateData(scheduleData)
-            
-            // Подсветка "сегодня" только в текущем году
-            if (currentYear == todayYear) {
-                selectedDayInMonth = todayDay
-                selectedMonthIndex = todayMonth
-                scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
-            } else {
-                scheduleAdapter.setSelectedDay(-1, -1)
+            if (!isAdded || view == null) return@withContext
+            view?.post {
+                if (!isAdded) return@post
+                scheduleAdapter.updateData(scheduleData)
+                
+                // Подсветка "сегодня" только в текущем году
+                if (currentYear == todayYear) {
+                    selectedDayInMonth = todayDay
+                    selectedMonthIndex = todayMonth
+                    scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
+                } else {
+                    scheduleAdapter.setSelectedDay(-1, -1)
+                }
+                scheduleAdapter.notifyDataSetChanged()
             }
-            scheduleAdapter.notifyDataSetChanged()
         }
     }
     
@@ -1401,31 +1410,31 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     }
     
     private fun scrollToToday() {
-        try {
-            val today = Calendar.getInstance()
-            val todayDay = today.get(Calendar.DAY_OF_MONTH)
-            val todayMonth = today.get(Calendar.MONTH)
-            
-            // СТАРАЯ ЛОГИКА (резервная копия):
-            // val monthShift = calculateMonthShift(currentYear, todayMonth)
-            // val limitedShift = monthShift % 12
-            
-            // НОВАЯ ЛОГИКА: Используем скорректированный сдвиг
-            val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-            if (isLeapYear(currentYear)) {
-                daysInMonths[1] = 29
+        // ОПТИМИЗАЦИЯ: Используем view.post для неблокирующей прокрутки
+        view?.post {
+            if (!isAdded) return@post
+            try {
+                val today = Calendar.getInstance()
+                val todayDay = today.get(Calendar.DAY_OF_MONTH)
+                val todayMonth = today.get(Calendar.MONTH)
+        
+                // НОВАЯ ЛОГИКА: Используем скорректированный сдвиг
+                val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                if (isLeapYear(currentYear)) {
+                    daysInMonths[1] = 29
+                }
+                val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
+                val todayPosition = adjustedShift + (todayDay - 1)
+                
+                val cellWidth = 50 * zoomFactor * resources.displayMetrics.density
+                val scrollX = (todayPosition * cellWidth - horizontalScrollView.width / 2).toInt()
+                
+                horizontalScrollView.post {
+                    horizontalScrollView.smoothScrollTo(scrollX.coerceAtLeast(0), 0)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error scrolling to today", e)
             }
-            val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
-            val todayPosition = adjustedShift + (todayDay - 1)
-            
-            val cellWidth = 50 * zoomFactor * resources.displayMetrics.density
-            val scrollX = (todayPosition * cellWidth - horizontalScrollView.width / 2).toInt()
-            
-            horizontalScrollView.post {
-                horizontalScrollView.smoothScrollTo(scrollX.coerceAtLeast(0), 0)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error scrolling to today", e)
         }
     }
     

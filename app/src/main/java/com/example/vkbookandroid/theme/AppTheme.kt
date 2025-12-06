@@ -340,10 +340,10 @@ object AppTheme {
     fun getAllThemes(): List<Int> = listOf(
         THEME_CLASSIC,
         THEME_ERGONOMIC_LIGHT,
-        THEME_MODERN_GRADIENT,
         THEME_NUCLEAR,
         THEME_MODERN_GLASS,
-        THEME_ROSATOM
+        THEME_ROSATOM,
+        THEME_MODERN_GRADIENT  // Брутальная тема в конце списка
     )
     
     // ========================================

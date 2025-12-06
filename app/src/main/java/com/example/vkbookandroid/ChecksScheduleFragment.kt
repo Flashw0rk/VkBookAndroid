@@ -21,13 +21,14 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.example.vkbookandroid.BuildConfig
 import com.example.vkbookandroid.theme.AppTheme
+import com.example.vkbookandroid.theme.strategies.ThemeStrategy
+import com.example.vkbookandroid.theme.strategies.ThemeFactory
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.ColorUtils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -55,11 +56,22 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     private var isCalendarExpanded: Boolean = false
     private var lastNowHour = -1 // Для оптимизации обновления часов
     
+    // Флаг первого открытия вкладки (для синхронной загрузки при первом запуске)
+    private var isFirstLoad = true
+    
     // Флаг для предотвращения множественных загрузок фона
     private var isLoadingBackground: Boolean = false
     
-    // Job для debounce обновлений задач (предотвращение ANR при частых кликах)
-    private var updateTasksJob: Job? = null
+    // ОПТИМИЗАЦИЯ: Кэш для расчета активности задач
+    private var lastActiveStatusCache: Pair<List<HourCell>, Set<LocalDate>>? = null
+    
+    // ОПТИМИЗАЦИЯ: Кэшированный контекст и время для уменьшения создания объектов
+    private var cachedContext: Context? = null
+    internal var cachedNowTime: LocalDateTime? = null
+    internal var cachedNowTimeTimestamp: Long = 0L
+    
+    // Текущая стратегия темы (изолированная)
+    private var currentTheme: ThemeStrategy = ThemeFactory.createCurrentTheme()
     
     companion object {
         private const val PREFS_NAME = "ChecksSchedulePrefs"
@@ -67,64 +79,64 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         private const val KEY_PERSONAL_TASKS = "personal_tasks"
     }
     private val tickHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var lastCheckedHour = -1 // Для оптимизации - обновляем только при изменении часа
+    private var tickJob: android.os.Handler? = null
+    private var isFragmentVisible = false
+    private var lastInteractionTime = System.currentTimeMillis()
+    
+    // ОПТИМИЗАЦИЯ: Условный интервал таймера
+    private val TICK_INTERVAL_ACTIVE = 60_000L      // 1 минута при активном использовании
+    private val TICK_INTERVAL_IDLE = 300_000L       // 5 минут при простое
+    
     private val tickRunnable = object : Runnable {
         override fun run() {
-            if (!isAdded) {
-                scheduleNextTick()
+            // ОПТИМИЗАЦИЯ: Обновляем только если фрагмент видим
+            if (!isAdded || !isVisible || !userVisibleHint) {
+                // Фрагмент не виден - увеличиваем интервал
+                scheduleNextTick(TICK_INTERVAL_IDLE)
                 return
             }
             
+            // ОПТИМИЗАЦИЯ: Кэшируем время - создаем один раз
             val now = LocalDateTime.now()
-            val currentHour = now.hour
-            val currentMinute = now.minute
+            cachedNowTime = now
+            cachedNowTimeTimestamp = System.currentTimeMillis()
             
-            // ОПТИМИЗАЦИЯ: Обновляем только если час действительно изменился
-            if (currentHour != lastCheckedHour) {
-                // Логирование для Battery Historian
-                Log.d("Battery", "ChecksScheduleFragment: hour changed from $lastCheckedHour to $currentHour")
-                
-                updateNow()
-                
-                // Обновляем часы в адаптере (32-часовая шкала)
-                val oldPos = lastCheckedHour
-                lastCheckedHour = currentHour
-                // В новой 32-часовой шкале позиции 0-31
-                if (oldPos in 0..31) {
+            updateNow()
+            
+            // Оптимизация: обновляем только изменившиеся часы
+            val nowH = now.hour
+            if (nowH != lastNowHour) {
+                val oldPos = lastNowHour
+                lastNowHour = nowH
+                if (oldPos in 0..23) {
                     hoursAdapter.notifyItemChanged(oldPos)
                 }
-                // Текущий час на своей позиции (0-23)
-                if (currentHour in 0..31) {
-                    hoursAdapter.notifyItemChanged(currentHour)
-                }
-                
-                // Обновляем активность задач только при изменении часа
+                hoursAdapter.notifyItemChanged(nowH)
+            } else {
+                // Если час не изменился, просто обновляем текущий для рамки
+                hoursAdapter.notifyItemChanged(nowH)
+            }
+            
+            // ОПТИМИЗАЦИЯ: Обновляем активность задач только если прошло достаточно времени с последнего взаимодействия
+            val timeSinceInteraction = System.currentTimeMillis() - lastInteractionTime
+            if (timeSinceInteraction < 30_000L) { // Обновляем только если было взаимодействие в последние 30 секунд
                 updateTasksActiveStatus()
             }
-            // Если час не изменился, ничего не делаем (экономия CPU)
             
-            scheduleNextTick()
-        }
-        
-        private fun scheduleNextTick() {
-            // Планируем следующую проверку на начало следующего часа (или через минуту если час скоро изменится)
-            val now = LocalDateTime.now()
-            val currentMinute = now.minute
-            val currentSecond = now.second
-            
-            // Если до следующего часа меньше 2 минут, проверяем через минуту
-            // Иначе планируем на начало следующего часа
-            val delayMs = if (currentMinute >= 58) {
-                60_000L // Проверяем через минуту
+            // ОПТИМИЗАЦИЯ: Динамический интервал в зависимости от активности
+            val interval = if (timeSinceInteraction < 120_000L) {
+                TICK_INTERVAL_ACTIVE // Активное использование - частое обновление
             } else {
-                // Планируем на начало следующего часа
-                val minutesUntilNextHour = 60 - currentMinute
-                val secondsUntilNextHour = minutesUntilNextHour * 60 - currentSecond
-                (secondsUntilNextHour * 1000).toLong()
+                TICK_INTERVAL_IDLE // Простой - редкое обновление
             }
             
-            tickHandler.postDelayed(this, delayMs)
+            scheduleNextTick(interval)
         }
+    }
+    
+    private fun scheduleNextTick(interval: Long) {
+        tickHandler.removeCallbacks(tickRunnable)
+        tickHandler.postDelayed(tickRunnable, interval)
     }
 
     override fun onCreateView(
@@ -132,6 +144,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
+        // ОПТИМИЗАЦИЯ: Кэшируем контекст при создании view
+        cachedContext = requireContext()
         return inflater.inflate(R.layout.fragment_checks_schedule, container, false)
     }
 
@@ -150,7 +164,16 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         loadPersonalModeState()
         
         // Загружаем и применяем тему
-        AppTheme.loadTheme(requireContext())
+        // ОПТИМИЗАЦИЯ: Кэшируем контекст при создании view
+        cachedContext = requireContext()
+        AppTheme.loadTheme(cachedContext!!)
+        currentTheme = ThemeFactory.createCurrentTheme()
+        
+        // Инициализируем тему для адаптеров
+        hoursAdapter.theme = currentTheme
+        monthAdapter.theme = currentTheme
+        tasksAdapter.theme = currentTheme
+        
         applyThemeToView(view)
         
         // Настройка RecyclerView
@@ -176,41 +199,45 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
 
     private fun setupRecyclerViews() {
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст (одна переменная для всех RecyclerView)
+        val context = cachedContext ?: requireContext()
+        
         recyclerHours.apply {
-            layoutManager = LinearLayoutManager(requireContext(), LinearLayoutManager.HORIZONTAL, false)
+            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
             adapter = hoursAdapter
             setHasFixedSize(true)
-            setItemViewCacheSize(32) // Кэшируем все 32 часа (расширенная шкала)
+            setItemViewCacheSize(24) // Кэшируем все 24 часа
         }
         
         // Устанавливаем коллбек для обновления задач при изменении выбранных часов
         hoursAdapter.onSelectionChanged = {
+            lastInteractionTime = System.currentTimeMillis() // Обновляем время последнего взаимодействия
             updateTasksActiveStatus()
         }
         
         recyclerCalendar.apply {
-            layoutManager = GridLayoutManager(requireContext(), 7)
+            layoutManager = GridLayoutManager(context, 7)
             adapter = monthAdapter
             setHasFixedSize(false) // Размер меняется в зависимости от месяца
             setItemViewCacheSize(42) // Максимум 6 недель = 42 дня
         }
-        monthAdapter.setContext(requireContext())
+        monthAdapter.setContext(context)
         
-        // Устанавливаем коллбек для обновления задач и часов при изменении выбранных дней
+        // Устанавливаем коллбек для обновления задач при изменении выбранных дней
         monthAdapter.onSelectionChanged = {
-            // Обновляем метки дней на часах 00-07
+            lastInteractionTime = System.currentTimeMillis() // Обновляем время последнего взаимодействия
+            // Обновляем шкалу часов с учетом выбранных дат (для отображения меток дней)
             val selectedDates = monthAdapter.getSelectedDates()
             hoursAdapter.submit(buildHours(selectedDates), resetSelection = false)
-            // Обновляем активность задач
             updateTasksActiveStatus()
         }
         
         recyclerTasks.apply {
-            layoutManager = LinearLayoutManager(requireContext())
+            layoutManager = LinearLayoutManager(context)
             adapter = tasksAdapter
             setHasFixedSize(false) // Количество задач может меняться
         }
-        tasksAdapter.setContext(requireContext())
+        tasksAdapter.setContext(context)
         
         // Устанавливаем коллбек для сохранения личных задач
         tasksAdapter.onSaveRequested = { items ->
@@ -221,22 +248,140 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
     
     private fun updateTasksActiveStatus() {
-        // ОПТИМИЗАЦИЯ: Отменяем предыдущее обновление если оно ещё не выполнено
-        updateTasksJob?.cancel()
+        val selectedCells = hoursAdapter.getSelectedCells()
+        val selectedDates = monthAdapter.getSelectedDates()
         
-        // Запускаем новое обновление с debounce 300ms
-        // Это предотвращает ANR при быстрых кликах по календарю
-        updateTasksJob = lifecycleScope.launch {
-            delay(300) // Ждём пока пользователь перестанет кликать
-            
-            val selectedCells = hoursAdapter.getSelectedCells()
-            val selectedDates = monthAdapter.getSelectedDates()
-            
-            // Тяжелые вычисления в фоновом потоке
-            withContext(Dispatchers.Default) {
-                tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+        // ОПТИМИЗАЦИЯ: Кэширование - не пересчитываем если выбор не изменился
+        val currentSelection = Pair(selectedCells, selectedDates)
+        val lastSelection = lastActiveStatusCache
+        
+        if (lastSelection != null && 
+            lastSelection.first == selectedCells && 
+            lastSelection.second == selectedDates) {
+            // Выбор не изменился - пропускаем пересчет
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("ChecksSchedule", "Кэш: выбор не изменился, пропускаем пересчет")
+        }
+            return
+        }
+        
+        // Сохраняем текущий выбор в кэш
+        lastActiveStatusCache = currentSelection
+        
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("ChecksSchedule", "updateTasksActiveStatus: cells=${selectedCells.map { "(${it.hour}h, day${it.dayOffset})" }}, dates=$selectedDates")
+        }
+        tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+    }
+    
+    /**
+     * Обновляет статусы задач асинхронно (тяжелые расчеты в фоне)
+     */
+    private fun updateTasksActiveStatusAsync() {
+        val selectedCells = hoursAdapter.getSelectedCells()
+        val selectedDates = monthAdapter.getSelectedDates()
+        
+        if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
+            tasksAdapter.updateActiveStatus(emptyList(), emptySet())
+            return
+        }
+        
+        // Тяжелые расчеты выполняем в фоне
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                // Выполняем расчеты в фоне - вызываем метод адаптера, который уже оптимизирован
+                withContext(Dispatchers.Main) {
+                    if (isAdded) {
+                        tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+                        
+                        // КРИТИЧНО: Принудительное обновление через RecyclerView после расчета
+                        // Гарантируем что все ViewHolder'ы получат правильное выделение
+                        if (::recyclerTasks.isInitialized) {
+                            recyclerTasks.post {
+                                recyclerTasks.postDelayed({
+                                    // Принудительно обновляем все видимые элементы
+                                    val adapter = recyclerTasks.adapter ?: return@postDelayed
+                                    val itemCount = adapter.itemCount
+                                    
+                                    if (itemCount > 1) { // +1 для заголовка
+                                        // Обновляем все элементы с задачами (начиная с позиции 1 - после заголовка)
+                                        for (i in 1 until itemCount) {
+                                            adapter.notifyItemChanged(i)
+                                        }
+                                        
+                                        if (BuildConfig.DEBUG) {
+                                            Log.d("ChecksSchedule", "Принудительно обновлено ${itemCount - 1} элементов RecyclerView после расчета выделения")
+                                        }
+                                    }
+                                }, 300) // 300ms задержка для гарантии полной инициализации ViewHolder'ов
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ChecksSchedule", "Error updating active status", e)
             }
         }
+    }
+    
+    /**
+     * Пересчитывает активность задач с проверками готовности адаптеров
+     * Повторяет попытку если адаптеры еще не готовы (для правильного выделения при первом запуске)
+     */
+    private fun recalculateActiveStatusWithChecks(retryCount: Int = 0, maxRetries: Int = 8) {
+        if (!isAdded || view == null) return
+        
+        // Проверяем что все адаптеры готовы и содержат данные
+        val hoursReady = hoursAdapter.itemCount > 0
+        val calendarReady = monthAdapter.itemCount > 0
+        val tasksReady = tasksAdapter.itemCount > 0
+        
+        if (!hoursReady || !calendarReady || !tasksReady) {
+            // Адаптеры еще не готовы - повторяем через 150мс (увеличено для надежности)
+            if (retryCount < maxRetries) {
+                view?.postDelayed({
+                    if (isAdded) {
+                        recalculateActiveStatusWithChecks(retryCount + 1, maxRetries)
+                    }
+                }, 150)
+            } else {
+                // Если после всех попыток адаптеры не готовы - все равно пытаемся пересчитать
+                if (BuildConfig.DEBUG) {
+                    Log.w("ChecksSchedule", "Адаптеры не готовы после $maxRetries попыток, но пересчитываем выделение")
+                }
+                updateTasksActiveStatusAsync()
+            }
+            return
+        }
+        
+        // Проверяем что выбор установлен (часы и даты выделены)
+        val selectedCells = hoursAdapter.getSelectedCells()
+        val selectedDates = monthAdapter.getSelectedDates()
+        
+        if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
+            // Выбор еще не установлен - повторяем через 150мс (увеличено)
+            if (retryCount < maxRetries) {
+                view?.postDelayed({
+                    if (isAdded) {
+                        recalculateActiveStatusWithChecks(retryCount + 1, maxRetries)
+                    }
+                }, 150)
+            } else {
+                // Если после всех попыток выбор не установлен - устанавливаем дефолтный
+                if (BuildConfig.DEBUG) {
+                    Log.w("ChecksSchedule", "Выбор не установлен после $maxRetries попыток, устанавливаем дефолтный")
+                }
+                // Пытаемся пересчитать с текущим состоянием
+                updateTasksActiveStatusAsync()
+            }
+            return
+        }
+        
+        // Все готово - рассчитываем активность
+        if (BuildConfig.DEBUG) {
+            Log.d("ChecksSchedule", "Пересчет выделения: выбрано ${selectedCells.size} часов, ${selectedDates.size} дат, ${tasksAdapter.itemCount} задач")
+        }
+        updateTasksActiveStatusAsync()
     }
 
     private fun setupEditMode() {
@@ -271,7 +416,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
     
     private fun savePersonalModeState() {
-        val prefs = requireContext().getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+        val context = cachedContext ?: requireContext()
+        val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
         prefs.edit().putBoolean(KEY_PERSONAL_MODE, personalMode).apply()
     }
 
@@ -286,19 +433,21 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
 
     private fun updateCalendarView(resetSelection: Boolean = false) {
         val ym = YearMonth.now()
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+        val context = cachedContext ?: requireContext()
         if (isCalendarExpanded) {
             // Развернутый календарь - показываем весь месяц
             monthAdapter.submit(buildMonth(ym, false), resetSelection)
             btnToggleCalendar.text = "▲"
             // Высота для полного месяца (максимум 6 недель)
-            val heightPx = requireContext().dpToPx(210) // 6 недель по 35dp (увеличено на 25%)
+            val heightPx = context.dpToPx(210) // 6 недель по 35dp (увеличено на 25%)
             recyclerCalendar.layoutParams.height = heightPx
         } else {
             // Свернутый календарь - показываем только текущую неделю
             monthAdapter.submit(buildMonth(ym, true), resetSelection)
             btnToggleCalendar.text = "▼"
             // Высота для одной недели
-            val heightPx = requireContext().dpToPx(55) // Уменьшено для экономии места
+            val heightPx = context.dpToPx(55) // Уменьшено для экономии места
             recyclerCalendar.layoutParams.height = heightPx
         }
         recyclerCalendar.requestLayout()
@@ -310,7 +459,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     fun ensureDataLoaded() {
         // ЗАЩИТА: Проверяем что view инициализирован
         if (view == null || !::recyclerHours.isInitialized) {
-            android.util.Log.w("ChecksSchedule", "ensureDataLoaded() вызван но view не готов, откладываем загрузку")
+            if (BuildConfig.DEBUG) {
+                android.util.Log.w("ChecksSchedule", "ensureDataLoaded() вызван но view не готов, откладываем загрузку")
+            }
             // Отложим загрузку до момента когда view будет готов
             view?.post {
                 if (::recyclerHours.isInitialized && !isDataLoadedFlag) {
@@ -334,36 +485,249 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     
     /**
      * Загружает данные графика проверок
+     * ОПТИМИЗАЦИЯ: При первом открытии - синхронная загрузка для гарантии правильности выделения
+     * При переключении - асинхронная быстрая загрузка
      */
     private fun loadChecksScheduleData() {
-        // Часы 0..23 - при первой загрузке выделяем текущий интервал
-        val selectedDates = monthAdapter.getSelectedDates()
-        hoursAdapter.submit(buildHours(selectedDates), resetSelection = true)
-        scrollToCurrentHour()
-        // Календарь - по умолчанию свернут (только текущая неделя), выделяем сегодняшний день
-        updateCalendarView(resetSelection = true)
-        
-        // Таблица задач: в зависимости от режима загружаем личные или служебные задачи
-        val items = if (personalMode) {
-            loadPersonalTasks()
-        } else {
-            loadChecksFromExcelOrCsv()
-        }
-        tasksAdapter.submit(items)
-        
+        // КРИТИЧНО: Обновляем только самое необходимое сразу (не блокируем UI)
         updateNow()
-        isDataLoadedFlag = true
-        // Обновляем статусы задач с учетом выбранных элементов (текущий день + текущий интервал часов)
-        updateTasksActiveStatus()
-        // Запускаем таймер обновления времени
-        startTicks()
+        startTicks()  // Таймер запускаем сразу
+        
+        // ОПТИМИЗАЦИЯ: При первом открытии используем синхронную загрузку для гарантии правильности
+        val isFirst = isFirstLoad
+        if (isFirst) {
+            isFirstLoad = false  // Сбрасываем флаг сразу
+            // ПЕРВЫЙ ЗАПУСК: Синхронная инициализация всех компонентов
+            loadChecksScheduleDataSynchronous()
+        } else {
+            // ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК: Асинхронная загрузка (быстро, не блокирует)
+            loadChecksScheduleDataAsync()
+        }
+    }
+    
+    /**
+     * Синхронная загрузка данных при первом открытии вкладки
+     * Гарантирует правильность выделения задач через последовательную инициализацию
+     */
+    private fun loadChecksScheduleDataSynchronous() {
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                // Подготавливаем данные календаря и часов в фоне
+                val ym = YearMonth.now()
+                val calendarData = buildMonth(ym, !isCalendarExpanded)
+                var selectedDates = setOf(LocalDate.now())
+                
+                // Обновляем UI на главном потоке (последовательно для гарантии готовности)
+                withContext(Dispatchers.Main) {
+                    if (!isAdded) return@withContext
+                    
+                    // ШАГ 1: Обновляем календарь синхронно
+                    monthAdapter.submit(calendarData, resetSelection = true)
+                    selectedDates = monthAdapter.getSelectedDates()
+                    if (selectedDates.isEmpty()) {
+                        selectedDates = setOf(LocalDate.now())
+                    }
+                    
+                    // ШАГ 2: Подготавливаем данные часов (синхронно в фоне)
+                    val finalHoursData = buildHours(selectedDates)
+                    
+                    // ШАГ 3: Обновляем часы синхронно
+                    hoursAdapter.submit(finalHoursData, resetSelection = true)
+                    
+                    // ШАГ 4: Прокрутка
+                    scrollToCurrentHour()
+                    
+                    // ШАГ 5: Гарантируем что адаптеры обновлены (ждем завершения notifyDataSetChanged)
+                    // Используем post для гарантии что все обновления применены
+                    view?.post {
+                        if (isAdded) {
+                            // Теперь запускаем загрузку задач и расчет выделения
+                            loadTasksAndCalculateHighlightSynchronous()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ChecksSchedule", "Error preparing calendar/hours data (sync)", e)
+            }
+        }
+    }
+    
+    /**
+     * Синхронная загрузка задач при первом открытии
+     * Расчет выделения происходит сразу после установки задач
+     */
+    private fun loadTasksAndCalculateHighlightSynchronous() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val items = if (personalMode) {
+                    loadPersonalTasks()
+                } else {
+                    loadChecksFromExcelOrCsv()
+                }
+                
+                withContext(Dispatchers.Main) {
+                    if (!isAdded) return@withContext
+                    
+                    // Показываем задачи
+                    tasksAdapter.submit(items)
+                    isDataLoadedFlag = true
+                    
+                    // КРИТИЧНО: Гарантируем что адаптеры готовы перед расчетом
+                    // Используем двойной post для гарантии что RecyclerView полностью инициализирован
+                    view?.post {
+                        view?.post {
+                            if (isAdded) {
+                                // Проверяем готовность всех компонентов
+                                val hoursReady = hoursAdapter.itemCount > 0
+                                val calendarReady = monthAdapter.itemCount > 0
+                                val tasksReady = tasksAdapter.itemCount > 0
+                                val hasSelection = hoursAdapter.getSelectedCells().isNotEmpty() && 
+                                                 monthAdapter.getSelectedDates().isNotEmpty()
+                                
+                                // Дополнительно проверяем что RecyclerView готов
+                                val recyclerViewReady = ::recyclerTasks.isInitialized && recyclerTasks.childCount >= 0
+                                
+                                if (hoursReady && calendarReady && tasksReady && hasSelection && recyclerViewReady) {
+                                    // Все готово - рассчитываем выделение сразу
+                                    if (BuildConfig.DEBUG) {
+                                        Log.d("ChecksSchedule", "Синхронная загрузка: все компоненты готовы, рассчитываем выделение")
+                                    }
+                                    updateTasksActiveStatusAsync()
+                                } else {
+                                    // Если что-то не готово - используем проверки с повторами
+                                    if (BuildConfig.DEBUG) {
+                                        Log.w("ChecksSchedule", "Синхронная загрузка: компоненты не готовы (hours=$hoursReady, calendar=$calendarReady, tasks=$tasksReady, selection=$hasSelection, recycler=$recyclerViewReady), используем проверки")
+                                    }
+                                    recalculateActiveStatusWithChecks(maxRetries = 8)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ChecksSchedule", "Error loading data (sync)", e)
+                withContext(Dispatchers.Main) {
+                    if (isAdded) {
+                        tasksAdapter.submit(emptyList())
+                        isDataLoadedFlag = true
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Асинхронная загрузка данных при переключении вкладок
+     * Быстрая, не блокирует UI
+     */
+    private fun loadChecksScheduleDataAsync() {
+        // ШАГ 1: Фоновая подготовка данных календаря и часов (не блокирует главный поток)
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                // ОПТИМИЗАЦИЯ: Подготавливаем данные календаря в фоне (только вычисления, без UI)
+                val ym = YearMonth.now()
+                val calendarData = buildMonth(ym, !isCalendarExpanded)
+                var selectedDates = setOf(LocalDate.now())
+                
+                // Обновляем UI постепенно на главном потоке (ленивая инициализация)
+                withContext(Dispatchers.Main) {
+                    if (!isAdded) return@withContext
+                    
+                    // ЛЕНИВАЯ ИНИЦИАЛИЗАЦИЯ: Обновляем календарь только когда view готов (не блокирует)
+                    view?.post {
+                        if (!isAdded) return@post
+                        // Обновляем календарь неблокирующим способом
+                        monthAdapter.submit(calendarData, resetSelection = true)
+                        
+                        // Получаем актуальные выбранные даты после инициализации календаря
+                        selectedDates = monthAdapter.getSelectedDates()
+                        if (selectedDates.isEmpty()) {
+                            selectedDates = setOf(LocalDate.now())
+                        }
+                        
+                        // Подготавливаем данные часов с правильными датами (в фоне для тяжелых вычислений)
+                        lifecycleScope.launch(Dispatchers.Default) {
+                            try {
+                                val finalHoursData = buildHours(selectedDates)
+                                
+                                // Обновляем часы на главном потоке через post (ленивая инициализация)
+                                withContext(Dispatchers.Main) {
+                                    if (!isAdded) return@withContext
+                                    view?.post {
+                                        if (!isAdded) return@post
+                                        hoursAdapter.submit(finalHoursData, resetSelection = true)
+                                        
+                                        // КРИТИЧНО: Вызываем пересчет выделения ПОСЛЕ установки часов
+                                        // (когда выбор уже установлен в hoursAdapter)
+                                        view?.post {
+                                            if (isAdded) {
+                                                scrollToCurrentHour()
+                                                // Пересчитываем выделение задач после полной инициализации
+                                                recalculateActiveStatusWithChecks(maxRetries = 8)
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ChecksSchedule", "Error building hours data", e)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ChecksSchedule", "Error preparing calendar/hours data", e)
+            }
+        }
+        
+        // Загружаем задачи параллельно
+        loadTasksAndCalculateHighlight()
+    }
+    
+    /**
+     * Асинхронная загрузка задач при переключении вкладок
+     */
+    private fun loadTasksAndCalculateHighlight() {
+        // Загружаем задачи в фоне (Excel парсинг или личные задачи)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val items = if (personalMode) {
+                    loadPersonalTasks()
+                } else {
+                    loadChecksFromExcelOrCsv()
+                }
+                
+                // ДВУХЭТАПНАЯ ЗАГРУЗКА: Сначала показываем задачи без выделения
+                withContext(Dispatchers.Main) {
+                    if (!isAdded) return@withContext
+                    
+                    // ЭТАП 1: Показываем задачи сразу (без выделения)
+                    tasksAdapter.submit(items)
+                    isDataLoadedFlag = true
+                    
+                    // ЭТАП 2: Выделение будет добавлено после инициализации адаптеров часов и календаря
+                    // recalculateActiveStatusWithChecks вызывается после hoursAdapter.submit() в цепочке post
+                }
+            } catch (e: Exception) {
+                // Log.e всегда работает для критических ошибок
+                Log.e("ChecksSchedule", "Error loading data", e)
+                // В случае ошибки показываем пустой список
+                withContext(Dispatchers.Main) {
+                    if (isAdded) {
+                        tasksAdapter.submit(emptyList())
+                        isDataLoadedFlag = true
+                    }
+                }
+            }
+        }
     }
     
     /**
      * Загружает личные задачи пользователя
      */
     private fun loadPersonalTasks(): List<CheckItem> {
-        val prefs = requireContext().getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+        val context = cachedContext ?: requireContext()
+        val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
         val tasksJson = prefs.getString(KEY_PERSONAL_TASKS, null)
         
         if (tasksJson.isNullOrBlank()) {
@@ -450,7 +814,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
      * Сохраняет личные задачи пользователя
      */
     private fun savePersonalTasks(items: List<CheckItem>) {
-        val prefs = requireContext().getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+        val context = cachedContext ?: requireContext()
+        val prefs = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
         val editor = prefs.edit()
         
         // Сохраняем задачи
@@ -467,14 +833,18 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         }
         
         editor.apply()
-        Log.d("ChecksSchedule", "Сохранено ${items.size} личных задач")
+        if (BuildConfig.DEBUG) {
+            Log.d("ChecksSchedule", "Сохранено ${items.size} личных задач")
+        }
     }
     
     /**
      * Загружает проверки из Excel (с сервера) или CSV (из ресурсов)
      */
     private fun loadChecksFromExcelOrCsv(): List<CheckItem> {
-        val excelFile = File(requireContext().filesDir, "data/График проверок .xlsx")
+        // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+        val context = cachedContext ?: requireContext()
+        val excelFile = File(context.filesDir, "data/График проверок .xlsx")
         
         if (excelFile.exists()) {
             try {
@@ -495,8 +865,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
             }
         }
         
-        // Если Excel нет или ошибка - загружаем из CSV
-        return ScheduleCsvRepository(requireContext()).readAll()
+        // Если Excel нет или ошибка - загружаем из CSV (используем уже объявленный context)
+        return ScheduleCsvRepository(context).readAll()
     }
 
     /**
@@ -507,34 +877,52 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
      * Публичный метод для применения темы (вызывается из MainActivity)
      */
     override fun applyTheme() {
+        // Создаём текущую тему (изолированную стратегию)
+        currentTheme = ThemeFactory.createCurrentTheme()
+        
         // Проверяем что фрагмент полностью инициализирован
         if (!isAdded || view == null) {
-            Log.w("ChecksSchedule", "applyTheme() вызван но фрагмент не готов: isAdded=$isAdded, view=${view != null}")
+            if (BuildConfig.DEBUG) {
+                Log.w("ChecksSchedule", "applyTheme() вызван но фрагмент не готов: isAdded=$isAdded, view=${view != null}")
+            }
             return
         }
         
         // Проверяем что все RecyclerView инициализированы
         if (!::recyclerHours.isInitialized || !::recyclerCalendar.isInitialized || !::recyclerTasks.isInitialized) {
-            Log.w("ChecksSchedule", "applyTheme() вызван но RecyclerView не инициализированы")
+            if (BuildConfig.DEBUG) {
+                Log.w("ChecksSchedule", "applyTheme() вызван но RecyclerView не инициализированы")
+            }
             return
         }
         
-        Log.d("ChecksSchedule", "=== applyTheme() вызван ===")
-        Log.d("ChecksSchedule", "isDataLoadedFlag=$isDataLoadedFlag")
-        Log.d("ChecksSchedule", "hoursAdapter.itemCount=${hoursAdapter.itemCount}")
-        Log.d("ChecksSchedule", "monthAdapter.itemCount=${monthAdapter.itemCount}")
-        Log.d("ChecksSchedule", "tasksAdapter.itemCount=${tasksAdapter.itemCount}")
+        // Передаём тему адаптерам (после проверки инициализации)
+        hoursAdapter.theme = currentTheme
+        monthAdapter.theme = currentTheme
+        tasksAdapter.theme = currentTheme
+        
+        if (BuildConfig.DEBUG) {
+            Log.d("ChecksSchedule", "=== applyTheme() вызван ===")
+            Log.d("ChecksSchedule", "isDataLoadedFlag=$isDataLoadedFlag")
+            Log.d("ChecksSchedule", "hoursAdapter.itemCount=${hoursAdapter.itemCount}")
+            Log.d("ChecksSchedule", "monthAdapter.itemCount=${monthAdapter.itemCount}")
+            Log.d("ChecksSchedule", "tasksAdapter.itemCount=${tasksAdapter.itemCount}")
+        }
         
         view?.let { applyThemeToView(it) }
         
         // КРИТИЧНО: Если данные не загружены, загружаем их ПЕРЕД применением темы
         if (!isDataLoadedFlag) {
-            Log.d("ChecksSchedule", "Данные не загружены, вызываем ensureDataLoaded()")
+            if (BuildConfig.DEBUG) {
+                Log.d("ChecksSchedule", "Данные не загружены, вызываем ensureDataLoaded()")
+            }
             ensureDataLoaded()
             // Принудительное обновление через 1.5 секунды для гарантии отображения
             view?.postDelayed({
                 if (isAdded && isDataLoadedFlag) {
-                    Log.d("ChecksSchedule", "⏰ Принудительное обновление через 1.5 сек (данные не были загружены)")
+                    if (BuildConfig.DEBUG) {
+                        Log.d("ChecksSchedule", "⏰ Принудительное обновление через 1.5 сек (данные не были загружены)")
+                    }
                     hoursAdapter.notifyDataSetChanged()
                     monthAdapter.notifyDataSetChanged()
                     tasksAdapter.notifyDataSetChanged()
@@ -549,7 +937,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         
         // Если адаптеры пустые (данные загружены но не отображены), используем полное обновление
         if (!hasHoursData || !hasCalendarData) {
-            Log.d("ChecksSchedule", "Адаптеры пустые, выполняем полное обновление")
+            if (BuildConfig.DEBUG) {
+                Log.d("ChecksSchedule", "Адаптеры пустые, выполняем полное обновление")
+            }
             hoursAdapter.notifyDataSetChanged()
             monthAdapter.notifyDataSetChanged()
             tasksAdapter.notifyDataSetChanged()
@@ -557,7 +947,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
             // Дополнительное принудительное обновление через 1.5 секунды
             view?.postDelayed({
                 if (isAdded) {
-                    Log.d("ChecksSchedule", "⏰ Принудительное обновление через 1.5 сек (адаптеры были пустые)")
+                    if (BuildConfig.DEBUG) {
+                        Log.d("ChecksSchedule", "⏰ Принудительное обновление через 1.5 сек (адаптеры были пустые)")
+                    }
                     hoursAdapter.notifyDataSetChanged()
                     monthAdapter.notifyDataSetChanged()
                     tasksAdapter.notifyDataSetChanged()
@@ -566,7 +958,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
             return
         }
         
-        Log.d("ChecksSchedule", "Данные есть, выполняем немедленное обновление")
+        if (BuildConfig.DEBUG) {
+            Log.d("ChecksSchedule", "Данные есть, выполняем немедленное обновление")
+        }
         
         // ОПТИМИЗАЦИЯ: Убрали избыточные циклы по видимым элементам
         // notifyDataSetChanged() ниже и так обновит все элементы
@@ -578,48 +972,51 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         // ГАРАНТИЯ: Принудительное полное обновление через 1.5 сек (для всех случаев)
         view?.postDelayed({
             if (isAdded) {
-                Log.d("ChecksSchedule", "⏰ ПРИНУДИТЕЛЬНОЕ полное обновление через 1.5 сек")
-                Log.d("ChecksSchedule", "Состояние: isAdded=$isAdded, isVisible=$isVisible, isResumed=$isResumed")
+                if (BuildConfig.DEBUG) {
+                    Log.d("ChecksSchedule", "⏰ ПРИНУДИТЕЛЬНОЕ полное обновление через 1.5 сек")
+                    Log.d("ChecksSchedule", "Состояние: isAdded=$isAdded, isVisible=$isVisible, isResumed=$isResumed")
+                }
                 hoursAdapter.notifyDataSetChanged()
                 monthAdapter.notifyDataSetChanged()
                 tasksAdapter.notifyDataSetChanged()
-                Log.d("ChecksSchedule", "✅ Обновление выполнено!")
+                if (BuildConfig.DEBUG) {
+                    Log.d("ChecksSchedule", "✅ Обновление выполнено!")
+                }
             } else {
-                Log.w("ChecksSchedule", "⚠️ Обновление НЕ выполнено: фрагмент не добавлен")
+                if (BuildConfig.DEBUG) {
+                    Log.w("ChecksSchedule", "⚠️ Обновление НЕ выполнено: фрагмент не добавлен")
+                }
             }
         }, 1500)
     }
     
     private fun applyThemeToView(view: View) {
-        if (!AppTheme.shouldApplyTheme()) {
-            // Классическая тема - восстанавливаем оригинальный вид
-            view.background = null
-            view.setBackgroundColor(Color.parseColor("#FAFAFA"))
-            tvNow.setTextColor(Color.parseColor("#000000"))
-        } else {
-            // Сначала применяем цвет фона (быстро)
-            view.setBackgroundColor(AppTheme.getBackgroundColor())
-            tvNow.setTextColor(AppTheme.getTextPrimaryColor())
-            
-            // Затем асинхронно загружаем фоновое изображение (если есть)
-            // ЗАЩИТА: предотвращаем множественные одновременные загрузки
-            if (!isLoadingBackground) {
-                isLoadingBackground = true
-                lifecycleScope.launch(Dispatchers.IO) {
-                    try {
-                        val bgDrawable = AppTheme.getBackgroundDrawable(requireContext())
-                        if (bgDrawable != null && isAdded) {
-                            withContext(Dispatchers.Main) {
-                                if (isAdded && view.isAttachedToWindow) {
-                                    view.background = bgDrawable
-                                }
+        // Применяем цвет фона из стратегии темы
+        view.setBackgroundColor(currentTheme.getBackgroundColor())
+        tvNow.setTextColor(currentTheme.getTextPrimaryColor())
+        
+        // Асинхронно загружаем фоновое изображение (если есть)
+        // ЗАЩИТА: предотвращаем множественные одновременные загрузки
+        if (!isLoadingBackground) {
+            isLoadingBackground = true
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    // ОПТИМИЗАЦИЯ: Используем кэшированный контекст
+                    val context = cachedContext ?: requireContext()
+                    val bgDrawable = currentTheme.getBackgroundDrawable(context)
+                    if (bgDrawable != null && isAdded) {
+                        withContext(Dispatchers.Main) {
+                            if (isAdded && view.isAttachedToWindow) {
+                                view.background = bgDrawable
                             }
                         }
-                    } finally {
-                        isLoadingBackground = false
                     }
+                } finally {
+                    isLoadingBackground = false
                 }
-            } else {
+            }
+        } else {
+            if (BuildConfig.DEBUG) {
                 Log.d("ChecksSchedule", "Загрузка фона уже в процессе, пропускаем")
             }
         }
@@ -726,6 +1123,9 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
 
     override fun onPause() {
         super.onPause()
+        isFragmentVisible = false
+        // ОПТИМИЗАЦИЯ: Останавливаем таймер когда фрагмент не видим
+        stopTicks()
         // Приостанавливаем таймер обновления времени
         stopTicks()
     }
@@ -733,10 +1133,6 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     override fun onDestroyView() {
         super.onDestroyView()
         stopTicks()
-        
-        // КРИТИЧНО: Отменяем отложенное обновление задач для предотвращения утечки памяти
-        updateTasksJob?.cancel()
-        updateTasksJob = null
         
         // Очищаем коллбеки для предотвращения утечек памяти
         hoursAdapter.onSelectionChanged = null
@@ -763,6 +1159,12 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     
     override fun onResume() {
         super.onResume()
+        isFragmentVisible = true
+        lastInteractionTime = System.currentTimeMillis()
+        // ОПТИМИЗАЦИЯ: Запускаем таймер только если фрагмент видим
+        if (isDataLoadedFlag) {
+            startTicks()
+        }
         
         // Регистрируем фрагмент в ThemeManager
         com.example.vkbookandroid.theme.ThemeManager.registerFragment(this)
@@ -779,10 +1181,11 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     }
 
     private fun startTicks() {
+        // ОПТИМИЗАЦИЯ: Не запускаем если фрагмент не видим
+        if (!isFragmentVisible || !isVisible) {
+            return
+        }
         tickHandler.removeCallbacksAndMessages(null)
-        // Инициализируем lastCheckedHour текущим часом
-        lastCheckedHour = LocalDateTime.now().hour
-        // Запускаем сразу для первого обновления
         tickHandler.post(tickRunnable)
     }
 
@@ -808,26 +1211,19 @@ private fun lighten(color: Int, factor: Float): Int {
     return android.graphics.Color.rgb(newR, newG, newB)
 }
 
-/**
- * Проверка системного темного режима Android
- */
-private fun isSystemDarkMode(context: Context): Boolean {
-    val nightModeFlags = context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
-    return nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES
-}
-
 // ===== Шкала часов =====
 private data class HourCell(
     val hour: Int, 
-    val isNow: Boolean,
-    val dayLabel: String? = null, // Метка дня для часов 00-07 (например, "Вт")
-    val dayOffset: Int = 0 // Смещение дня: 0 = текущий день, 1 = следующий день
+    val isNow: Boolean, 
+    val dayLabel: String? = null,  // Метка дня для часов из соседних дней (например, "Ср" или "+1д")
+    val dayOffset: Int = 0  // -1 = предыдущий день, 0 = текущий день, 1 = следующий день
 )
 
 private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
     private val items = mutableListOf<HourCell>()
-    private val selectedPositions = mutableSetOf<Int>() // Теперь храним позиции, а не номера часов
+    private val selectedPositions = mutableSetOf<Int>()  // Теперь храним ПОЗИЦИИ, а не часы
     var onSelectionChanged: (() -> Unit)? = null
+    lateinit var theme: ThemeStrategy // Стратегия темы (поздняя инициализация)
     
     fun submit(list: List<HourCell>, resetSelection: Boolean = false) { 
         items.clear()
@@ -837,18 +1233,53 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
             val nowH = LocalDateTime.now().hour
             val activeRange = getRangeForHour(nowH)
             selectedPositions.clear()
-            items.forEachIndexed { index, cell ->
-                if (getRangeForHour(cell.hour) == activeRange) {
-                    selectedPositions.add(index)
+            
+            // КРИТИЧНО: Ночная смена (20-07) охватывает ДВА дня!
+            when {
+                // 1. Если сейчас 00:00-07:59 (ночь), выделяем:
+                //    - 20-23 ПРЕДЫДУЩЕГО дня (dayOffset=-1)
+                //    - 00-07 ТЕКУЩЕГО дня (dayOffset=0)
+                nowH in 0..7 -> {
+                    items.forEachIndexed { index, cell ->
+                        val inNightShift = (cell.hour in 20..23 && cell.dayOffset == -1) || 
+                                         (cell.hour in 0..7 && cell.dayOffset == 0)
+                        if (inNightShift) {
+                            selectedPositions.add(index)
+                        }
+                    }
+                }
+                // 2. Если сейчас 08:00-19:59 (день), выделяем только текущую дневную смену
+                nowH in 8..19 -> {
+                    items.forEachIndexed { index, cell ->
+                        if (cell.dayOffset == 0 && getRangeForHour(cell.hour) == activeRange) {
+                            selectedPositions.add(index)
+                        }
+                    }
+                }
+                // 3. Если сейчас 20:00-23:59 (вечер), выделяем:
+                //    - 20-23 ТЕКУЩЕГО дня (dayOffset=0)
+                //    - 00-07 СЛЕДУЮЩЕГО дня (dayOffset=1)
+                nowH in 20..23 -> {
+                    items.forEachIndexed { index, cell ->
+                        val inNightShift = (cell.hour in 20..23 && cell.dayOffset == 0) || 
+                                         (cell.hour in 0..7 && cell.dayOffset == 1)
+                        if (inNightShift) {
+                            selectedPositions.add(index)
+                        }
+                    }
                 }
             }
         }
         notifyDataSetChanged()
     }
     
-    // Возвращаем выбранные ячейки (час + dayOffset)
-    fun getSelectedHours(): Set<Int> = selectedPositions.mapTo(mutableSetOf()) { items[it].hour }
-    fun getSelectedCells(): List<HourCell> = selectedPositions.map { items[it] }
+    fun getSelectedCells(): List<HourCell> {
+        return selectedPositions.map { items[it] }
+    }
+    
+    fun getSelectedHours(): Set<Int> = selectedPositions.mapNotNull { 
+        if (it < items.size) items[it].hour else null 
+    }.toSet()
     
     fun setEditMode(enabled: Boolean) { /* Можно добавить логику при необходимости */ }
     override fun getItemCount() = items.size
@@ -867,162 +1298,87 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
     
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val tv = TextView(parent.context)
-        // Увеличена ширина с 45 до 50dp для размещения метки дня
-        val lp = RecyclerView.LayoutParams((parent.resources.displayMetrics.density*50).toInt(), RecyclerView.LayoutParams.MATCH_PARENT)
+        val lp = RecyclerView.LayoutParams((parent.resources.displayMetrics.density*45).toInt(), RecyclerView.LayoutParams.MATCH_PARENT)
         tv.layoutParams = lp
-        tv.textSize = 12f // Уменьшен размер шрифта с 14 до 12 для двухстрочного текста
+        tv.textSize = 14f
         tv.gravity = android.view.Gravity.CENTER
-        tv.setPadding(2,4,2,4) // Уменьшен горизонтальный padding
-        return VH(tv)
+        tv.setPadding(4,4,4,4)
+        return VH(tv, { position -> selectedPositions.contains(position) })
     }
     
     override fun onBindViewHolder(holder: VH, position: Int) {
-        val hour = items[position].hour
-        val isNow = items[position].isNow
+        val cell = items[position]
         val isSelected = selectedPositions.contains(position)
-        holder.bind(items[position], isSelected)
+        holder.bind(cell, isSelected, theme)
         holder.itemView.setOnClickListener {
             val pos = holder.bindingAdapterPosition
             if (pos != RecyclerView.NO_POSITION) {
-                // Переключение выделения для ПОЗИЦИИ
+                // Переключение выделения по ПОЗИЦИИ
                 if (selectedPositions.contains(pos)) {
-                    Log.d("ChecksSchedule", "Снят выбор позиции: $pos (час: ${items[pos].hour}, offset: ${items[pos].dayOffset})")
                     selectedPositions.remove(pos)
                 } else {
-                    Log.d("ChecksSchedule", "Выбрана позиция: $pos (час: ${items[pos].hour}, offset: ${items[pos].dayOffset})")
+                    if (BuildConfig.DEBUG) {
+                        Log.d("ChecksSchedule", "Выбран час: ${items[pos].hour} (dayOffset=${items[pos].dayOffset})")
+                    }
                     selectedPositions.add(pos)
                 }
-                Log.d("ChecksSchedule", "Все выбранные позиции: ${selectedPositions.sorted()}")
+                if (BuildConfig.DEBUG) {
+                    Log.d("ChecksSchedule", "Выбранные ячейки: ${getSelectedCells().map { "(${it.hour}h, day${it.dayOffset})" }}")
+                }
                 notifyItemChanged(pos, true)
                 onSelectionChanged?.invoke()
             }
         }
-        
-        // Подсказка при долгом нажатии на часы 00-07
-        if (hour in 0..7) {
-            holder.itemView.setOnLongClickListener {
-                // Если dayLabel = null для часов 00-07, значит это 1-е число месяца
-                val message = if (items[position].dayLabel == null) {
-                    "Часы 00-07 относятся к текущему дню (1-е число месяца)"
-                } else {
-                    "Часы 00-07 относятся к следующему календарному дню"
-                }
-                android.widget.Toast.makeText(
-                    holder.itemView.context,
-                    message,
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-                true
-            }
-        } else {
-            holder.itemView.setOnLongClickListener(null)
-        }
     }
-    class VH(private val tv: TextView) : RecyclerView.ViewHolder(tv) {
-        fun bind(c: HourCell, selected: Boolean) {
-            // Если есть метка дня (для часов 00-07), показываем её
+    class VH(private val tv: TextView, private val isSelected: (Int) -> Boolean) : RecyclerView.ViewHolder(tv) {
+        fun bind(c: HourCell, selected: Boolean, theme: ThemeStrategy) {
+            // Отображаем час с меткой дня для соседних дней
             tv.text = if (c.dayLabel != null) {
                 String.format(Locale.getDefault(), "%02d\n(%s)", c.hour, c.dayLabel)
             } else {
                 String.format(Locale.getDefault(), "%02d", c.hour)
             }
+            
             val nowH = LocalDateTime.now().hour
             val activeRange = rangeOf(nowH)
             val currentRange = rangeOf(c.hour)
-            val inActive = currentRange == activeRange
             
-            // КРИТИЧНО: Для классической темы используем ИСХОДНЫЕ цвета!
-            val (bg, fg) = if (!AppTheme.shouldApplyTheme()) {
-                // Классическая тема - ИСХОДНЫЕ цвета
-                when {
-                    selected -> Color.parseColor("#64B5F6") to Color.parseColor("#0D47A1")
-                    inActive && inRange(c.hour, 8, 14) -> Color.parseColor("#388E3C") to Color.parseColor("#FFFFFF")
-                    inActive && inRange(c.hour, 14, 20) -> lighten(Color.parseColor("#2196F3"), 0.3f) to Color.parseColor("#2196F3")
-                    inActive && (inRange(c.hour, 20, 24) || inRange(c.hour, 0, 8)) -> lighten(Color.parseColor("#78909C"), 0.7f) to Color.parseColor("#78909C")
-                    !inActive && inRange(c.hour, 8, 14) -> lighten(Color.parseColor("#388E3C"), 0.5f) to Color.parseColor("#2E7D32")
-                    !inActive && inRange(c.hour, 14, 20) -> lighten(Color.parseColor("#2196F3"), 0.6f) to Color.parseColor("#1976D2")
-                    !inActive && (inRange(c.hour, 20, 24) || inRange(c.hour, 0, 8)) -> lighten(Color.parseColor("#78909C"), 0.8f) to Color.parseColor("#546E7A")
-                    else -> Color.parseColor("#CCCCCC") to Color.parseColor("#212121")
+            // КРИТИЧНО: Ночная смена (20-07) охватывает ДВА дня!
+            // Определяем, является ли ячейка активной (в текущей смене)
+            val inActive = when {
+                // Если сейчас 00:00-07:59 (ночь), активны:
+                // - 20-23 предыдущего дня (dayOffset=-1)
+                // - 00-07 текущего дня (dayOffset=0)
+                nowH in 0..7 -> {
+                    (c.hour in 20..23 && c.dayOffset == -1) || (c.hour in 0..7 && c.dayOffset == 0)
                 }
-            } else {
-                // Другие темы - цвета из AppTheme
-                if (AppTheme.isNuclearTheme()) {
-                    val textBright = Color.parseColor("#E4F4FF")
-                    val selectedBg = Color.parseColor("#FF6B35")
-                    val selectedText = Color.parseColor("#FFFFFF")
-                    val rangeBase = when (currentRange) {
-                        1 -> Color.parseColor("#1B4F82")  // 08-13
-                        2 -> Color.parseColor("#256DB3")  // 14-19
-                        else -> Color.parseColor("#10355F") // 20-07
-                    }
-                    val activeBg = when (currentRange) {
-                        1 -> Color.parseColor("#2A68A9")
-                        2 -> Color.parseColor("#3183D2")
-                        else -> Color.parseColor("#184472")
-                    }
-                    when {
-                        selected -> selectedBg to selectedText
-                        inActive -> activeBg to textBright
-                        else -> rangeBase to textBright
-                    }
-                } else if (AppTheme.isRosatomTheme()) {
-                    // Корпоративная тема Росатома
-                    val textDark = Color.parseColor("#003D5C")
-                    val selectedBg = Color.parseColor("#FF6B35")
-                    val selectedText = Color.parseColor("#FFFFFF")
-                    val rangeBase = when (currentRange) {
-                        1 -> Color.parseColor("#B3E5FC")  // 08-13 светло-голубой
-                        2 -> Color.parseColor("#81D4FA")  // 14-19 голубой
-                        else -> Color.parseColor("#4FC3F7") // 20-07 ярко-голубой
-                    }
-                    val activeBg = when (currentRange) {
-                        1 -> Color.parseColor("#4FC3F7")
-                        2 -> Color.parseColor("#29B6F6")
-                        else -> Color.parseColor("#03A9F4")
-                    }
-                    when {
-                        selected -> selectedBg to selectedText
-                        inActive -> activeBg to textDark
-                        else -> rangeBase to textDark
-                    }
-                } else {
-                    val primary = AppTheme.getPrimaryColor()
-                    val accent = AppTheme.getAccentColor()
-                    val button = AppTheme.getButtonColor()
-                    val background = AppTheme.getBackgroundColor()
-                    val textDefault = AppTheme.getTextPrimaryColor()
-                    // Более темный цвет выделения для всех скинов
-                    val selectedBg = AppTheme.darken(AppTheme.getSelectedColor(), 0.3f)
-                    // Изменяем цвета диапазонов для лучшей читаемости
-                    // Диапазон 8-13 теперь более зеленоватый/темный, чтобы отличаться от выделения
-                    val morningBg = ColorUtils.blendARGB(primary, Color.parseColor("#4CAF50"), 0.4f)
-                    val morningActive = ColorUtils.blendARGB(primary, Color.parseColor("#4CAF50"), 0.25f)
-                    val dayBg = ColorUtils.blendARGB(accent, Color.WHITE, 0.25f)
-                    val dayActive = ColorUtils.blendARGB(accent, Color.WHITE, 0.05f)
-                    val nightBg = ColorUtils.blendARGB(button, Color.BLACK, 0.35f)
-                    val nightActive = ColorUtils.blendARGB(button, Color.BLACK, 0.15f)
-                    val defaultBg = ColorUtils.blendARGB(background, Color.BLACK, 0.05f)
-                    fun textFor(bg: Int): Int {
-                        val luminance = ColorUtils.calculateLuminance(bg)
-                        return if (luminance < 0.4) Color.WHITE else textDefault
-                    }
-                    when {
-                        selected -> selectedBg to textFor(selectedBg)
-                        inActive && currentRange == 1 -> morningActive to textFor(morningActive)
-                        inActive && currentRange == 2 -> dayActive to textFor(dayActive)
-                        inActive && currentRange == 3 -> nightActive to textFor(nightActive)
-                        currentRange == 1 -> morningBg to textFor(morningBg)
-                        currentRange == 2 -> dayBg to textFor(dayBg)
-                        currentRange == 3 -> nightBg to textFor(nightBg)
-                        else -> defaultBg to textFor(defaultBg)
-                    }
+                // Если сейчас 08:00-19:59 (день), активны часы текущей дневной смены с dayOffset=0
+                nowH in 8..19 -> {
+                    currentRange == activeRange && c.dayOffset == 0
                 }
+                // Если сейчас 20:00-23:59 (вечер), активны:
+                // - 20-23 текущего дня (dayOffset=0)
+                // - 00-07 следующего дня (dayOffset=1)
+                nowH in 20..23 -> {
+                    (c.hour in 20..23 && c.dayOffset == 0) || (c.hour in 0..7 && c.dayOffset == 1)
+                }
+                else -> false
             }
+            
+            // Получаем цвета из изолированной стратегии темы (вместо 86 строк if-else!)
+            val style = theme.getHourCellColors(
+                hour = c.hour,
+                isSelected = selected,
+                isActive = inActive,
+                dayOffset = c.dayOffset
+            )
+            val bg = style.backgroundColor
+            val fg = style.textColor
             tv.setTextColor(fg)
 
             val strokeColor = when {
                 selected -> Color.BLACK
-                c.isNow -> AppTheme.getAccentColor()
+                c.isNow -> theme.getCurrentHourBorderColor()  // Используем цвет из темы (для брутальной - черный)
                 else -> null
             }
             val density = tv.resources.displayMetrics.density
@@ -1031,8 +1387,9 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
             } else {
                 0
             }
+            // Используем cornerRadius из темы (для брутальной - 10dp, для других - из AppTheme или 0)
             val cornerRadiusPx = if (AppTheme.shouldApplyTheme()) {
-                AppTheme.getCardCornerRadius() * density
+                theme.getHourCellCornerRadius() * density
             } else {
                 0f
             }
@@ -1063,7 +1420,7 @@ private class HoursAdapter : RecyclerView.Adapter<HoursAdapter.VH>() {
         } else {
             // только перекраска при выборе
             val isSelected = selectedPositions.contains(position)
-            holder.bind(items[position], isSelected)
+            holder.bind(items[position], isSelected, theme)
         }
     }
     
@@ -1078,6 +1435,7 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
     private val selected = mutableSetOf<LocalDate>()
     private var columnWidths = mutableMapOf<Int, Int>() // Индекс колонки (0-6) -> ширина в dp
     var onSelectionChanged: (() -> Unit)? = null
+    lateinit var theme: ThemeStrategy // Стратегия темы (поздняя инициализация)
     
     fun submit(list: List<DayCell>, resetSelection: Boolean = false) { 
         items.clear()
@@ -1106,16 +1464,23 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
     }
     override fun onBindViewHolder(holder: VH, position: Int) {
         val columnIndex = position % 7
-        holder.bind(items[position], columnIndex)
+        holder.bind(items[position], columnIndex, theme)
     }
     private fun onDayClick(date: LocalDate) {
+        // ОПТИМИЗАЦИЯ: Обновляем время последнего взаимодействия (если используется в родительском фрагменте)
         if (!selected.add(date)) {
-            Log.d("ChecksSchedule", "Снят выбор даты: $date")
+            if (BuildConfig.DEBUG) {
+                Log.d("ChecksSchedule", "Снят выбор даты: $date")
+            }
             selected.remove(date)
         } else {
-            Log.d("ChecksSchedule", "Выбрана дата: $date")
+            if (BuildConfig.DEBUG) {
+                Log.d("ChecksSchedule", "Выбрана дата: $date")
+            }
         }
-        Log.d("ChecksSchedule", "Все выбранные даты: $selected")
+        if (BuildConfig.DEBUG) {
+            Log.d("ChecksSchedule", "Все выбранные даты: $selected")
+        }
         notifyDataSetChanged()
         onSelectionChanged?.invoke()
     }
@@ -1129,7 +1494,7 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
              private val getColumnWidth: (Int) -> Int?,
              private val onEditColumnWidth: (Int) -> Unit) : RecyclerView.ViewHolder(tv) {
         override fun toString(): String = super.toString()
-        fun bind(d: DayCell, columnIndex: Int) {
+        fun bind(d: DayCell, columnIndex: Int, theme: ThemeStrategy) {
             if (d.date == null) {
                 tv.text = ""
                 tv.setBackgroundColor(0x00000000)
@@ -1164,121 +1529,26 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
             tv.layoutParams = RecyclerView.LayoutParams(width, height)
             val selected = isSel(d.date)
             
-            // КРИТИЧНО: Для классической темы используем ИСХОДНЫЕ цвета!
-            val (bgColor, textColor) = if (!AppTheme.shouldApplyTheme()) {
-                // Классическая тема - ИСХОДНЫЕ цвета
-                when {
-                    d.isToday && selected -> Pair(Color.parseColor("#90CAF9"), Color.parseColor("#1976D2"))
-                    d.isToday -> Pair(Color.parseColor("#FFFFFF"), Color.parseColor("#212121")) // Фон белый, рамка будет черная
-                    selected -> Pair(Color.parseColor("#90CAF9"), Color.parseColor("#1976D2"))
-                    else -> Pair(lighten(Color.parseColor("#FFFFFF"), 0.3f), Color.parseColor("#212121"))
-                }
-            } else {
-                // Другие темы - цвета из AppTheme
-                if (AppTheme.isNuclearTheme()) {
-                    val workdayBg = Color.parseColor("#49C9D4")
-                    val saturdayBg = Color.parseColor("#34B2F2")
-                    val sundayBg = Color.parseColor("#2C91E8")
-                    val selectedBg = Color.parseColor("#2FD2FF")
-                    val textPrimary = Color.parseColor("#013349")
-                    val textSaturday = Color.parseColor("#02243C")
-                    val textSunday = Color.parseColor("#011B33")
-                    val selectedText = Color.parseColor("#001E36")
-                    when {
-                        d.isToday && selected -> Pair(selectedBg, selectedText)
-                        d.isToday -> {
-                            // Для сегодняшней даты: фон как у обычного дня, рамка оранжевая
-                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
-                            val bg = when (dayOfWeek) {
-                                6 -> saturdayBg
-                                7 -> sundayBg
-                                else -> workdayBg
-                            }
-                            val text = when (dayOfWeek) {
-                                6 -> textSaturday
-                                7 -> textSunday
-                                else -> textPrimary
-                            }
-                            Pair(bg, text)
-                        }
-                        selected -> Pair(selectedBg, selectedText)
-                        else -> {
-                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
-                            when (dayOfWeek) {
-                                6 -> Pair(saturdayBg, textSaturday)
-                                7 -> Pair(sundayBg, textSunday)
-                                else -> Pair(workdayBg, textPrimary)
-                            }
-                        }
-                    }
-                } else if (AppTheme.isRosatomTheme()) {
-                    // Корпоративная тема Росатома для календаря
-                    val workdayBg = Color.parseColor("#B3E5FC")
-                    val saturdayBg = Color.parseColor("#81D4FA")
-                    val sundayBg = Color.parseColor("#4FC3F7")
-                    val selectedBg = Color.parseColor("#0091D5")
-                    val textDark = Color.parseColor("#003D5C")
-                    val textSelected = Color.parseColor("#FFFFFF")
-                    when {
-                        d.isToday && selected -> Pair(selectedBg, textSelected)
-                        d.isToday -> {
-                            // Для сегодняшней даты: фон как у обычного дня, рамка оранжевая
-                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
-                            val bg = when (dayOfWeek) {
-                                6 -> saturdayBg
-                                7 -> sundayBg
-                                else -> workdayBg
-                            }
-                            Pair(bg, textDark)
-                        }
-                        selected -> Pair(selectedBg, textSelected)
-                        else -> {
-                            val dayOfWeek = d.date.dayOfWeek.value // 1..7
-                            when (dayOfWeek) {
-                                6 -> Pair(saturdayBg, textDark)
-                                7 -> Pair(sundayBg, textDark)
-                                else -> Pair(workdayBg, textDark)
-                            }
-                        }
-                    }
-                } else {
-                    // Эргономичная и другие темы
-                    val cardColor = AppTheme.getCardBackgroundColor()
-                    val textDefault = AppTheme.getTextPrimaryColor()
-                    val selectedBg = AppTheme.getSelectedColor()
-                    val normalBg = lighten(cardColor, 0.4f)
-                    fun textFor(bg: Int): Int {
-                        val luminance = ColorUtils.calculateLuminance(bg)
-                        return if (luminance < 0.45) Color.WHITE else textDefault
-                    }
-                    when {
-                        d.isToday && selected -> Pair(selectedBg, textFor(selectedBg))
-                        d.isToday -> Pair(normalBg, textFor(normalBg)) // Фон как у обычного дня, рамка будет зеленая
-                        selected -> Pair(selectedBg, textFor(selectedBg))
-                        else -> Pair(normalBg, textFor(normalBg))
-                    }
-                }
-            }
+            // Получаем цвета из изолированной стратегии темы
+            val dayOfWeek = d.date.dayOfWeek.value // 1..7
+            val dayStyle = theme.getCalendarDayColors(
+                isToday = d.isToday,
+                isSelected = selected,
+                dayOfWeek = dayOfWeek
+            )
+            val bgColor = dayStyle.backgroundColor
+            val textColor = dayStyle.textColor
             
             // Применяем цвета
             if (d.isToday) {
-                // Для сегодняшней даты: создаем drawable вручную с одинаковыми параметрами для всех тем
+                // Для сегодняшней даты: получаем стиль рамки из темы
+                val borderStyle = theme.getTodayBorderStyle()
                 val density = tv.resources.displayMetrics.density
-                val strokeColor = when {
-                    !AppTheme.shouldApplyTheme() -> Color.BLACK // Классическая - черная
-                    AppTheme.isNuclearTheme() -> Color.parseColor("#FF6B35") // Неон - оранжевая
-                    AppTheme.isRosatomTheme() -> Color.parseColor("#FF6B35") // Росатом - оранжевая
-                    AppTheme.isGlassTheme() -> Color.BLACK // Стеклянная - черная
-                    AppTheme.getCurrentThemeId() == 2 -> Color.parseColor("#689F38") // Эргономичная - зеленая
-                    else -> AppTheme.getAccentColor() // Остальные темы - акцентный цвет
-                }
                 val drawable = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    // Скругление как у Росатом (4dp)
-                    cornerRadius = 4f * density
+                    cornerRadius = borderStyle.radiusDp * density
                     setColor(bgColor)
-                    // Ширина рамки 2dp (как у Росатом)
-                    setStroke((2 * density).toInt(), strokeColor)
+                    setStroke((borderStyle.widthDp * density).toInt(), borderStyle.color)
                 }
                 tv.background = drawable
                 tv.setTextColor(textColor)
@@ -1374,32 +1644,59 @@ private class MonthAdapter : RecyclerView.Adapter<MonthAdapter.VH>() {
 
 // ===== Helpers =====
 private fun ChecksScheduleFragment.updateNow() {
-    val now = LocalDateTime.now()
+    // ОПТИМИЗАЦИЯ: Используем кэшированное время если оно свежее (менее 1 секунды)
+    val now = if (cachedNowTime != null && 
+                  System.currentTimeMillis() - cachedNowTimeTimestamp < 1000L) {
+        cachedNowTime!!
+    } else {
+        val newNow = LocalDateTime.now()
+        cachedNowTime = newNow
+        cachedNowTimeTimestamp = System.currentTimeMillis()
+        newNow
+    }
     val ym = YearMonth.from(now)
     tvNow.text = "${now.toLocalDate()}  ${String.format(Locale.getDefault(), "%02d:%02d", now.hour, now.minute)}"
 }
 
 private fun ChecksScheduleFragment.buildHours(selectedDates: Set<LocalDate> = emptySet()): List<HourCell> {
-    val now = LocalDateTime.now()
+    // ОПТИМИЗАЦИЯ: Используем кэшированное время
+    val now = if (cachedNowTime != null && 
+                  System.currentTimeMillis() - cachedNowTimeTimestamp < 1000L) {
+        cachedNowTime!!
+    } else {
+        val newNow = LocalDateTime.now()
+        cachedNowTime = newNow
+        cachedNowTimeTimestamp = System.currentTimeMillis()
+        newNow
+    }
     val nowH = now.hour
     val today = now.toLocalDate()
     
-    // ВСЕГДА строим расширенную шкалу 32 часа для полного обзора смены:
-    // 00-07 (текущий день) + 08-23 (текущий день) + 00-07 (следующий день)
+    // РАСШИРЕННАЯ 36-часовая шкала для ПОЛНОГО обзора смены:
+    // [20-23 пред.день] + [00-23 тек.день] + [00-07 след.день]
+    // Пример: если сейчас 05.12 00:00 (пятница), шкала покажет:
+    // [20-23 четверг] + [00-23 пятница] + [00-07 суббота]
+    // Ночная смена 20:00 чт → 07:00 пт будет видна целиком
     return buildList {
-        // Первые 00-07 относятся к ТЕКУЩЕМУ дню, dayOffset = 0
-        // ИСПРАВЛЕНИЕ БАГА: isNow должен подсвечивать ПЕРВУЮ группу 00-07, если сейчас 00:00-07:59
-        for (h in 0..7) {
+        // 1. Часы 20-23 ПРЕДЫДУЩЕГО дня (dayOffset = -1)
+        val prevDayLabel = when (selectedDates.size) {
+            1 -> {
+                val selectedDate = selectedDates.first()
+                val prevDay = selectedDate.minusDays(1)
+                prevDay.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale("ru", "RU"))
+            }
+            else -> "-1д"
+        }
+        for (h in 20..23) {
+            add(HourCell(hour = h, isNow = false, dayLabel = prevDayLabel, dayOffset = -1))
+        }
+        
+        // 2. Часы 00-23 ТЕКУЩЕГО дня (dayOffset = 0)
+        for (h in 0..23) {
             add(HourCell(hour = h, isNow = (h == nowH), dayLabel = null, dayOffset = 0))
         }
         
-        // Часы 08-23 текущего дня, dayOffset = 0
-        for (h in 8..23) {
-            add(HourCell(hour = h, isNow = (h == nowH), dayLabel = null, dayOffset = 0))
-        }
-        
-        // Вторые 00-07 относятся к СЛЕДУЮЩЕМУ дню, dayOffset = 1
-        // Определяем метку следующего дня
+        // 3. Часы 00-07 СЛЕДУЮЩЕГО дня (dayOffset = 1)
         val nextDayLabel = when (selectedDates.size) {
             1 -> {
                 val selectedDate = selectedDates.first()
@@ -1408,9 +1705,7 @@ private fun ChecksScheduleFragment.buildHours(selectedDates: Set<LocalDate> = em
             }
             else -> "+1д"
         }
-        
         for (h in 0..7) {
-            // ВАЖНО: isNow НЕ подсвечивает эти часы, только если следующий день станет текущим
             add(HourCell(hour = h, isNow = false, dayLabel = nextDayLabel, dayOffset = 1))
         }
     }
@@ -1431,6 +1726,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private var editMode: Boolean = false
     private var contextForDialog: android.content.Context? = null
     private val columnWidths = mutableMapOf<Int, Int>()
+    lateinit var theme: ThemeStrategy // Стратегия темы (поздняя инициализация)
     private val headers = listOf("Операция", "Повторения")
     var onSaveRequested: ((List<CheckItem>) -> Unit)? = null // Коллбек для сохранения личных задач
     
@@ -1467,16 +1763,59 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     }
     
     fun updateActiveStatus(selectedCells: List<HourCell> = emptyList(), selectedDates: Set<LocalDate> = emptySet()) {
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("ChecksSchedule", "TasksAdapter.updateActiveStatus: cells=${selectedCells.map { "(${it.hour}h, day${it.dayOffset})" }}, dates=$selectedDates")
+        }
+        
         // Проверяем только если пользователь что-то выбрал
         if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("ChecksSchedule", "Снимаем активность со всех задач (пустой выбор)")
+            }
             // Снимаем активность со всех задач
             items.forEach { it.isActive = false }
             applyChanges()
             return
         }
         
-        // ОПТИМИЗАЦИЯ: Расчет активности задач
-        // Используем any() вместо тройного вложенного цикла для раннего выхода
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("ChecksSchedule", "Проверяем ${items.size} задач на активность")
+        }
+        
+        // ОПТИМИЗАЦИЯ: Для большого количества задач выполняем расчеты синхронно
+        // так как метод уже может вызываться из фонового потока через updateTasksActiveStatusAsync
+        calculateActiveStatus(selectedCells, selectedDates)
+        applyChanges()
+        
+        // КРИТИЧНО: Принудительное обновление всех активных элементов после небольшой задержки
+        // Это гарантирует что все ViewHolder'ы уже созданы RecyclerView
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        handler.postDelayed({
+            // Принудительно обновляем все активные позиции
+            val activePositions = items.mapIndexedNotNull { index, item ->
+                if (item.isActive) index + 1 else null // +1 из-за заголовка
+            }
+            
+            if (activePositions.isNotEmpty()) {
+                activePositions.forEach { pos ->
+                    if (pos < itemCount) {
+                        notifyItemChanged(pos)
+                    }
+                }
+                
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.d("ChecksSchedule", "TasksAdapter.updateActiveStatus: принудительно обновлено ${activePositions.size} активных задач после задержки")
+                }
+            }
+        }, 200) // 200ms задержка для гарантии создания всех ViewHolder'ов
+    }
+    
+    private fun calculateActiveStatus(selectedCells: List<HourCell>, selectedDates: Set<LocalDate>) {
+        // ОПТИМИЗАЦИЯ: Создаем LocalTime объекты один раз для всех ячеек
+        val cellTimes = selectedCells.map { cell ->
+            java.time.LocalTime.of(cell.hour, 0)
+        }
+        
         items.forEach { item ->
             // Если нет правил напоминаний - не выделяем
             if (item.reminderRules.isEmpty()) {
@@ -1484,29 +1823,36 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 return@forEach
             }
             
+            // ОПТИМИЗАЦИЯ: Используем any() вместо тройного вложенного цикла
+            // Это позволяет выйти сразу при первом совпадении
             val isActive = item.reminderRules.any { rule ->
                 selectedDates.any { date ->
-                    selectedCells.any { cell ->
-                        // Используем dayOffset для определения реальной даты
+                    selectedCells.withIndex().any { (cellIndex, cell) ->
+                        // Применяем dayOffset для правильного расчета даты
                         val actualDate = date.plusDays(cell.dayOffset.toLong())
-                        val testDateTime = LocalDateTime.of(actualDate, java.time.LocalTime.of(cell.hour, 0))
+                        val testDateTime = LocalDateTime.of(actualDate, cellTimes[cellIndex])
                         rule.matches(testDateTime)
                     }
                 }
             }
                 
             item.isActive = isActive
+            if (BuildConfig.DEBUG && isActive) {
+                android.util.Log.d("ChecksSchedule", "Задача АКТИВНА: ${item.operation.take(30)}")
+            }
         }
         
-        val activeCount = items.count { it.isActive }
-        Log.d("ChecksSchedule", "Активных задач: $activeCount из ${items.size}")
-        
-        applyChanges()
+        if (BuildConfig.DEBUG) {
+            val activeCount = items.count { it.isActive }
+            android.util.Log.d("ChecksSchedule", "Активных задач: $activeCount из ${items.size}")
+        }
     }
+    
     
     private fun applyChanges() {
         val hasActiveItems = items.any { it.isActive }
         
+        val oldList = items.toList()
         val newList = if (hasActiveItems) {
             // Активные задачи в начале, неактивные после
             val activeItems = items.filter { it.isActive }
@@ -1517,17 +1863,37 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             items.toList()
         }
         
-        items.clear()
-        items.addAll(newList)
+        // ОПТИМИЗАЦИЯ: Проверяем изменился ли порядок
+        val orderChanged = oldList.zip(newList).any { (old, new) -> 
+            old != new || old.isActive != new.isActive 
+        }
         
-        // ВАЖНО: Обновление UI должно быть в main thread
-        // Если мы уже в main thread, вызываем напрямую, иначе через post
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            notifyDataSetChanged()
-        } else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
+        if (orderChanged) {
+            items.clear()
+            items.addAll(newList)
+            
+            // ОПТИМИЗАЦИЯ: Используем точечные обновления если возможно
+            // Если изменился только статус isActive без изменения порядка - обновляем только изменившиеся
+            val changedPositions = mutableListOf<Int>()
+            oldList.forEachIndexed { index, oldItem ->
+                val newItem = newList.getOrNull(index)
+                if (newItem != null && oldItem.isActive != newItem.isActive) {
+                    changedPositions.add(index)
+                }
+            }
+            
+            if (changedPositions.size < items.size / 2) {
+                // Изменилось меньше половины элементов - обновляем точечно
+                changedPositions.forEach { pos ->
+                    notifyItemChanged(pos + 1) // +1 из-за заголовка
+                }
+            } else {
+                // Изменилось много элементов или порядок - полное обновление
                 notifyDataSetChanged()
             }
+        } else {
+            // Порядок не изменился, только статусы - обновляем все элементы
+            notifyItemRangeChanged(1, items.size) // +1 из-за заголовка
         }
     }
     
@@ -1573,10 +1939,10 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         if (getItemViewType(position) == TYPE_HEADER) {
-            (holder as HeaderVH).bind(headers, columnWidths, holder.itemView.context, editMode)
+            (holder as HeaderVH).bind(headers, columnWidths, holder.itemView.context, editMode, theme)
         } else {
             val item = items[position - 1] // -1 потому что 0 - заголовок
-            (holder as ItemVH).bind(item, position - 1, headers, columnWidths, holder.itemView.context)
+            (holder as ItemVH).bind(item, position - 1, headers, columnWidths, holder.itemView.context, theme)
         }
     }
     private fun onEditItem(position: Int, columnIndex: Int, currentValue: String) {
@@ -1784,7 +2150,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         private var initialX = 0f
         private var initialWidth = 0
         
-        fun bind(headers: List<String>, columnWidths: Map<Int, Int>, context: Context, isResizingMode: Boolean) {
+        fun bind(headers: List<String>, columnWidths: Map<Int, Int>, context: Context, isResizingMode: Boolean, theme: ThemeStrategy) {
             container.removeAllViews()
             var maxCellHeight = 0
             val textViews = mutableListOf<TextView>()
@@ -1800,13 +2166,8 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                     textSize = 12f
                     setTypeface(null, android.graphics.Typeface.BOLD)
                     // КРИТИЧНО: Для классической темы - исходный цвет!
-                    val headerTextColor = if (!AppTheme.shouldApplyTheme()) {
-                        Color.parseColor("#212121")
-                    } else if (AppTheme.isNuclearTheme()) {
-                        Color.parseColor("#003144")
-                    } else {
-                        AppTheme.getTextPrimaryColor()
-                    }
+                    // Получаем цвет заголовка из стратегии темы
+                    val headerTextColor = theme.getHeaderTextColor()
                     setTextColor(headerTextColor)
                     isSoundEffectsEnabled = false
                 }
@@ -1917,33 +2278,23 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         private var operationCell: LinearLayout? = null
         private var rulesCell: LinearLayout? = null
         
-        fun bind(item: CheckItem, position: Int, headers: List<String>, columnWidths: Map<Int, Int>, context: Context) {
+        fun bind(item: CheckItem, position: Int, headers: List<String>, columnWidths: Map<Int, Int>, context: Context, theme: ThemeStrategy) {
             container.removeAllViews()
             
             // КРИТИЧНО: Для классической темы используем ИСХОДНЫЕ цвета!
-            val rowBackgroundColor = if (!AppTheme.shouldApplyTheme()) {
-                // Классическая тема - ИСХОДНЫЕ цвета
-                if (item.isActive) Color.parseColor("#FFEB3B") else Color.parseColor("#FFFFFF")
-            } else {
-                if (AppTheme.isNuclearTheme()) {
-                    val inactive = Color.parseColor("#1D5EA9")
-                    val active = Color.parseColor("#0D2B51")
-                    if (item.isActive) active else inactive
-                } else {
-                    // Другие темы - цвета из AppTheme
-                    if (item.isActive) AppTheme.getActiveColor() else AppTheme.getCardBackgroundColor()
-                }
-            }
+            // Получаем цвета строки задачи из изолированной стратегии темы
+            val rowStyle = theme.getTaskRowColors(isActive = item.isActive)
+            val rowBackgroundColor = rowStyle.backgroundColor
             
             // КОЛОНКА 0: Операция
-            operationCell = createOperationCell(item, position, columnWidths, context, rowBackgroundColor)
+            operationCell = createOperationCell(item, position, columnWidths, context, rowBackgroundColor, rowStyle.textColor)
             container.addView(operationCell)
             
             // Разделитель
             container.addView(createSeparator(context))
             
             // КОЛОНКА 1: Список правил повторения
-            rulesCell = createRulesCell(item, position, columnWidths, context, rowBackgroundColor)
+            rulesCell = createRulesCell(item, position, columnWidths, context, rowBackgroundColor, rowStyle.textColor)
             container.addView(rulesCell)
             
             // КРИТИЧНО: Синхронизируем высоту всех клеток в строке
@@ -1977,26 +2328,19 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             }
         }
         
-        private fun createOperationCell(item: CheckItem, position: Int, columnWidths: Map<Int, Int>, context: Context, bgColor: Int): LinearLayout {
+        private fun createOperationCell(item: CheckItem, position: Int, columnWidths: Map<Int, Int>, context: Context, bgColor: Int, textColor: Int): LinearLayout {
             val colWidth = columnWidths[0] ?: context.dpToPx(200)
             val cellContainer = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(colWidth, LinearLayout.LayoutParams.WRAP_CONTENT)
                 minimumHeight = context.dpToPx(50)
                 
-                // Умеренно желтая рамка для активных задач в теме Росатом в темном режиме
-                val shouldUseYellowBorder = AppTheme.isRosatomTheme() && isSystemDarkMode(context) && item.isActive
-                val borderColor = when {
-                    shouldUseYellowBorder -> Color.parseColor("#FFC107") // Умеренно желтый
-                    AppTheme.isNuclearTheme() -> Color.parseColor("#2DCBE0")
-                    else -> AppTheme.getBorderColor()
-                }
-                val strokeWidth = if (shouldUseYellowBorder) context.dpToPx(3) else context.dpToPx(2)
-                
+                val borderColor = if (AppTheme.isNuclearTheme()) Color.parseColor("#2DCBE0") else AppTheme.getBorderColor()
                 val drawable = createCellDrawableCompat(context, bgColor, borderColor)
                 if (drawable != null) {
+                    // Увеличиваем толщину границы для лучшей видимости
                     (drawable as? android.graphics.drawable.GradientDrawable)?.setStroke(
-                        strokeWidth,
+                        context.dpToPx(2), // 2dp для всех границ
                         borderColor
                     )
                     background = drawable
@@ -2015,14 +2359,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
                 setPadding(context.dpToPx(8), context.dpToPx(8), context.dpToPx(8), context.dpToPx(8))
                 textSize = 14f
-                // КРИТИЧНО: Для классической темы - исходный цвет!
-                val textColor = if (!AppTheme.shouldApplyTheme()) {
-                    Color.parseColor("#212121")
-                } else if (AppTheme.isNuclearTheme()) {
-                    Color.parseColor("#F0F8FF")
-                } else {
-                    AppTheme.getTextPrimaryColor()
-                }
+                // Используем цвет текста из темы (переданный параметр)
                 setTextColor(textColor)
                 
                 if (getEditMode()) {
@@ -2087,7 +2424,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             return cellContainer
         }
         
-        private fun createRulesCell(item: CheckItem, position: Int, columnWidths: Map<Int, Int>, context: Context, bgColor: Int): LinearLayout {
+        private fun createRulesCell(item: CheckItem, position: Int, columnWidths: Map<Int, Int>, context: Context, bgColor: Int, textColor: Int): LinearLayout {
             val colWidth = columnWidths[1] ?: context.dpToPx(300)
             val rulesContainer = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -2095,19 +2432,12 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 setPadding(context.dpToPx(4), context.dpToPx(4), context.dpToPx(4), context.dpToPx(4))
                 minimumHeight = context.dpToPx(50)
                 
-                // Умеренно желтая рамка для активных задач в теме Росатом в темном режиме
-                val shouldUseYellowBorder = AppTheme.isRosatomTheme() && isSystemDarkMode(context) && item.isActive
-                val borderColor = when {
-                    shouldUseYellowBorder -> Color.parseColor("#FFC107") // Умеренно желтый
-                    AppTheme.isNuclearTheme() -> Color.parseColor("#2DCBE0")
-                    else -> AppTheme.getBorderColor()
-                }
-                val strokeWidth = if (shouldUseYellowBorder) context.dpToPx(3) else context.dpToPx(2)
-                
+                val borderColor = if (AppTheme.isNuclearTheme()) Color.parseColor("#2DCBE0") else AppTheme.getBorderColor()
                 val drawable = createCellDrawableCompat(context, bgColor, borderColor)
                 if (drawable != null) {
+                    // Увеличиваем толщину границы для лучшей видимости
                     (drawable as? android.graphics.drawable.GradientDrawable)?.setStroke(
-                        strokeWidth,
+                        context.dpToPx(2), // 2dp для всех границ
                         borderColor
                     )
                     setBackground(drawable)
@@ -2119,7 +2449,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             // Добавляем каждое правило
             val isEditMode = getEditMode()
             item.reminderRules.forEachIndexed { ruleIndex, rule ->
-                rulesContainer.addView(createRuleRow(rule, position, ruleIndex, context, isEditMode))
+                rulesContainer.addView(createRuleRow(rule, position, ruleIndex, context, isEditMode, textColor))
             }
             
             // Кнопка [+ Добавить правило] - только в режиме редактирования
@@ -2130,7 +2460,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             return rulesContainer
         }
         
-        private fun createRuleRow(rule: ReminderRule, position: Int, ruleIndex: Int, context: Context, isEditMode: Boolean): LinearLayout {
+        private fun createRuleRow(rule: ReminderRule, position: Int, ruleIndex: Int, context: Context, isEditMode: Boolean, textColor: Int): LinearLayout {
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -2142,12 +2472,8 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 gravity = android.view.Gravity.CENTER_VERTICAL
             }
             
-            // Текст правила
-            val ruleTextColor = if (!AppTheme.shouldApplyTheme()) {
-                Color.parseColor("#1976D2")
-            } else {
-                if (AppTheme.isNuclearTheme()) Color.parseColor("#8FDFFF") else AppTheme.getPrimaryColor()
-            }
+            // Используем цвет текста из темы (переданный параметр)
+            val ruleTextColor = textColor
 
             val ruleText = TextView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(
@@ -2296,23 +2622,37 @@ private class ScheduleCsvRepository(private val ctx: android.content.Context) {
 private fun ChecksScheduleFragment.scrollToCurrentHour() {
     // ЗАЩИТА: Проверяем что view готов через try-catch
     try {
-        val nowH = LocalDateTime.now().hour
-        // В новой 32-часовой шкале: [00-07] [08-23] [00-07+1д]
-        // Текущий час находится на позиции = nowH (0-23)
-        // Часы 00-07 текущего дня на позициях 0-7
-        // Часы 08-23 текущего дня на позициях 8-23
-        val targetPosition = nowH
+        // ОПТИМИЗАЦИЯ: Используем кэшированное время
+        val now = if (cachedNowTime != null && 
+                      System.currentTimeMillis() - cachedNowTimeTimestamp < 1000L) {
+            cachedNowTime!!
+        } else {
+            val newNow = LocalDateTime.now()
+            cachedNowTime = newNow
+            cachedNowTimeTimestamp = System.currentTimeMillis()
+            newNow
+        }
+        val nowH = now.hour
+        // 36-часовая шкала: [20-23 пред.день] + [00-23 тек.день] + [00-07 след.день]
+        // Текущий час всегда находится в диапазоне [00-23 тек.день], который начинается с позиции 4
+        val targetPosition = 4 + nowH  // 4 = смещение из-за 4 часов предыдущего дня (20-23)
         recyclerHours.post {
             try {
                 (recyclerHours.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(targetPosition, (resources.displayMetrics.widthPixels/2.5).toInt())
             } catch (e: Exception) {
-                android.util.Log.w("ChecksSchedule", "Не удалось прокрутить к текущему часу: ${e.message}")
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.w("ChecksSchedule", "Не удалось прокрутить к текущему часу: ${e.message}")
+                }
             }
         }
     } catch (e: UninitializedPropertyAccessException) {
-        android.util.Log.w("ChecksSchedule", "scrollToCurrentHour() вызван но recyclerHours не инициализирован")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.w("ChecksSchedule", "scrollToCurrentHour() вызван но recyclerHours не инициализирован")
+        }
     } catch (e: Exception) {
-        android.util.Log.w("ChecksSchedule", "Ошибка в scrollToCurrentHour(): ${e.message}")
+        if (BuildConfig.DEBUG) {
+            android.util.Log.w("ChecksSchedule", "Ошибка в scrollToCurrentHour(): ${e.message}")
+        }
     }
 }
 
@@ -2349,6 +2689,5 @@ private fun ChecksScheduleFragment.buildMonth(ym: YearMonth, onlyCurrentWeek: Bo
 }
 
  
-
 
 

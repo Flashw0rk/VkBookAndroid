@@ -52,17 +52,20 @@ class SyncService(private val context: Context) {
      * Не блокирует UI и не ждет ответа - просто отправляет запрос и забывает
      * ПРОВЕРЯЕТ НАЛИЧИЕ СЕТИ перед отправкой запроса для идеального автономного режима
      * КЭШИРУЕТ запросы - не отправляет чаще 1 раза в 5 минут
+     * 
+     * @param force Если true, пропускает проверку сети и кэширование (для принудительного пробуждения)
      */
-    fun wakeupServerPing() {
-        // Кэширование: не отправляем ping если недавно уже отправляли
+    fun wakeupServerPing(force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (now - lastWakeupPingTime < WAKEUP_PING_INTERVAL_MS) {
+        
+        // Кэширование: не отправляем ping если недавно уже отправляли (если не force)
+        if (!force && now - lastWakeupPingTime < WAKEUP_PING_INTERVAL_MS) {
             Log.d(tag, "Wakeup ping skipped (recently sent ${(now - lastWakeupPingTime) / 1000} seconds ago)")
             return
         }
         
-        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос вообще
-        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(context)) {
+        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос вообще (если не force)
+        if (!force && !com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(context)) {
             Log.d(tag, "Network not available, skipping wakeup ping (offline mode)")
             return
         }
@@ -76,36 +79,74 @@ class SyncService(private val context: Context) {
         // Запускаем в фоне без блокировки UI
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val baseUrl = NetworkModule.getCurrentBaseUrl()
                 Log.d(tag, "=== SENDING WAKEUP PING TO SERVER ===")
-                Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
+                Log.d(tag, "Current server URL: $baseUrl")
                 
-                // Создаем клиент с очень коротким таймаутом для быстрого "ping"
+                // КРИТИЧНО: Проверяем, что URL не пустой
+                if (baseUrl.isBlank()) {
+                    Log.e(tag, "ERROR: Base URL is blank! Cannot send wakeup ping.")
+                    return@launch
+                }
+                
+                // КРИТИЧНО: Используем адаптивные таймауты в зависимости от типа сети
+                // Для 2G и медленной сети увеличиваем таймауты, чтобы запрос успел пройти
+                val networkType = com.example.vkbookandroid.network.NetworkUtils.getNetworkType(context)
+                val timeouts = com.example.vkbookandroid.network.NetworkUtils.getAdaptiveTimeouts(context)
+                
+                // Для wakeup ping используем увеличенные таймауты (особенно для 2G)
+                // Но не слишком большие, чтобы не блокировать приложение
+                val wakeupTimeouts = when (networkType) {
+                    com.example.vkbookandroid.network.NetworkType.G2 -> com.example.vkbookandroid.network.NetworkTimeouts(15, 20, 15)  // 2G: больше времени
+                    com.example.vkbookandroid.network.NetworkType.G3 -> com.example.vkbookandroid.network.NetworkTimeouts(10, 15, 10)  // 3G: средние
+                    com.example.vkbookandroid.network.NetworkType.G4 -> com.example.vkbookandroid.network.NetworkTimeouts(5, 10, 5)    // 4G: быстрые
+                    com.example.vkbookandroid.network.NetworkType.WIFI -> com.example.vkbookandroid.network.NetworkTimeouts(2, 5, 2)    // Wi-Fi: очень быстрые
+                    com.example.vkbookandroid.network.NetworkType.UNKNOWN -> com.example.vkbookandroid.network.NetworkTimeouts(10, 15, 10)  // Безопасные значения
+                }
+                
+                // Создаем клиент с адаптивными таймаутами для wakeup ping
+                // КРИТИЧНО: Принудительно используем HTTP/1.1 для избежания проблем с HTTP/2
                 val pingClient = OkHttpClient.Builder()
-                    .connectTimeout(2, TimeUnit.SECONDS)
-                    .readTimeout(2, TimeUnit.SECONDS)
-                    .writeTimeout(2, TimeUnit.SECONDS)
+                    .connectTimeout(wakeupTimeouts.connectSeconds, TimeUnit.SECONDS)
+                    .readTimeout(wakeupTimeouts.readSeconds, TimeUnit.SECONDS)
+                    .writeTimeout(wakeupTimeouts.writeSeconds, TimeUnit.SECONDS)
+                    .cache(null) // Отключаем кэш полностью для wakeup ping
+                    .protocols(listOf(okhttp3.Protocol.HTTP_1_1)) // Принудительно используем HTTP/1.1
                     .addInterceptor { chain ->
                         val builder = chain.request().newBuilder()
                             .addHeader("X-API-Key", com.example.vkbookandroid.BuildConfig.API_KEY)
                             .addHeader("Accept", "application/json")
                             .addHeader("User-Agent", "VkBookAndroid/${com.example.vkbookandroid.BuildConfig.VERSION_NAME}")
+                            .addHeader("Cache-Control", "no-cache, no-store, must-revalidate") // Принудительно отключаем кэш
+                            .addHeader("Pragma", "no-cache")
+                            .addHeader("Expires", "0")
+                            .addHeader("Connection", "close") // Закрываем соединение после запроса
                         chain.proceed(builder.build())
                     }
                     .build()
                 
-                val baseUrl = NetworkModule.getCurrentBaseUrl().trimEnd('/')
-                val healthUrl = "$baseUrl/actuator/health"
+                val trimmedUrl = baseUrl.trimEnd('/')
+                // Используем рабочий endpoint вместо /actuator/health
+                val healthUrl = "$trimmedUrl/api/updates/check"
                 
+                Log.d(tag, "Wakeup ping URL: $healthUrl")
+                Log.d(tag, "API Key length: ${com.example.vkbookandroid.BuildConfig.API_KEY.length}")
+                
+                // КРИТИЧНО: Добавляем заголовки для отключения кэша в самом запросе
                 val request = Request.Builder()
                     .url(healthUrl)
                     .get()
+                    .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                    .header("Pragma", "no-cache")
+                    .header("Expires", "0")
                     .build()
                 
                 // Отправляем запрос, но не ждем ответа - просто "fire and forget"
                 pingClient.newCall(request).enqueue(object : Callback {
                     override fun onFailure(call: Call, e: IOException) {
-                        // Игнорируем ошибки - это просто ping для пробуждения
-                        Log.d(tag, "Wakeup ping sent (server may be sleeping, that's OK)")
+                        // Логируем ошибку для диагностики
+                        Log.w(tag, "Wakeup ping failed: ${e.message}", e)
+                        Log.d(tag, "Wakeup ping request sent (server may be sleeping, that's OK)")
                     }
                     
                     override fun onResponse(call: Call, response: Response) {
@@ -115,10 +156,10 @@ class SyncService(private val context: Context) {
                     }
                 })
                 
-                Log.d(tag, "=== WAKEUP PING SENT (fire-and-forget) ===")
+                Log.d(tag, "=== WAKEUP PING REQUEST ENQUEUED (fire-and-forget) ===")
             } catch (e: Exception) {
-                // Игнорируем все ошибки - это просто ping для пробуждения
-                Log.d(tag, "Wakeup ping error (ignored): ${e.message}")
+                // Логируем ошибку для диагностики
+                Log.e(tag, "Wakeup ping error: ${e.message}", e)
             }
         }
     }

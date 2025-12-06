@@ -28,7 +28,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
@@ -78,6 +77,10 @@ class MainActivity : AppCompatActivity() {
     private var isWaitingForServer = false
     private var networkAvailableDuringWait = false
     private val connectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
+    
+    // Периодический wakeup ping каждые 10 минут пока приложение активно
+    private var periodicWakeupJob: Job? = null
+    private val PERIODIC_WAKEUP_INTERVAL_MS = 10 * 60 * 1000L // 10 минут
     
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         android.util.Log.d("MainActivity", "=== settingsLauncher получил результат ===")
@@ -214,10 +217,24 @@ class MainActivity : AppCompatActivity() {
         setupFileWatching()
         
         // ОТПРАВЛЯЕМ ЛЕГКОВЕСНЫЙ PING ДЛЯ ПРОБУЖДЕНИЯ СЕРВЕРА
-        // Это делается всегда при запуске, независимо от настроек
-        // Запрос не блокирует UI и не ждет ответа - просто "разбудит" сервер
+        // КРИТИЧНО: Это делается асинхронно в фоне, НЕ блокирует UI и запуск приложения
+        // Запрос fire-and-forget - не ждет ответа, просто "разбудит" сервер
+        // force = true гарантирует отправку запроса даже если недавно уже отправляли или сети нет
+        // КРИТИЧНО: Даже если сети нет, запрос быстро завершится по таймауту (2 сек) и не помешает работе
         if (::syncService.isInitialized) {
-            syncService.wakeupServerPing()
+            val currentUrl = NetworkModule.getCurrentBaseUrl()
+            Log.d("MainActivity", "Sending wakeup ping on app startup (async, non-blocking)...")
+            Log.d("MainActivity", "Current server URL: '$currentUrl'")
+            
+            if (currentUrl.isBlank()) {
+                Log.e("MainActivity", "ERROR: Cannot send wakeup ping - URL is blank!")
+            } else {
+                // КРИТИЧНО: Вызываем асинхронно, не блокируя onCreate
+                // wakeupServerPing уже асинхронный внутри, но для гарантии запускаем в фоне
+                uiScope.launch(Dispatchers.IO) {
+                    syncService.wakeupServerPing(force = true)
+                }
+            }
         }
         
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ ПРИ ЗАПУСКЕ
@@ -261,6 +278,8 @@ class MainActivity : AppCompatActivity() {
         if (!isWaitingForServer) {
             unregisterNetworkCallback()
         }
+        // КРИТИЧНО: Останавливаем периодический wakeup ping для экономии батареи
+        stopPeriodicWakeupPing()
     }
     
     override fun onResume() {
@@ -270,6 +289,9 @@ class MainActivity : AppCompatActivity() {
         dataRefreshManager.resumeAllWatchers()
         
         android.util.Log.d("MainActivity", "=== onResume() вызван ===")
+        
+        // КРИТИЧНО: Запускаем периодический wakeup ping каждые 10 минут пока приложение активно
+        startPeriodicWakeupPing()
         
         val adminChanged = updateAdminModeState()
         
@@ -547,22 +569,40 @@ class MainActivity : AppCompatActivity() {
     
     private fun loadServerSettings() {
         val currentUrl = readServerUrlFromPreferences()
-        android.util.Log.d("MainActivity", "loadServerSettings: currentUrl=$currentUrl")
-        NetworkModule.updateBaseUrl(currentUrl)
+        android.util.Log.d("MainActivity", "loadServerSettings: currentUrl='$currentUrl'")
+        
+        // КРИТИЧНО: Проверяем, что URL не пустой
+        if (currentUrl.isBlank()) {
+            android.util.Log.e("MainActivity", "ERROR: Server URL is blank! Using default URL.")
+            val defaultUrl = "https://vkbookserver.onrender.com/"
+            NetworkModule.updateBaseUrl(defaultUrl)
+        } else {
+            NetworkModule.updateBaseUrl(currentUrl)
+        }
+        
+        // Проверяем финальный URL после обновления
+        val finalUrl = NetworkModule.getCurrentBaseUrl()
+        android.util.Log.d("MainActivity", "loadServerSettings: finalUrl='$finalUrl'")
+        
         updateAdminModeState()
         // После возврата из настроек применяем видимость вкладок
         try { applyTabsVisibility() } catch (_: Throwable) {}
     }
     
     private fun checkConnectionOnStartup() {
-        // Проверяем соединение при запуске (только для информации)
-        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос
+        // КРИТИЧНО: Проверка соединения при запуске - полностью асинхронная, не блокирует UI
+        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос вообще
+        // Это гарантирует работу приложения в офлайн режиме без задержек
         if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this)) {
+            // Офлайн режим - приложение работает нормально с локальными данными
             updateSyncStatus("Офлайн режим")
             applySyncButtonMode(SyncMode.IDLE)
+            Log.d("MainActivity", "Offline mode detected - app works with local data only")
             return
         }
         
+        // КРИТИЧНО: Запускаем проверку асинхронно в фоне, не блокируя UI
+        // Даже если проверка займет время, приложение продолжает работать
         uiScope.launch {
             updateSyncStatus("Проверка соединения...")
             val isConnected = withContext(Dispatchers.IO) {
@@ -715,13 +755,17 @@ class MainActivity : AppCompatActivity() {
         // НЕ проверяем сеть - пусть попытки продолжаются даже без сети
         // Это позволяет "разбудить" сервер даже при временных проблемах с сетью
         
+        // КРИТИЧНО: Отправляем запрос на пробуждение сервера ПЕРЕД началом проверок
+        Log.d("MainActivity", "Sending wakeup ping to server...")
+        syncService.wakeupServerPing(force = true) // force = true пропускает проверку сети и кэширование
+        
         // Регистрируем NetworkCallback для отслеживания изменений сети
         isWaitingForServer = true
         networkAvailableDuringWait = false
         registerNetworkCallback()
         
         try {
-            updateSyncStatus("Проверяем соединение...")
+            updateSyncStatus("Отправлен запрос на пробуждение сервера...")
             val readyImmediately = withContext(Dispatchers.IO) {
                 runCatching { syncService.checkServerConnectionForWakeup() }
                     .onFailure { e ->
@@ -789,6 +833,14 @@ class MainActivity : AppCompatActivity() {
                 
                 // Вычисляем progressPercent для текущей попытки
                 val currentProgressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95)
+                
+                // КРИТИЧНО: Отправляем запрос на пробуждение перед каждой проверкой соединения
+                // Это гарантирует, что сервер получает запросы и "просыпается"
+                Log.d("MainActivity", "Sending wakeup ping before attempt ${attempt + 1}")
+                syncService.wakeupServerPing(force = true)
+                
+                // Небольшая задержка после отправки ping, чтобы запрос успел отправиться
+                delay(500)
                 
                 // Проверка соединения в фоне (параллельный поток, БЕЗ проверки сети)
                 val isReady = withContext(Dispatchers.IO) {
@@ -879,6 +931,53 @@ class MainActivity : AppCompatActivity() {
             }
             networkCallback = null
         }
+    }
+    
+    /**
+     * Запустить периодический wakeup ping каждые 10 минут пока приложение активно
+     * КРИТИЧНО: Оптимизировано для минимальной нагрузки на устройство:
+     * - Fire-and-forget (не ждем ответа)
+     * - Короткие таймауты (2 сек)
+     * - Проверка сети перед запросом
+     * - Кэширование в SyncService предотвращает дубликаты
+     */
+    private fun startPeriodicWakeupPing() {
+        // Останавливаем предыдущий если есть
+        stopPeriodicWakeupPing()
+        
+        // Запускаем периодический wakeup ping в фоне
+        periodicWakeupJob = uiScope.launch {
+            while (isActive) {
+                try {
+                    // КРИТИЧНО: Проверяем сеть перед запросом (быстрая проверка, не блокирует)
+                    if (com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this@MainActivity)) {
+                        // Отправляем wakeup ping асинхронно, не блокируя корутину
+                        // force = false использует кэширование SyncService (не чаще 1 раза в 5 минут)
+                        syncService.wakeupServerPing(force = false)
+                        Log.d("MainActivity", "Periodic wakeup ping sent (every 10 minutes)")
+                    } else {
+                        Log.d("MainActivity", "Periodic wakeup ping skipped (offline mode)")
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Error in periodic wakeup ping: ${e.message}")
+                }
+                
+                // Ждем 10 минут до следующего запроса
+                delay(PERIODIC_WAKEUP_INTERVAL_MS)
+            }
+        }
+        
+        Log.d("MainActivity", "Periodic wakeup ping started (every 10 minutes)")
+    }
+    
+    /**
+     * Остановить периодический wakeup ping
+     * Вызывается при onPause() и onDestroy() для экономии батареи
+     */
+    private fun stopPeriodicWakeupPing() {
+        periodicWakeupJob?.cancel()
+        periodicWakeupJob = null
+        Log.d("MainActivity", "Periodic wakeup ping stopped")
     }
     
     /**
@@ -1432,6 +1531,8 @@ class MainActivity : AppCompatActivity() {
         uiJob.cancel()
         // Отменяем NetworkCallback при уничтожении активности
         unregisterNetworkCallback()
+        // КРИТИЧНО: Останавливаем периодический wakeup ping при уничтожении
+        stopPeriodicWakeupPing()
     }
     
     /**
@@ -1613,19 +1714,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadThemeConfiguration() {
-        runBlocking {
-            withContext(Dispatchers.IO) {
-                com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
-            }
-        }
+        // КРИТИЧНО: loadTheme() просто читает SharedPreferences - это быстро и не блокирует UI
+        // Не используем runBlocking, чтобы не блокировать главный поток при запуске
+        com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
     }
 
     private fun readServerUrlFromPreferences(): String {
-        return runBlocking {
-            withContext(Dispatchers.IO) {
-                ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
-            }
-        }
+        // КРИТИЧНО: getCurrentServerUrl() просто читает SharedPreferences - это быстро и не блокирует UI
+        // Не используем runBlocking, чтобы не блокировать главный поток при запуске
+        return ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
     }
 
     companion object {

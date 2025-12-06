@@ -169,3 +169,11 @@ adb logcat -t "$(date -d '5 minutes ago' +%m-%d\ %H:%M:%S)" -s Battery > recent_
 
 
 
+
+
+
+
+
+
+
+

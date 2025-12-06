@@ -18,7 +18,10 @@ import org.junit.runners.Suite
     
     // Тесты синхронизации
     SyncServiceTests::class,
-    ServerConnectionTests::class
+    ServerConnectionTests::class,
+    
+    // Тесты оптимизаций
+    ChecksScheduleOptimizationsTest::class
 )
 class AllUnitTestsSuite {
     // Этот класс не содержит тестов, только конфигурацию Suite

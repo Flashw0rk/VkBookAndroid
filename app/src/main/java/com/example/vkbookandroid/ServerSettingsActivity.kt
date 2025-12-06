@@ -761,7 +761,7 @@ class ServerSettingsActivity : AppCompatActivity() {
                 results.add("6️⃣ Анализ настроек:")
                 if (host == DEFAULT_SERVER_HOST) {
                     results.add("   ✅ Используется правильный VkBook сервер")
-                    results.add("   💡 Сервер развернут на Yandex Cloud")
+                    results.add("   💡 Сервер развернут на Render")
                     results.add("   🌐 Доступен из любой сети")
                 } else if (host.contains("192.168") || host.contains("10.0") || host.contains("172.")) {
                     results.add("   ⚠️ Используется локальный IP адрес")

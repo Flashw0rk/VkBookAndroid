@@ -23,7 +23,7 @@ class AboutActivity : AppCompatActivity() {
         val pInfo = packageManager.getPackageInfo(packageName, 0)
         val versionName = pInfo.versionName
         val versionCode = PackageInfoCompat.getLongVersionCode(pInfo)
-        val versionText = "Версия: ${'$'}versionName (${ '$'}versionCode)"
+        val versionText = "Версия: ${versionName} (${versionCode})"
 
         tvVersion.text = versionText
 

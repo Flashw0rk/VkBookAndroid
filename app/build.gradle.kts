@@ -60,7 +60,7 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false // Отключаем debug режим в release
-            signingConfig = signingConfigs.getByName("release")
+				signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isDebuggable = true

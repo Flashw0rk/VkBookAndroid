@@ -497,7 +497,7 @@ class SignalsAdapter(
             val visibleIndices = headers.mapIndexedNotNull { idx, h -> if (!adapter.isHidden(h)) idx else null }
 
             if (BuildConfig.DEBUG) {
-                Log.d("RowViewHolder", "Binding row: ${'$'}{rowData.getAllProperties()}")
+                Log.d("RowViewHolder", "Binding row: ${rowData.getAllProperties()}")
             }
             headers.forEachIndexed { i, headerName ->
                 if (adapter.isHidden(headerName)) return@forEachIndexed
@@ -725,7 +725,7 @@ class SignalsAdapter(
             textViews.forEach { textView ->
                 textView.layoutParams.height = finalMaxCellHeight
                 if (BuildConfig.DEBUG) {
-                    Log.d("RowViewHolder", "Cell text: ${'$'}{textView.text}, Final Height: ${'$'}{textView.layoutParams.height}")
+                    Log.d("RowViewHolder", "Cell text: ${textView.text}, Final Height: ${textView.layoutParams.height}")
                 }
             }
             cellContainer.requestLayout()

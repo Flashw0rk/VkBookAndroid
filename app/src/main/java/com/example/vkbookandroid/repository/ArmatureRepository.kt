@@ -157,27 +157,62 @@ class ArmatureRepository(
     
     /**
      * Проверить доступность сервера
+     * Использует рабочий endpoint /api/updates/check вместо /actuator/health
      */
     suspend fun checkServerHealth(): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 android.util.Log.d("ArmatureRepository", "Checking server health...")
-                val response = apiService?.getHealth()
-                val responseCode = response?.code() ?: 0
                 
-                // Если получили 429, бросаем исключение для правильной обработки rate limit
-                if (responseCode == 429) {
-                    android.util.Log.w("ArmatureRepository", "Server rate limit (429) - сервер доступен, но ограничивает запросы. Подождите несколько секунд.")
-                    throw RateLimitException()
+                // Пробуем сначала рабочий endpoint /api/updates/check
+                try {
+                    val response = apiService?.checkUpdates()
+                    val responseCode = response?.code() ?: 0
+                    
+                    // Если получили 429, бросаем исключение для правильной обработки rate limit
+                    if (responseCode == 429) {
+                        android.util.Log.w("ArmatureRepository", "Server rate limit (429) - сервер доступен, но ограничивает запросы. Подождите несколько секунд.")
+                        throw RateLimitException()
+                    }
+                    
+                    val isSuccessful = response?.isSuccessful == true
+                    android.util.Log.d("ArmatureRepository", "Server health check result (via /api/updates/check): $isSuccessful, response code: $responseCode")
+                    
+                    if (isSuccessful) {
+                        return@withContext true
+                    }
+                } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                    // Перебрасываем RateLimitException для обработки в SyncService
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w("ArmatureRepository", "Health check via /api/updates/check failed, trying fallback: ${e.message}")
                 }
                 
-                val isSuccessful = response?.isSuccessful == true
-                android.util.Log.d("ArmatureRepository", "Server health check result: $isSuccessful, response code: $responseCode")
-                
-                if (!isSuccessful) {
-                    android.util.Log.e("ArmatureRepository", "Server health check failed: ${response?.errorBody()?.string()}")
+                // Fallback: пробуем /api/files/list (тоже рабочий endpoint)
+                try {
+                    val response = apiService?.getAllFiles()
+                    val responseCode = response?.code() ?: 0
+                    
+                    if (responseCode == 429) {
+                        android.util.Log.w("ArmatureRepository", "Server rate limit (429) - сервер доступен, но ограничивает запросы. Подождите несколько секунд.")
+                        throw RateLimitException()
+                    }
+                    
+                    val isSuccessful = response?.isSuccessful == true
+                    android.util.Log.d("ArmatureRepository", "Server health check result (via /api/files/list): $isSuccessful, response code: $responseCode")
+                    
+                    if (isSuccessful) {
+                        return@withContext true
+                    }
+                } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
+                    throw e
+                } catch (e: Exception) {
+                    android.util.Log.w("ArmatureRepository", "Health check via /api/files/list also failed: ${e.message}")
                 }
-                isSuccessful
+                
+                // Если оба endpoint не сработали, возвращаем false
+                android.util.Log.e("ArmatureRepository", "All health check endpoints failed")
+                false
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 // Перебрасываем RateLimitException для обработки в SyncService
                 throw e

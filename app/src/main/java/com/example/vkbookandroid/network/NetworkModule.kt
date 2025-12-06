@@ -53,6 +53,11 @@ object NetworkModule {
     
     private val okHttpClient: OkHttpClient by lazy {
         val builder = OkHttpClient.Builder()
+            // КРИТИЧНО: Принудительно используем HTTP/1.1 для надежности обновлений
+            // HTTP/2 может вызывать проблемы с кэшированием и обновлениями на Render.com
+            // HTTP/1.1 более предсказуем для критичных запросов обновлений
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            
             // API Key из BuildConfig (безопасно)
             .addInterceptor { chain ->
                 val original = chain.request()
@@ -69,11 +74,17 @@ object NetworkModule {
             }
             
             // Принудительное кэширование GET запросов (игнорируем заголовки сервера)
+            // КРИТИЧНО: НЕ кэшируем health check запросы
             .addNetworkInterceptor { chain ->
-                val response = chain.proceed(chain.request())
+                val request = chain.request()
+                val response = chain.proceed(request)
                 
-                // Для GET запросов принудительно устанавливаем кэширование
-                if (chain.request().method == "GET") {
+                // Проверяем, является ли это health check запросом
+                val url = request.url.toString()
+                val isHealthCheck = url.contains("/actuator/health") || url.contains("/actuator/info")
+                
+                // Для GET запросов принудительно устанавливаем кэширование (кроме health check)
+                if (request.method == "GET" && !isHealthCheck) {
                     val cacheControl = okhttp3.CacheControl.Builder()
                         .maxAge(5, TimeUnit.MINUTES) // Кэш на 5 минут
                         .build()
@@ -89,10 +100,15 @@ object NetworkModule {
             }
             
             // Используем кэш даже при отсутствии сети (для GET запросов)
+            // КРИТИЧНО: Отключаем кэш для health check и других критичных запросов
             .addInterceptor { chain ->
                 var request = chain.request()
                 
-                if (request.method == "GET") {
+                // Для health check и других критичных endpoints отключаем кэш
+                val url = request.url.toString()
+                val isHealthCheck = url.contains("/actuator/health") || url.contains("/actuator/info")
+                
+                if (request.method == "GET" && !isHealthCheck) {
                     // Сначала пытаемся взять из кэша, если не старше 5 минут
                     request = request.newBuilder()
                         .cacheControl(
@@ -101,15 +117,24 @@ object NetworkModule {
                                 .build()
                         )
                         .build()
+                } else if (isHealthCheck) {
+                    // Для health check принудительно отключаем кэш
+                    request = request.newBuilder()
+                        .cacheControl(okhttp3.CacheControl.FORCE_NETWORK)
+                        .header("Cache-Control", "no-cache, no-store, must-revalidate")
+                        .header("Pragma", "no-cache")
+                        .header("Expires", "0")
+                        .build()
                 }
                 
                 chain.proceed(request)
             }
             
-            // Таймауты (сокращены для предотвращения зависаний при плохом соединении или отсутствии сети)
-            .connectTimeout(10, TimeUnit.SECONDS)  // Уменьшено с 30 до 10 секунд
-            .readTimeout(15, TimeUnit.SECONDS)     // Уменьшено с 30 до 15 секунд
-            .writeTimeout(10, TimeUnit.SECONDS)    // Уменьшено с 30 до 10 секунд
+            // Таймауты оптимизированы для работы с плохой сетью (2G, медленная)
+            // Увеличены для поддержки медленных соединений, но не слишком большие чтобы не блокировать
+            .connectTimeout(20, TimeUnit.SECONDS)  // Увеличено для 2G и медленной сети
+            .readTimeout(45, TimeUnit.SECONDS)      // Увеличено для больших файлов при медленной сети
+            .writeTimeout(20, TimeUnit.SECONDS)     // Увеличено для медленной загрузки
             
             // Логирование (только в debug)
             .addInterceptor(HttpLoggingInterceptor().apply {
@@ -320,6 +345,8 @@ object NetworkModule {
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .writeTimeout(10, TimeUnit.SECONDS)
+                // Используем HTTP/1.1 для тестирования соединения
+                .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                 .addInterceptor { chain ->
                     val builder = chain.request().newBuilder()
                         .addHeader("X-API-Key", BuildConfig.API_KEY)
