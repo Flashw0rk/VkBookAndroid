@@ -28,6 +28,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Изоляция окружения между тестами (для Orchestrator)
+        testInstrumentationRunnerArguments["clearPackageData"] = "true"
         
         // API ключ из local.properties для безопасности
         val apiKey = keystoreProperties["API_KEY"] as String? ?: "vkbook-2025-secret-key-abc123"
@@ -84,6 +86,8 @@ android {
             isReturnDefaultValues = true
         }
         animationsDisabled = true
+        // Изолированный запуск каждого теста
+        execution = "ANDROIDX_TEST_ORCHESTRATOR"
     }
     
     compileOptions {
@@ -161,6 +165,8 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    // Android Test Orchestrator для изоляции тестов
+    androidTestUtil("androidx.test:orchestrator:1.5.1")
     
     // Firebase (добавляются только если файл google-services.json существует)
     if (rootProject.file("app/google-services.json").exists()) {

@@ -19,6 +19,7 @@ import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.espresso.util.HumanReadables
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -45,6 +46,7 @@ import org.junit.runner.RunWith
  * Запуск: ./gradlew connectedDebugAndroidTest
  */
 @RunWith(AndroidJUnit4::class)
+@LargeTest
 class VkBookAndroidInstrumentedTests {
 
     private val context: Context = ApplicationProvider.getApplicationContext()

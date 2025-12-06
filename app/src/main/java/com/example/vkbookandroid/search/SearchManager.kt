@@ -2,6 +2,7 @@ package com.example.vkbookandroid.search
 
 import android.content.Context
 import android.util.Log
+import com.example.vkbookandroid.BuildConfig
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.LiveData
 import kotlinx.coroutines.*
@@ -35,12 +36,30 @@ class SearchManager(private val context: Context) {
     private val _isIndexReady = MutableLiveData<Boolean>(false)
     val isIndexReady: LiveData<Boolean> = _isIndexReady
     
+    // Кэш префиксов (последний запрос) для мгновенной выдачи при наборе следующего символа
+    private var lastNormalizedQuery: String = ""
+    private var lastPrefixResults: List<SearchResult> = emptyList()
+    private var lastResultsDataVersion: Long = -1L
+    
     // Версионирование данных
     private var dataVersion: Long = 0
     private var lastIndexVersion: Long = -1
     
     // Scope для корутин
     private val searchScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    
+    init {
+        // Загружаем ранее построенный индекс в фоне, чтобы не блокировать UI при инициализации
+        searchScope.launch(Dispatchers.IO) {
+            try {
+                persistentEngine.loadIndexIfPresent()
+                _isIndexReady.postValue(persistentEngine.isIndexReady())
+            } catch (e: Exception) {
+                Log.w("SearchManager", "Failed to load persistent index on init", e)
+                _isIndexReady.postValue(false)
+            }
+        }
+    }
     
     data class SearchResults(
         val results: List<SearchResult>,
@@ -70,13 +89,15 @@ class SearchManager(private val context: Context) {
         
         val normalizedQuery = SearchNormalizer.normalizeSearchQuery(query)
         Log.d("SearchManager", "=== PERFORMING SEARCH ===")
-        Log.d("SearchManager", "Original query: '$query'")
-        Log.d("SearchManager", "Normalized query: '$normalizedQuery'")
-        Log.d("SearchManager", "Data rows: ${data.size}")
-        Log.d("SearchManager", "Headers: ${headers.size}")
+        if (BuildConfig.DEBUG) {
+            Log.d("SearchManager", "Original query: '$query'")
+            Log.d("SearchManager", "Normalized query: '$normalizedQuery'")
+            Log.d("SearchManager", "Data rows: ${data.size}")
+            Log.d("SearchManager", "Headers: ${headers.size}")
+        }
         
         // Обновляем версию данных (хэш), используем как ключ валидности индекса/кэша
-        val currentDataVersion = calculateDataVersion(data)
+        val currentDataVersion = withContext(Dispatchers.Default) { calculateDataVersion(data) }
         val dataChanged = currentDataVersion != dataVersion
         
         if (dataChanged) {
@@ -99,8 +120,50 @@ class SearchManager(private val context: Context) {
                     requestId = requestId,
                     normalizedQuery = normalizedQuery
                 )
+                // Обновляем префикс-контекст
+                lastNormalizedQuery = normalizedQuery
+                lastPrefixResults = cachedResult
+                lastResultsDataVersion = currentDataVersion
                 addToSearchHistory(normalizedQuery)
                 return
+            }
+        }
+        
+        // МГНОВЕННАЯ ВЫДАЧА по префиксу предыдущего запроса (если применимо)
+        if (!forceRefresh && !dataChanged &&
+            lastResultsDataVersion == currentDataVersion &&
+            lastNormalizedQuery.isNotBlank() &&
+            normalizedQuery.length > lastNormalizedQuery.length &&
+            normalizedQuery.startsWith(lastNormalizedQuery) &&
+            lastPrefixResults.isNotEmpty()
+        ) {
+            try {
+                // Фильтруем предыдущие результаты под новое условие, пересчитываем score/поля
+                val quickFiltered = withContext(Dispatchers.Default) {
+                    lastPrefixResults.mapNotNull { prev ->
+                        val score = calculateMatchScore(prev.data, normalizedQuery, headers, selectedColumn)
+                        if (score == 0) null else {
+                            val matchedColumn = findMatchedColumn(prev.data, normalizedQuery, headers, selectedColumn)
+                            val matchedValue = getMatchedValue(prev.data, normalizedQuery, headers, selectedColumn)
+                            SearchResult(
+                                data = prev.data,
+                                matchScore = score,
+                                matchedColumn = matchedColumn,
+                                matchedValue = matchedValue
+                            )
+                        }
+                    }.sortedByDescending { it.matchScore }
+                }
+                _searchResults.value = SearchResults(
+                    results = quickFiltered,
+                    totalCount = quickFiltered.size,
+                    searchTime = 0,
+                    fromCache = true,
+                    requestId = requestId,
+                    normalizedQuery = normalizedQuery
+                )
+            } catch (_: Throwable) {
+                // Безопасно игнорируем и продолжаем полным поиском
             }
         }
         
@@ -155,8 +218,10 @@ class SearchManager(private val context: Context) {
                 } catch (_: Throwable) { }
                 indices.toList()
             }
-            Log.d("SearchManager", "Search completed: found ${matchingIndices.size} matching indices")
-            Log.d("SearchManager", "Matching indices: $matchingIndices")
+            if (BuildConfig.DEBUG) {
+                Log.d("SearchManager", "Search completed: found ${matchingIndices.size} matching indices")
+                Log.d("SearchManager", "Matching indices: $matchingIndices")
+            }
             
             val results = matchingIndices.mapNotNull { index ->
                 data.getOrNull(index)?.let { rowData ->
@@ -174,7 +239,9 @@ class SearchManager(private val context: Context) {
                 }
             }.sortedByDescending { it.matchScore }
             
-            Log.d("SearchManager", "Final results: ${results.size} items")
+            if (BuildConfig.DEBUG) {
+                Log.d("SearchManager", "Final results: ${results.size} items")
+            }
             
             val searchTime = System.currentTimeMillis() - startTime
             
@@ -193,11 +260,17 @@ class SearchManager(private val context: Context) {
                 requestId = requestId,
                 normalizedQuery = normalizedQuery
             )
+            // Обновляем префикс-контекст
+            lastNormalizedQuery = normalizedQuery
+            lastPrefixResults = results
+            lastResultsDataVersion = currentDataVersion
             
             addToSearchHistory(normalizedQuery)
             
-            Log.d("SearchManager", "Search completed: ${results.size} results in ${searchTime}ms")
-            Log.d("SearchManager", searchMetrics.getStats())
+            if (BuildConfig.DEBUG) {
+                Log.d("SearchManager", "Search completed: ${results.size} results in ${searchTime}ms")
+                Log.d("SearchManager", searchMetrics.getStats())
+            }
             
         } catch (e: Exception) {
             Log.e("SearchManager", "Search error", e)

@@ -7,6 +7,7 @@ import androidx.test.espresso.action.ViewActions.swipeUp
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -22,6 +23,7 @@ import kotlin.system.measureTimeMillis
  * Проверяют плавность скроллинга, время загрузки, использование памяти
  */
 @RunWith(AndroidJUnit4::class)
+@LargeTest
 class PerformanceTests {
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext

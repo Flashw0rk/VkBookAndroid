@@ -7,6 +7,7 @@ import androidx.test.espresso.action.ViewActions.typeText
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.MediumTest
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -22,6 +23,7 @@ import org.junit.runner.RunWith
  * Проверяют поведение приложения в нестандартных ситуациях
  */
 @RunWith(AndroidJUnit4::class)
+@MediumTest
 class EdgeCaseTests {
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext

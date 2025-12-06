@@ -245,39 +245,56 @@ class ChecksScheduleExcelParser {
     }
     
     /**
-     * Парсит числа месяца (1 и 16, 1,16)
+     * Парсит числа месяца.
+     * Поддерживает варианты:
+     * - "1 и 16"
+     * - "1,4" / "1, 4, 17" / "1;4"
+     * - "1 числа" / "1-е число" / "1-го"
+     * - просто "1"
+     *
+     * Внимание: разбор "1 и 3 понедельник" обрабатывается раньше в parseWeekdayOfMonth.
      */
     private fun parseDaysOfMonth(text: String): Set<Int> {
         val days = mutableSetOf<Int>()
-        
-        // Ищем числа, которые НЕ относятся к неделям месяца
-        // "1 и 16" → числа месяца
-        // "1 и 3 понедельник" → НЕ числа месяца
-        
-        if (text.contains("понедельник") || text.contains("вторник") || 
+
+        // Если внутри есть явные дни недели — это не "числа месяца"
+        if (text.contains("понедельник") || text.contains("вторник") ||
             text.contains("среда") || text.contains("четверг") ||
             text.contains("пятниц") || text.contains("суббот") || text.contains("воскресен")) {
-            // Это не числа месяца, а дни недели
             return emptySet()
         }
-        
-        // Ищем паттерн: число "и" число
-        val pattern = Regex("""(\d+)\s*и\s*(\d+)""")
-        pattern.find(text)?.let {
-            val day1 = it.groupValues[1].toInt()
-            val day2 = it.groupValues[2].toInt()
-            if (day1 in 1..31) days.add(day1)
-            if (day2 in 1..31) days.add(day2)
-            return days
+
+        // Нормализуем разделители: "и" / "," / ";" → запятая
+        val normalized = text
+            .replace(Regex("\\s+и\\s+"), ",")
+            .replace(';', ',')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
+        // Извлекаем числа 1..31 с возможными суффиксами "-е"/"-го" и словами "число/числа"
+        // Примеры: "1", "1 числа", "1-е", "1-го", "1-е число"
+        val dayToken = Regex("""\b(\d{1,2})(?:-?е|-?го)?(?:\s*числа|\s*число)?\b""", RegexOption.IGNORE_CASE)
+        dayToken.findAll(normalized).forEach { m ->
+            val day = m.groupValues[1].toIntOrNull()
+            if (day != null && day in 1..31) days.add(day)
         }
-        
-        // Одно число в начале строки
-        val singlePattern = Regex("""^(\d+)\s""")
-        singlePattern.find(text)?.let {
-            val day = it.groupValues[1].toInt()
-            if (day in 1..31) days.add(day)
+
+        // Если ничего не нашли выше, попробуем общий случай: списки через запятую "1,4,17"
+        if (days.isEmpty() && normalized.contains(',')) {
+            normalized.split(',')
+                .map { it.trim() }
+                .forEach { part ->
+                    val d = part.toIntOrNull()
+                    if (d != null && d in 1..31) days.add(d)
+                }
         }
-        
+
+        // Пограничный случай: строка — одно число без суффиксов ("1")
+        if (days.isEmpty()) {
+            val single = text.trim().toIntOrNull()
+            if (single != null && single in 1..31) days.add(single)
+        }
+
         return days
     }
     

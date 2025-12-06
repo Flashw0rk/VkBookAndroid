@@ -2,6 +2,7 @@ package com.example.vkbookandroid.search
 
 import android.content.Context
 import android.util.Log
+import com.example.vkbookandroid.BuildConfig
 import org.example.pult.RowDataDynamic
 import com.example.vkbookandroid.utils.SearchNormalizer
 import java.io.File
@@ -79,6 +80,7 @@ class PersistentSearchEngine(private val context: Context) {
         
         // ОПТИМИЗАЦИЯ: Используем более эффективный цикл
         val tokenSplitRegex = Regex("\\s+")
+        val numericRegex = Regex("\\d{2,6}") // индексируем числовые фрагменты длиной 2..6
         for (i in data.indices) {
             val row = data[i]
             val props = row.getAllProperties()
@@ -95,8 +97,23 @@ class PersistentSearchEngine(private val context: Context) {
                 // ОПТИМИЗАЦИЯ: Разбиваем и добавляем токены в одном проходе
                 norm.split(tokenSplitRegex).forEach { rawToken ->
                     val token = rawToken.lowercase()
-                    if (token.isNotEmpty()) {
-                        map.getOrPut(token) { LinkedHashSet() }.add(i)
+                    if (token.isEmpty()) return@forEach
+                    
+                    // Базовый токен (с сохранением '-' и '/')
+                    map.getOrPut(token) { LinkedHashSet() }.add(i)
+                    
+                    // ДОПОЛНЕНИЕ: Индексируем числовые подстроки для быстрых запросов вроде "95"
+                    // Это позволяет находить "м-95" по запросу "95" без дорогого contains-скана
+                    if (token.any { it.isDigit() }) {
+                        var added = 0
+                        numericRegex.findAll(token).forEach { m ->
+                            val num = m.value
+                            if (num.isNotEmpty()) {
+                                map.getOrPut(num) { LinkedHashSet() }.add(i)
+                                added++
+                                if (added >= 3) return@forEach // ограничим количество индексаций на токен
+                            }
+                        }
                     }
                 }
             }
@@ -201,7 +218,9 @@ class PersistentSearchEngine(private val context: Context) {
         // EXTRACT TOKENS из запроса (обычно один токен, но поддержим несколько)
         val tokens = normalizedQuery.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (tokens.isEmpty()) return emptyList()
-        Log.d("PersistentSearchEngine", "Search tokens=$tokens, index=${getIndexStats()}")
+        if (BuildConfig.DEBUG) {
+            Log.d("PersistentSearchEngine", "Search tokens=$tokens, index=${getIndexStats()}")
+        }
 
         // Жесткие требования по символам: если в последнем токене есть '/' или '-',
         // то для CONTAINS будем учитывать только словарные токены, содержащие эти же символы.
@@ -231,16 +250,21 @@ class PersistentSearchEngine(private val context: Context) {
 
         // 3) CONTAINS (ограниченно): токены, содержащие подстроку, с проверкой границ в скоринге
         if (last != null) {
-            // Чтобы не обходить весь словарь на коротких запросах, ограничим длиной ≥2
-            if (last.length >= 2 && ordered.size < 200) {
+            // Чтобы не обходить весь словарь на коротких запросах, ограничим длиной ≥3
+            if (last.length >= 3 && ordered.size < 100) {
+                var scanned = 0
                 for (de in d) {
+                    scanned++
                     // Дополнительные ограничения: сохраняем семантику специальных символов
                     if (requireSlash && !de.token.contains('/')) continue
                     if (requireDash && !de.token.contains('-')) continue
                     if (de.token.contains(last) && !de.token.startsWith(last) && de.token != last) {
                         readPostingsInto(m, de, ordered)
-                        if (ordered.size > 2000) break
+                        // Ранний выход для снижения нагрузки
+                        if (ordered.size > 1000) break
                     }
+                    // Жёсткий лимит сканирования словаря в contains-фазе
+                    if (scanned > 5000 && ordered.isNotEmpty()) break
                 }
             }
         }

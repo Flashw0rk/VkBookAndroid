@@ -801,7 +801,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         lifecycleScope.launch {
             queryFlow
                 .map { it.trim() }
-                .debounce(300)
+                .debounce(150)
                 .distinctUntilChanged()
                 .flatMapLatest { normalized ->
                     flow {
@@ -825,11 +825,8 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
 
                         try {
                             if (::searchManager.isInitialized) {
-                                if (searchManager.isIndexReady.value != true) {
-                                    waitForIndexAndSearch(normalized, requestIdForThisQuery)
-                                } else {
-                                    performEnhancedSearch(normalized, requestIdForThisQuery)
-                                }
+                                // Ищем сразу; индексация выполняется в фоне (prewarm) или внутри performSearch на IO
+                                performEnhancedSearch(normalized, requestIdForThisQuery)
                             }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) {
