@@ -19,8 +19,12 @@ object ColumnWidthManager {
     fun saveBschuColumnWidths(context: Context, widths: Map<String, Int>, tag: String = "ColumnWidthManager") {
         try {
             val sharedPrefs = context.getSharedPreferences(PREFS_BSCHU, Context.MODE_PRIVATE)
-            sharedPrefs.edit().putString(KEY_BSCHU, Gson().toJson(widths)).apply()
-            Log.d(tag, "БЩУ колонки сохранены: $widths")
+            val success = sharedPrefs.edit().putString(KEY_BSCHU, Gson().toJson(widths)).commit()
+            if (success) {
+                Log.d(tag, "БЩУ колонки сохранены: $widths")
+            } else {
+                Log.e(tag, "Ошибка: не удалось сохранить колонки БЩУ")
+            }
         } catch (e: Exception) {
             Log.e(tag, "Ошибка сохранения БЩУ колонок", e)
         }

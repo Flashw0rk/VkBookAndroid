@@ -564,26 +564,47 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                 }
 
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
-
+                
                 // БАЗА: ширины по умолчанию = 3.5 см до тех пор, пока пользователь их не изменит
                 val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadBschuColumnWidths(requireContext())
                 currentColumnWidths = mutableMapOf()
-                if (savedColumnWidths.isNotEmpty()) {
-                    currentColumnWidths.putAll(savedColumnWidths)
-                } else {
-                    val headersForDefaults = initialColumnWidths.keys.toList()
+                
+                // Для сопоставления используем актуальные заголовки (если доступны), иначе — ключи initialColumnWidths
+                val headersForDefaults = try { (cachedSession ?: pagingSession ?: sessionForInitial).getHeaders() } catch (_: Throwable) { initialColumnWidths.keys.toList() }
+                
+                // Нормализуем сохранённые ширины под актуальные заголовки (без учёта регистра)
+                if (savedColumnWidths.isNotEmpty() && headersForDefaults.isNotEmpty()) {
+                    val normalized = mutableMapOf<String, Int>()
+                    headersForDefaults.forEach { currentHeader ->
+                        val matched = savedColumnWidths.entries.firstOrNull { it.key.equals(currentHeader, ignoreCase = true) }?.value
+                        if (matched != null && matched > 0) {
+                            normalized[currentHeader] = matched
+                        }
+                    }
+                    if (normalized.isNotEmpty()) {
+                        currentColumnWidths.putAll(normalized)
+                        Log.d("DataFragment", "Загружены сохраненные размеры колонок (нормализовано): ${normalized.size} из ${savedColumnWidths.size}")
+                    } else {
+                        Log.w("DataFragment", "Сохраненные размеры не сопоставлены с текущими заголовками, используем значения по умолчанию для недостающих")
+                    }
+                }
+                
+                // Дозаполняем недостающие ширины значениями по умолчанию, не перезаписывая сохранённые
+                if (headersForDefaults.isNotEmpty()) {
                     val xdpi = resources.displayMetrics.xdpi
                     val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     headersForDefaults.forEach { header ->
-                        val h = header?.lowercase() ?: ""
-                        val w = when {
-                            h.contains("место установки ключа") -> px4cm
-                            h.contains("название позиции") || h.startsWith("бел") -> px5cm
-                            else -> px3cm
+                        if (!currentColumnWidths.containsKey(header)) {
+                            val h = header?.lowercase() ?: ""
+                            val w = when {
+                                h.contains("место установки ключа") -> px4cm
+                                h.contains("название позиции") || h.startsWith("бел") -> px5cm
+                                else -> px3cm
+                            }
+                            currentColumnWidths[header] = w
                         }
-                        currentColumnWidths[header] = w
                     }
                 }
 
