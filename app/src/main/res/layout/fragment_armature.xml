@@ -66,12 +66,13 @@
 
             <ProgressBar
                 android:id="@+id/search_progress"
-                style="?android:attr/progressBarStyleSmall"
                 android:layout_width="24dp"
                 android:layout_height="24dp"
                 android:layout_gravity="end|center_vertical"
-                android:layout_marginEnd="12dp"
-                android:visibility="gone" />
+                android:layout_marginEnd="48dp"
+                android:visibility="gone"
+                android:indeterminateTint="?attr/colorPrimary" />
+
         </FrameLayout>
 
     </com.google.android.material.appbar.AppBarLayout>

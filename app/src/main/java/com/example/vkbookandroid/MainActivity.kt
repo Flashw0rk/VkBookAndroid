@@ -18,7 +18,6 @@ import com.example.vkbookandroid.service.SyncService
 import com.example.vkbookandroid.network.NetworkModule
 import com.example.vkbookandroid.utils.AutoSyncSettings
 import com.example.vkbookandroid.security.AdminAccessManager
-import com.example.vkbookandroid.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +27,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
@@ -40,10 +40,6 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 
 class MainActivity : AppCompatActivity() {
     
@@ -62,8 +58,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var syncService: SyncService
     private lateinit var dataRefreshManager: DataRefreshManager
     private var syncJob: Job? = null
+    private var isWaitingServerWake = false
     private var syncButtonDefaultText: String = ""
-    private var syncMode: SyncMode = SyncMode.IDLE
     private val uiJob = SupervisorJob()
     private val uiScope = CoroutineScope(Dispatchers.Main + uiJob)
     private val navigationPrefs by lazy { getSharedPreferences(NAVIGATION_PREFS, MODE_PRIVATE) }
@@ -71,22 +67,6 @@ class MainActivity : AppCompatActivity() {
     // Состояние инициализации
     private var isInitializationComplete = false
     private val initializationListeners = mutableListOf<() -> Unit>()
-    
-    // Отслеживание сети для режима ожидания пробуждения
-    private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var isWaitingForServer = false
-    private var networkAvailableDuringWait = false
-    private val connectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
-    
-    // Периодический wakeup ping каждые 10 минут пока приложение активно
-    private var periodicWakeupJob: Job? = null
-    private val PERIODIC_WAKEUP_INTERVAL_MS = 10 * 60 * 1000L // 10 минут
-    
-    // Подпись файла "График проверок.xlsx" (lastModified:length:path) для дедупликации событий
-    private var checksScheduleFileSignature: String? = null
-    // Debounce и коалесcинг обновлений для ChecksSchedule
-    private var checksRefreshJob: Job? = null
-    
     
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         android.util.Log.d("MainActivity", "=== settingsLauncher получил результат ===")
@@ -202,7 +182,6 @@ class MainActivity : AppCompatActivity() {
         // Инициализация синхронизации
         btnSync = findViewById(R.id.btnSync)
         syncButtonDefaultText = btnSync.text.toString()
-        applySyncButtonMode(SyncMode.IDLE)
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
         progressSync = findViewById(R.id.progressSync)
@@ -211,7 +190,26 @@ class MainActivity : AppCompatActivity() {
         // Загружаем настройки сервера ПЕРЕД созданием SyncService
         loadServerSettings()
         syncService = SyncService(this)
-        
+
+        // ОТПРАВЛЯЕМ ЛЕГКОВЕСНЫЙ PING ДЛЯ ПРОБУЖДЕНИЯ СЕРВЕРА
+        // КРИТИЧНО: Это делается асинхронно в фоне, НЕ блокирует UI и запуск приложения
+        // Запрос fire-and-forget - не ждет ответа, просто "разбудит" сервер
+        // force = true гарантирует отправку запроса даже если недавно уже отправляли или сети нет
+        // КРИТИЧНО: Даже если сети нет, запрос быстро завершится по таймауту (2 сек) и не помешает работе
+        val currentUrl = NetworkModule.getCurrentBaseUrl()
+        Log.d("MainActivity", "Sending wakeup ping on app startup (async, non-blocking)...")
+        Log.d("MainActivity", "Current server URL: '$currentUrl'")
+
+        if (currentUrl.isBlank()) {
+            Log.e("MainActivity", "ERROR: Cannot send wakeup ping - URL is blank!")
+        } else {
+            // КРИТИЧНО: Вызываем асинхронно, не блокируя onCreate
+            // wakeupServerPing уже асинхронный внутри, но для гарантии запускаем в фоне
+            uiScope.launch(Dispatchers.IO) {
+                syncService.wakeupServerPing(force = true)
+            }
+        }
+
         setupSyncButton()
         setupSettingsButton()
         setupHashInfoButton()
@@ -221,27 +219,6 @@ class MainActivity : AppCompatActivity() {
         
         // КРИТИЧНО: Настраиваем отслеживание файлов для автоматического обновления
         setupFileWatching()
-        
-        // ОТПРАВЛЯЕМ ЛЕГКОВЕСНЫЙ PING ДЛЯ ПРОБУЖДЕНИЯ СЕРВЕРА
-        // КРИТИЧНО: Это делается асинхронно в фоне, НЕ блокирует UI и запуск приложения
-        // Запрос fire-and-forget - не ждет ответа, просто "разбудит" сервер
-        // force = true гарантирует отправку запроса даже если недавно уже отправляли или сети нет
-        // КРИТИЧНО: Даже если сети нет, запрос быстро завершится по таймауту (2 сек) и не помешает работе
-        if (::syncService.isInitialized) {
-            val currentUrl = NetworkModule.getCurrentBaseUrl()
-            Log.d("MainActivity", "Sending wakeup ping on app startup (async, non-blocking)...")
-            Log.d("MainActivity", "Current server URL: '$currentUrl'")
-            
-            if (currentUrl.isBlank()) {
-                Log.e("MainActivity", "ERROR: Cannot send wakeup ping - URL is blank!")
-            } else {
-                // КРИТИЧНО: Вызываем асинхронно, не блокируя onCreate
-                // wakeupServerPing уже асинхронный внутри, но для гарантии запускаем в фоне
-                uiScope.launch(Dispatchers.IO) {
-                    syncService.wakeupServerPing(force = true)
-                }
-            }
-        }
         
         // ПРОВЕРЯЕМ НАСТРОЙКИ АВТОСИНХРОНИЗАЦИИ ПРИ ЗАПУСКЕ
         if (AutoSyncSettings.isSyncOnStartupEnabled(this)) {
@@ -269,27 +246,10 @@ class MainActivity : AppCompatActivity() {
 
         // Добавляем пункт "О приложении" в меню (через уже существующую иконку меню)
 
-        // Инициализация аналитики после первого кадра, чтобы не задерживать появление UI
-        window?.decorView?.post {
-            try {
-                com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
-                com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
-                com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
-            } catch (_: Throwable) { }
-        }
-    }
-    
-    override fun onPause() {
-        super.onPause()
-        // Останавливаем FileWatcher при уходе в фон для экономии батареи
-        dataRefreshManager.pauseAllWatchers()
-        android.util.Log.d("MainActivity", "FileWatcher paused (app in background)")
-        // Отменяем NetworkCallback при уходе в фон (если не ждем сервер)
-        if (!isWaitingForServer) {
-            unregisterNetworkCallback()
-        }
-        // КРИТИЧНО: Останавливаем периодический wakeup ping для экономии батареи
-        stopPeriodicWakeupPing()
+        // Инициализация аналитики (безопасно, работает без Firebase)
+        com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
+        com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
+        com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
     }
     
     override fun onResume() {
@@ -299,9 +259,6 @@ class MainActivity : AppCompatActivity() {
         dataRefreshManager.resumeAllWatchers()
         
         android.util.Log.d("MainActivity", "=== onResume() вызван ===")
-        
-        // КРИТИЧНО: Запускаем периодический wakeup ping каждые 10 минут пока приложение активно
-        startPeriodicWakeupPing()
         
         val adminChanged = updateAdminModeState()
         
@@ -345,23 +302,6 @@ class MainActivity : AppCompatActivity() {
                 applySharedSearchToCurrentTab(viewPager.currentItem)
             }
         }
-        
-        // Восстанавливаем состояние кнопки синхронизации (IDLE/WAITING/SYNCING), чтобы надпись не сбрасывалась
-        try {
-            // КРИТИЧНО: Если синхронизация активна, принудительно восстанавливаем режим WAITING_SERVER или SYNCING
-            // Это предотвращает сброс кнопки в IDLE при сворачивании/разворачивании приложения
-            if (syncJob?.isActive == true) {
-                // Определяем режим по текущему статусу
-                val currentMode = when {
-                    syncMode == SyncMode.SYNCING -> SyncMode.SYNCING
-                    else -> SyncMode.WAITING_SERVER // По умолчанию WAITING_SERVER для активных заданий
-                }
-                applySyncButtonMode(currentMode)
-                Log.d("MainActivity", "onResume: восстановлен активный режим синхронизации $currentMode")
-            } else {
-                applySyncButtonMode(syncMode)
-            }
-        } catch (_: Throwable) {}
     }
 
     /**
@@ -538,48 +478,28 @@ class MainActivity : AppCompatActivity() {
      * Настройка кнопки синхронизации
      */
     private fun setupSyncButton() {
+        // Добавляем подсказку
+        btnSync.setOnLongClickListener {
+            Toast.makeText(this, "Обновление баз данных с сервера", Toast.LENGTH_SHORT).show()
+            true
+        }
+        
         // РУЧНАЯ СИНХРОНИЗАЦИЯ - автообновления отключены
         // Добавляем диагностику по двойному тапу
         var lastTapTime = 0L
         btnSync.setOnClickListener {
-            if (syncMode == SyncMode.WAITING_SERVER || syncMode == SyncMode.SYNCING) {
+            if (isWaitingServerWake) {
                 cancelPendingSync()
                 return@setOnClickListener
             }
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < 500) {
-                if (BuildConfig.DEBUG) {
-                    diagnoseFiles()
-                    Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
-                } else {
-                    // В релизных сборках скрываем отладочную диагностику и просто запускаем синхронизацию
-                    startSync()
-                }
+                diagnoseFiles()
+                Toast.makeText(this, "Диагностика файлов выполнена. Смотрите логи.", Toast.LENGTH_LONG).show()
             } else {
                 startSync()
             }
             lastTapTime = currentTime
-        }
-        
-        // Длинное нажатие - меню с подсказкой и хешами
-        btnSync.setOnLongClickListener {
-            val items = arrayOf(
-                "Показать подсказку",
-                "Показать хеши"
-            )
-            androidx.appcompat.app.AlertDialog.Builder(this)
-                .setItems(items) { dialog, which ->
-                    when (which) {
-                        0 -> Toast.makeText(this, "Обновление баз данных с сервера", Toast.LENGTH_SHORT).show()
-                        1 -> {
-                            val hashDialog = HashInfoDialog.newInstance()
-                            hashDialog.show(supportFragmentManager, "HashInfoDialog")
-                        }
-                    }
-                    dialog.dismiss()
-                }
-                .show()
-            true
         }
     }
     
@@ -591,45 +511,27 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun setupHashInfoButton() {
-        // Убрано - функционал перенесен в setupSyncButton()
+        // Добавляем длинное нажатие на кнопку синхронизации для просмотра хешей
+        btnSync.setOnLongClickListener {
+            val hashDialog = HashInfoDialog.newInstance()
+            hashDialog.show(supportFragmentManager, "HashInfoDialog")
+            true
+        }
+
+        // Убираем скрытую активацию режима разработчика
     }
     
     private fun loadServerSettings() {
         val currentUrl = readServerUrlFromPreferences()
-        android.util.Log.d("MainActivity", "loadServerSettings: currentUrl='$currentUrl'")
-        
-        // КРИТИЧНО: Проверяем, что URL не пустой
-        if (currentUrl.isBlank()) {
-            android.util.Log.e("MainActivity", "ERROR: Server URL is blank! Using default URL.")
-            val defaultUrl = "https://vkbookserver.onrender.com/"
-            NetworkModule.updateBaseUrl(defaultUrl)
-        } else {
-            NetworkModule.updateBaseUrl(currentUrl)
-        }
-        
-        // Проверяем финальный URL после обновления
-        val finalUrl = NetworkModule.getCurrentBaseUrl()
-        android.util.Log.d("MainActivity", "loadServerSettings: finalUrl='$finalUrl'")
-        
+        android.util.Log.d("MainActivity", "loadServerSettings: currentUrl=$currentUrl")
+        NetworkModule.updateBaseUrl(currentUrl)
         updateAdminModeState()
         // После возврата из настроек применяем видимость вкладок
         try { applyTabsVisibility() } catch (_: Throwable) {}
     }
     
     private fun checkConnectionOnStartup() {
-        // КРИТИЧНО: Проверка соединения при запуске - полностью асинхронная, не блокирует UI
-        // СНАЧАЛА проверяем наличие сети - если сети нет, не делаем запрос вообще
-        // Это гарантирует работу приложения в офлайн режиме без задержек
-        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this)) {
-            // Офлайн режим - приложение работает нормально с локальными данными
-            updateSyncStatus("Офлайн режим")
-            applySyncButtonMode(SyncMode.IDLE)
-            Log.d("MainActivity", "Offline mode detected - app works with local data only")
-            return
-        }
-        
-        // КРИТИЧНО: Запускаем проверку асинхронно в фоне, не блокируя UI
-        // Даже если проверка займет время, приложение продолжает работать
+        // Проверяем соединение при запуске
         uiScope.launch {
             updateSyncStatus("Проверка соединения...")
             val isConnected = withContext(Dispatchers.IO) {
@@ -637,10 +539,11 @@ class MainActivity : AppCompatActivity() {
             }
             if (isConnected) {
                 updateSyncStatus("Готов к обновлению")
+                btnSync.isEnabled = true
             } else {
                 updateSyncStatus("Сервер недоступен")
+                btnSync.isEnabled = false
             }
-            applySyncButtonMode(SyncMode.IDLE)
         }
     }
     
@@ -658,33 +561,34 @@ class MainActivity : AppCompatActivity() {
         if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this)) {
             updateSyncStatus("Нет сети", 0)
             Toast.makeText(this, "Нет сети", Toast.LENGTH_SHORT).show()
-            applySyncButtonMode(SyncMode.IDLE)
             Log.d("MainActivity", "No network available - sync cancelled")
             return
         }
 
         syncJob = uiScope.launch {
-            applySyncButtonMode(SyncMode.WAITING_SERVER)
             try {
                 val serverReady = waitForServerWakeup()
                 if (!serverReady) {
-                    updateSyncStatus("Нет соединения", 0)
+                    updateSyncStatus("Сервер недоступен", 0)
                     hideSyncProgress()
-                    Toast.makeText(this@MainActivity, "Нет соединения", Toast.LENGTH_SHORT).show()
-                } else {
-                    applySyncButtonMode(SyncMode.SYNCING)
-                    showSyncProgress()
-                    updateSyncStatus("Подключение к серверу...", 0)
-                    
-                    val result = withContext(Dispatchers.IO) {
-                        syncService.syncAll { percent, type ->
-                            withContext(Dispatchers.Main) {
-                                updateSyncStatus(type, percent)
-                            }
+                    resetSyncButtonState()
+                    return@launch
+                }
+                
+                btnSync.isEnabled = false
+                btnSync.text = syncButtonDefaultText
+                showSyncProgress()
+                updateSyncStatus("Подключение к серверу...", 0)
+                
+                val result = withContext(Dispatchers.IO) {
+                    syncService.syncAll { percent, type ->
+                        withContext(Dispatchers.Main) {
+                            updateSyncStatus(type, percent)
                         }
                     }
-                    
-                    when {
+                }
+                
+                when {
                     result.rateLimitReached -> {
                         updateSyncStatus("Лимит запросов достигнут", 100)
                         hideSyncProgress()
@@ -702,9 +606,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         refreshFragmentsData()
-                        if (BuildConfig.DEBUG) {
-                            diagnoseFilesAfterSync()
-                        }
+                        diagnoseFilesAfterSync()
                         com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
                     }
                     result.serverConnected -> {
@@ -718,10 +620,9 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
                     }
                     else -> {
-                        updateSyncStatus("Нет соединения", 0)
+                        updateSyncStatus("Сервер недоступен", 0)
                         hideSyncProgress()
-                        Toast.makeText(this@MainActivity, "Нет соединения", Toast.LENGTH_SHORT).show()
-                    }
+                        Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (ce: CancellationException) {
@@ -732,7 +633,9 @@ class MainActivity : AppCompatActivity() {
                 hideSyncProgress()
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                applySyncButtonMode(SyncMode.IDLE)
+                if (!isWaitingServerWake) {
+                    resetSyncButtonState()
+                }
                 syncJob = null
             }
         }
@@ -752,10 +655,6 @@ class MainActivity : AppCompatActivity() {
         tvSyncStatus.text = status
         progressSync.progress = percent
         tvProgressPercent.text = "$percent%"
-        // Устанавливаем фокус для работы marquee при длинном тексте
-        if (status.length > 20) {
-            tvSyncStatus.isSelected = true
-        }
     }
     
     /**
@@ -776,104 +675,75 @@ class MainActivity : AppCompatActivity() {
         tvProgressPercent.visibility = android.view.View.GONE
     }
 
+    private fun resetSyncButtonState() {
+        btnSync.isEnabled = true
+        btnSync.text = syncButtonDefaultText
+    }
+
     private fun cancelPendingSync() {
-        if (syncJob == null) return
         syncJob?.cancel()
+        exitServerWarmupState()
+        resetSyncButtonState()
         updateSyncStatus("Обновление отменено", 0)
         hideSyncProgress()
-        applySyncButtonMode(SyncMode.IDLE)
-        // Отменяем NetworkCallback при отмене синхронизации
-        isWaitingForServer = false
-        unregisterNetworkCallback()
+    }
+
+    private fun enterServerWarmupState() {
+        if (isWaitingServerWake) return
+        isWaitingServerWake = true
+        btnSync.text = "Отменить обновление"
+        btnSync.isEnabled = true
+    }
+
+    private fun exitServerWarmupState() {
+        if (!isWaitingServerWake) return
+        isWaitingServerWake = false
+        btnSync.text = syncButtonDefaultText
     }
 
     private suspend fun waitForServerWakeup(): Boolean {
-        // НЕ проверяем сеть - пусть попытки продолжаются даже без сети
-        // Это позволяет "разбудить" сервер даже при временных проблемах с сетью
-        
         // КРИТИЧНО: Отправляем запрос на пробуждение сервера ПЕРЕД началом проверок
         Log.d("MainActivity", "Sending wakeup ping to server...")
         withContext(Dispatchers.IO) {
             syncService.wakeupServerPing(force = true) // force = true пропускает проверку сети и кэширование
         }
-        
-        // Регистрируем NetworkCallback для отслеживания изменений сети
-        isWaitingForServer = true
-        networkAvailableDuringWait = false
-        registerNetworkCallback()
-        
+
+        // Регистрируем состояние ожидания сервера
+        enterServerWarmupState()
+
         try {
             updateSyncStatus("Отправлен запрос на пробуждение сервера...")
             // Держим статус 3 секунды перед началом цикла попыток
             delay(3000)
-            val readyImmediately = withContext(Dispatchers.IO) {
-                runCatching { syncService.checkServerConnectionForWakeup() }
-                    .onFailure { e ->
-                        val errorMessage = getNetworkErrorMessage(e)
-                        Log.w("MainActivity", "Initial server check failed: ${e.message}")
-                        if (isRateLimitRelatedException(e)) {
-                            Log.w("MainActivity", "Rate limit detected in initial check")
-                            updateSyncStatus("Достигнут лимит запросов. Подождите 30-60 секунд.")
-                        } else {
-                            updateSyncStatus("Ошибка: $errorMessage")
-                        }
-                    }
-                    .getOrDefault(false)
-            }
-            
-            if (readyImmediately) {
-                return true
-            }
-            
-            // Exponential backoff: начинаем с 5 секунд, увеличиваем до максимума 30 секунд
-            var delayMs = 5000L // Начинаем с 5 секунд
+
             val maxAttempts = 10
+            var delayMs = 5000L // Начинаем с 5 секунд
             val maxDelayMs = 30000L // Максимум 30 секунд
-            
+
             // Показываем прогресс-бар во время ожидания
             showSyncProgress()
-            
+
             repeat(maxAttempts) { attempt ->
                 if (!currentCoroutineContext().isActive) return false
-                
-                // Если сеть появилась во время ожидания, пробуем сразу
-                if (networkAvailableDuringWait && attempt > 0) {
-                    Log.d("MainActivity", "Network became available, trying connection immediately")
-                    networkAvailableDuringWait = false // Сбрасываем флаг
-                    // Пропускаем задержку и сразу проверяем соединение
-                } else {
-                    // НЕ проверяем сеть - продолжаем попытки даже без сети
-                    // Запросы будут быстро завершаться по таймауту, не блокируя систему
-                    
-                    // Показываем прогресс с временем до следующей попытки
-                    val delaySeconds = (delayMs / 1000).toInt()
-                    val progressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95) // До 95%, остальное после успеха
-                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (следующая через ${delaySeconds} сек)", progressPercent)
-                    
-                    // Exponential backoff с jitter (случайная задержка ±20% для распределения нагрузки)
-                    val jitter = (delayMs * 0.2 * (Math.random() - 0.5)).toLong()
-                    val actualDelay = (delayMs + jitter).coerceIn(1000L, maxDelayMs)
-                    
-                    // Показываем обратный отсчет каждую секунду
-                    val totalSeconds = (actualDelay / 1000).toInt()
-                    for (second in totalSeconds downTo 1) {
-                        if (!currentCoroutineContext().isActive) return false
-                        // Если сеть появилась, прерываем отсчет
-                        if (networkAvailableDuringWait) {
-                            Log.d("MainActivity", "Network became available during countdown, breaking")
-                            networkAvailableDuringWait = false
-                            break
-                        }
-                        updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (через ${second} сек)", progressPercent)
-                        delay(1000)
-                    }
+
+                // Показываем прогресс с временем до следующей попытки
+                val delaySeconds = (delayMs / 1000).toInt()
+                val progressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95) // До 95%, остальное после успеха
+                updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (следующая через ${delaySeconds} сек)", progressPercent)
+
+                // Показываем обратный отсчет каждую секунду
+                val totalSeconds = (delayMs / 1000).toInt()
+                for (second in totalSeconds downTo 1) {
+                    if (!currentCoroutineContext().isActive) return false
+                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (через ${second} сек)", progressPercent)
+                    delay(1000)
                 }
-                
+
                 if (!currentCoroutineContext().isActive) return false
-                
+
                 // Вычисляем progressPercent для текущей попытки
                 val currentProgressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95)
-                
+
                 // КРИТИЧНО: Отправляем запрос на пробуждение перед каждой проверкой соединения
                 // Это гарантирует, что сервер получает запросы и "просыпается"
                 Log.d("MainActivity", "Sending wakeup ping before attempt ${attempt + 1}")
@@ -883,15 +753,15 @@ class MainActivity : AppCompatActivity() {
 
                 // Небольшая задержка после отправки ping, чтобы запрос успел отправиться
                 delay(500)
-                
+
                 // Проверка соединения в фоне (параллельный поток, БЕЗ проверки сети)
                 val isReady = withContext(Dispatchers.IO) {
                     runCatching { syncService.checkServerConnectionForWakeup() }
                         .onFailure { e ->
-                            val errorMessage = getNetworkErrorMessage(e)
+                            val errorMessage = e.message ?: "Неизвестная ошибка"
                             Log.w("MainActivity", "Server wake check failed on attempt ${attempt + 1}: ${e.message}")
                             if (isRateLimitRelatedException(e)) {
-                                Log.w("MainActivity", "Rate limit detected during wakeup check - stopping wakeup process")
+                                Log.w("MainActivity", "Rate limit detected during wakeup check")
                                 withContext(Dispatchers.Main) {
                                     updateSyncStatus("Достигнут лимит запросов. Прекращаем попытки пробуждения.")
                                 }
@@ -905,137 +775,22 @@ class MainActivity : AppCompatActivity() {
                         }
                         .getOrDefault(false)
                 }
-                
+
                 if (isReady) {
                     updateSyncStatus("Сервер активен, начинаем обновление…", 100)
                     return true
                 }
-                
+
                 // Увеличиваем задержку для следующей попытки (exponential backoff)
                 delayMs = minOf(delayMs * 2, maxDelayMs)
             }
-            
+
             // После 10 неудачных попыток
             hideSyncProgress()
             return false
         } finally {
-            // Отменяем регистрацию NetworkCallback
-            unregisterNetworkCallback()
-            isWaitingForServer = false
-        }
-    }
-    
-    /**
-     * Регистрация NetworkCallback для отслеживания изменений сети
-     */
-    private fun registerNetworkCallback() {
-        if (networkCallback != null) {
-            return // Уже зарегистрирован
-        }
-        
-        networkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                Log.d("MainActivity", "Network became available during server wakeup")
-                if (isWaitingForServer) {
-                    networkAvailableDuringWait = true
-                }
-            }
-            
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                                 networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                if (hasInternet && isWaitingForServer) {
-                    Log.d("MainActivity", "Network validated and available during server wakeup")
-                    networkAvailableDuringWait = true
-                }
-            }
-        }
-        
-        val networkRequest = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .build()
-        
-        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
-        Log.d("MainActivity", "NetworkCallback registered for server wakeup")
-    }
-    
-    /**
-     * Отмена регистрации NetworkCallback
-     */
-    private fun unregisterNetworkCallback() {
-        networkCallback?.let {
-            try {
-                connectivityManager.unregisterNetworkCallback(it)
-                Log.d("MainActivity", "NetworkCallback unregistered")
-            } catch (e: Exception) {
-                Log.w("MainActivity", "Error unregistering NetworkCallback: ${e.message}")
-            }
-            networkCallback = null
-        }
-    }
-    
-    /**
-     * Запустить периодический wakeup ping каждые 10 минут пока приложение активно
-     * КРИТИЧНО: Оптимизировано для минимальной нагрузки на устройство:
-     * - Fire-and-forget (не ждем ответа)
-     * - Короткие таймауты (2 сек)
-     * - Проверка сети перед запросом
-     * - Кэширование в SyncService предотвращает дубликаты
-     */
-    private fun startPeriodicWakeupPing() {
-        // Останавливаем предыдущий если есть
-        stopPeriodicWakeupPing()
-        
-        // Запускаем периодический wakeup ping в фоне
-        periodicWakeupJob = uiScope.launch {
-            while (isActive) {
-                try {
-                    // КРИТИЧНО: Проверяем сеть перед запросом (быстрая проверка, не блокирует)
-                    if (com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this@MainActivity)) {
-                        // Отправляем wakeup ping асинхронно, не блокируя корутину
-                        // force = false использует кэширование SyncService (не чаще 1 раза в 5 минут)
-                        syncService.wakeupServerPing(force = false)
-                        Log.d("MainActivity", "Periodic wakeup ping sent (every 10 minutes)")
-                    } else {
-                        Log.d("MainActivity", "Periodic wakeup ping skipped (offline mode)")
-                    }
-                } catch (e: Exception) {
-                    Log.w("MainActivity", "Error in periodic wakeup ping: ${e.message}")
-                }
-                
-                // Ждем 10 минут до следующего запроса
-                delay(PERIODIC_WAKEUP_INTERVAL_MS)
-            }
-        }
-        
-        Log.d("MainActivity", "Periodic wakeup ping started (every 10 minutes)")
-    }
-    
-    /**
-     * Остановить периодический wakeup ping
-     * Вызывается при onPause() и onDestroy() для экономии батареи
-     */
-    private fun stopPeriodicWakeupPing() {
-        periodicWakeupJob?.cancel()
-        periodicWakeupJob = null
-        Log.d("MainActivity", "Periodic wakeup ping stopped")
-    }
-    
-    /**
-     * Получить понятное сообщение об ошибке сети
-     */
-    private fun getNetworkErrorMessage(e: Throwable): String {
-        return when {
-            e is java.net.SocketTimeoutException -> "Таймаут соединения"
-            e is java.net.UnknownHostException -> "Сервер не найден (проверьте адрес)"
-            e is java.net.ConnectException -> "Не удалось подключиться к серверу"
-            e is java.net.NoRouteToHostException -> "Нет маршрута к серверу"
-            e is javax.net.ssl.SSLException -> "Ошибка SSL соединения"
-            e.message?.contains("timeout", ignoreCase = true) == true -> "Таймаут запроса"
-            e.message?.contains("connection", ignoreCase = true) == true -> "Ошибка соединения"
-            e.message?.contains("network", ignoreCase = true) == true -> "Проблема с сетью"
-            else -> "Ошибка сети: ${e.message ?: "Неизвестная ошибка"}"
+            // Отменяем регистрацию состояния ожидания
+            exitServerWarmupState()
         }
     }
     
@@ -1516,163 +1271,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Настраиваем отслеживание для ChecksScheduleFragment (устойчиво к вариантам пробелов в имени)
-        setupChecksScheduleWatchers()
+        // Настраиваем отслеживание для ChecksScheduleFragment (График проверок .xlsx - с пробелом!)
+        val checksFilePath = filesDir.resolve("data").resolve("График проверок .xlsx").absolutePath
+        dataRefreshManager.startWatching(checksFilePath) {
+            Log.d("MainActivity", "График проверок.xlsx changed, refreshing ChecksScheduleFragment")
+                uiScope.launch {
+                    try {
+                        val checksFragment = getFragmentByGlobalPosition(5) as? ChecksScheduleFragment
+                    checksFragment?.let { (it as RefreshableFragment).refreshData() }
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Error refreshing ChecksScheduleFragment", e)
+                }
+            }
+        }
         
         Log.d("MainActivity", "File watching setup completed")
-    }
-    
-    /**
-     * Устойчивое слежение за файлом "График проверок.xlsx" с учётом вариантов пробелов.
-     * Алгоритм:
-     * 1) Сначала используем заданный (канонический) путь без лишних пробелов, если файл существует.
-     * 2) Если канонического файла нет — пробуем «наследный» путь с пробелом перед расширением, если он существует.
-     * 3) Если оба не найдены — сканируем папку data и добавляем все существующие варианты,
-     *    у которых имя после схлопывания пробелов равно "График проверок.xlsx".
-     */
-    private fun setupChecksScheduleWatchers() {
-        try {
-            val dataDir = filesDir.resolve("data")
-            val canonicalName = "График проверок.xlsx"
-            val legacyName = "График проверок .xlsx"
-            val canonicalFile = dataDir.resolve(canonicalName)
-            val legacyFile = dataDir.resolve(legacyName)
-            val candidates = LinkedHashSet<String>()
-            
-            // 1) Канонический файл, если существует
-            if (canonicalFile.exists()) {
-                candidates.add(canonicalFile.absolutePath)
-                checksScheduleFileSignature = computeFileSignature(canonicalFile)
-            }
-            // 2) Наследный вариант, если существует
-            if (legacyFile.exists()) {
-                candidates.add(legacyFile.absolutePath)
-                if (checksScheduleFileSignature == null) {
-                    checksScheduleFileSignature = computeFileSignature(legacyFile)
-                }
-            }
-            // 3) Если обоих нет — сканируем существующие файлы в data
-            if (candidates.isEmpty() && dataDir.exists()) {
-                val normalizedTarget = normalizeSpaces(canonicalName).lowercase()
-                dataDir.listFiles()?.forEach { f ->
-                    val name = f.name
-                    val normalized = normalizeSpaces(name).lowercase()
-                    if (normalized == normalizedTarget) {
-                        candidates.add(f.absolutePath)
-                        if (checksScheduleFileSignature == null) {
-                            checksScheduleFileSignature = computeFileSignature(f)
-                        }
-                    }
-                }
-            }
-            
-            // Если ничего не нашли — выходим тихо (файл появится после синхронизации)
-            if (candidates.isEmpty()) {
-                Log.w("MainActivity", "ChecksSchedule watcher: no matching files found yet in ${dataDir.absolutePath}")
-                return
-            }
-            
-            // Регистрируем watchers для всех найденных вариантов
-            candidates.forEach { path ->
-                dataRefreshManager.startWatching(path) {
-                    Log.d("MainActivity", "ChecksSchedule file event: $path")
-                    startChecksRefreshDebounced()
-                }
-            }
-            
-            // Дополнительно вешаем watcher на каталог, чтобы ловить поздние появления/переименования
-            if (dataDir.exists()) {
-                dataRefreshManager.startWatching(dataDir.absolutePath) {
-                    Log.d("MainActivity", "ChecksSchedule directory event in ${dataDir.absolutePath}")
-                    startChecksRefreshDebounced()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error setting up ChecksSchedule watchers", e)
-        }
-    }
-    
-    private fun normalizeSpaces(name: String): String {
-        return name.replace(Regex("\\s+"), " ").trim()
-    }
-    
-    private fun computeFileSignature(file: java.io.File?): String? {
-        return file?.let { "${it.lastModified()}:${it.length()}:${it.absolutePath}" }
-    }
-    
-    private fun findChecksScheduleFile(): java.io.File? {
-        val dataDir = filesDir.resolve("data")
-        if (!dataDir.exists()) return null
-        val canonicalName = "График проверок.xlsx"
-        val legacyName = "График проверок .xlsx"
-        val canonical = dataDir.resolve(canonicalName)
-        if (canonical.exists()) return canonical
-        val legacy = dataDir.resolve(legacyName)
-        if (legacy.exists()) return legacy
-        val normalizedTarget = normalizeSpaces(canonicalName).lowercase()
-        dataDir.listFiles()?.forEach { f ->
-            if (normalizeSpaces(f.name).lowercase() == normalizedTarget) return f
-        }
-        return null
-    }
-    
-    private fun startChecksRefreshDebounced() {
-        try {
-            checksRefreshJob?.cancel()
-        } catch (_: Throwable) { }
-        checksRefreshJob = uiScope.launch {
-            try {
-                delay(CHECKS_EVENT_DEBOUNCE_MS)
-                val target = withContext(Dispatchers.IO) { findChecksScheduleFile() }
-                if (target == null) {
-                    Log.w("MainActivity", "ChecksSchedule refresh: target file not found")
-                    return@launch
-                }
-                val stable = withContext(Dispatchers.IO) { waitForFileStable(target, stableWindowMs = 300L, maxWaitMs = 2000L) }
-                if (!stable) {
-                    Log.w("MainActivity", "ChecksSchedule refresh: file not stabilized in time, skipping")
-                    return@launch
-                }
-                val newSig = withContext(Dispatchers.IO) { computeFileSignature(target) }
-                if (newSig != null && newSig != checksScheduleFileSignature) {
-                    checksScheduleFileSignature = newSig
-                    Log.d("MainActivity", "ChecksSchedule refresh triggered after debounce+stabilize")
-                    val checksFragment = getFragmentByGlobalPosition(5) as? ChecksScheduleFragment
-                    checksFragment?.let { (it as RefreshableFragment).refreshData() }
-                } else {
-                    Log.d("MainActivity", "ChecksSchedule refresh skipped (no signature change)")
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Error in startChecksRefreshDebounced", e)
-            }
-        }
-    }
-    
-    private suspend fun waitForFileStable(
-        file: java.io.File,
-        stableWindowMs: Long = 300L,
-        maxWaitMs: Long = 2000L
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            val start = System.currentTimeMillis()
-            var stableAccum = 0L
-            var lastLen = file.length()
-            var lastMtime = file.lastModified()
-            while (System.currentTimeMillis() - start < maxWaitMs) {
-                delay(100)
-                val len = file.length()
-                val mtime = file.lastModified()
-                if (len == lastLen && mtime == lastMtime) {
-                    stableAccum += 100
-                    if (stableAccum >= stableWindowMs) return@withContext true
-                } else {
-                    stableAccum = 0L
-                    lastLen = len
-                    lastMtime = mtime
-                }
-            }
-            false
-        }
     }
     
     /**
@@ -1713,10 +1326,6 @@ class MainActivity : AppCompatActivity() {
         // Очищаем ресурсы DataRefreshManager
         dataRefreshManager.cleanup()
         uiJob.cancel()
-        // Отменяем NetworkCallback при уничтожении активности
-        unregisterNetworkCallback()
-        // КРИТИЧНО: Останавливаем периодический wakeup ping при уничтожении
-        stopPeriodicWakeupPing()
     }
     
     /**
@@ -1728,10 +1337,8 @@ class MainActivity : AppCompatActivity() {
         // НЕ очищаем кэш - файлы уже обновлены синхронизацией
         // Просто обновляем данные в фрагментах
         try {
-            // Диагностика файлов перед обновлением (только debug)
-            if (BuildConfig.DEBUG) {
-                diagnoseFiles()
-            }
+            // Диагностика файлов перед обновлением
+            diagnoseFiles()
             
             val dataFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
             val armatureFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment
@@ -1900,62 +1507,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadThemeConfiguration() {
-        // КРИТИЧНО: loadTheme() просто читает SharedPreferences - это быстро и не блокирует UI
-        // Не используем runBlocking, чтобы не блокировать главный поток при запуске
-        com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
+        runBlocking {
+            withContext(Dispatchers.IO) {
+                com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
+            }
+        }
     }
 
     private fun readServerUrlFromPreferences(): String {
-        // КРИТИЧНО: getCurrentServerUrl() просто читает SharedPreferences - это быстро и не блокирует UI
-        // Не используем runBlocking, чтобы не блокировать главный поток при запуске
-        return ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
+        return runBlocking {
+            withContext(Dispatchers.IO) {
+                ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
+            }
+        }
     }
 
     companion object {
         private const val NAVIGATION_PREFS = "navigation_state"
         private const val KEY_LAST_TAB = "last_tab"
         private const val DEFAULT_TAB_GLOBAL = 1
-        private const val CHECKS_EVENT_DEBOUNCE_MS = 250L
     }
 
-    private fun applySyncButtonMode(mode: SyncMode) {
-        syncMode = mode
-        if (!::btnSync.isInitialized) return
-        
-        when (mode) {
-            SyncMode.IDLE -> {
-                btnSync.text = syncButtonDefaultText
-                btnSync.isEnabled = true
-                btnSync.isSelected = false
-                btnSync.isActivated = false
-                btnSync.isPressed = false
-                btnSync.alpha = 1f
-            }
-            SyncMode.WAITING_SERVER -> {
-                btnSync.text = getString(R.string.sync_button_cancel_update)
-                btnSync.isEnabled = true
-                btnSync.isSelected = true
-                btnSync.isActivated = true
-                btnSync.isPressed = true
-                btnSync.alpha = 0.85f
-            }
-            SyncMode.SYNCING -> {
-                btnSync.text = getString(R.string.sync_button_cancel_update)
-                btnSync.isEnabled = true
-                btnSync.isSelected = true
-                btnSync.isActivated = true
-                btnSync.isPressed = true
-                btnSync.alpha = 0.85f
-            }
-        }
-    }
-    
-    private enum class SyncMode {
-        IDLE,
-        WAITING_SERVER,
-        SYNCING
-    }
-    
     private fun adjustTabsLayoutSpacing() {
         if (!::tabLayout.isInitialized) return
         val displayMetrics = resources.displayMetrics

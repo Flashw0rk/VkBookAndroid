@@ -12,3 +12,4 @@ Lcom/example/vkbookandroid/SignalsAdapter;
 Lcom/example/vkbookandroid/network/NetworkModule;
 
 
+

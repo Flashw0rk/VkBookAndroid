@@ -1,7 +1,6 @@
 package com.example.vkbookandroid.editor
 
 import android.util.Log
-import com.example.vkbookandroid.BuildConfig
 import com.example.vkbookandroid.network.NetworkModule
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -13,7 +12,6 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import retrofit2.Response
 import java.io.File
 import kotlin.math.pow
-import javax.net.ssl.SSLException
 
 class EditorUploadService(
     private val maxAttempts: Int = 3,
@@ -29,7 +27,12 @@ class EditorUploadService(
         )
         // Отправляем в обновлённый универсальный endpoint updates/upload
         val targetPath = buildUpdatesPath(file.name)
-        val resp = uploadWithTlsFallback(part, targetPath)
+        val resp = NetworkModule.getArmatureApiService().uploadUpdatesFile(
+            file = part,
+            filename = targetPath,
+            adminLogin = EditorUploadState.adminLogin,
+            adminPassword = EditorUploadState.adminPassword
+        )
         if (resp.isSuccessful) {
             retrofit2.Response.success("OK")
         } else {
@@ -47,7 +50,12 @@ class EditorUploadService(
             body = file.asRequestBody("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".toMediaType())
         )
         val targetPath = buildUpdatesPath(file.name)
-        val resp = uploadWithTlsFallback(part, targetPath)
+        val resp = NetworkModule.getArmatureApiService().uploadUpdatesFile(
+            file = part,
+            filename = targetPath,
+            adminLogin = EditorUploadState.adminLogin,
+            adminPassword = EditorUploadState.adminPassword
+        )
         if (resp.isSuccessful) {
             retrofit2.Response.success("OK")
         } else {
@@ -134,31 +142,6 @@ class EditorUploadService(
 
     private fun buildUpdatesPath(fileName: String): String {
         return if (fileName.startsWith(updatesPrefix)) fileName else updatesPrefix + fileName
-    }
-
-    private suspend fun uploadWithTlsFallback(
-        filePart: MultipartBody.Part,
-        targetPath: String
-    ): retrofit2.Response<com.example.vkbookandroid.model.UploadResponse> {
-        return try {
-            NetworkModule.getArmatureApiService().uploadUpdatesFile(
-                file = filePart,
-                filename = targetPath,
-                adminLogin = EditorUploadState.adminLogin,
-                adminPassword = EditorUploadState.adminPassword
-            )
-        } catch (e: Exception) {
-            if (e is SSLException && BuildConfig.ALLOW_INSECURE_TLS_FOR_UPDATES) {
-                NetworkModule.getArmatureApiServiceInsecureForUpdates().uploadUpdatesFile(
-                    file = filePart,
-                    filename = targetPath,
-                    adminLogin = EditorUploadState.adminLogin,
-                    adminPassword = EditorUploadState.adminPassword
-                )
-            } else {
-                throw e
-            }
-        }
     }
 }
 

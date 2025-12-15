@@ -23,7 +23,6 @@ import android.widget.Button
 import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.Toast
-import android.widget.ProgressBar
 import androidx.lifecycle.Observer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -87,8 +86,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
     private var nextRequestId: Int = 0
     private var activeRequestId: Int = -1
     private var lastRawQuery: String = ""
-    private var defaultSearchHint: CharSequence? = null
-    private lateinit var searchProgress: ProgressBar
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -99,7 +96,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         recyclerView = view.findViewById(R.id.recyclerView)
         val hscroll: android.widget.HorizontalScrollView? = view.findViewById(R.id.hscroll)
         emptyView = view.findViewById(R.id.empty_view)
-        searchProgress = view.findViewById<ProgressBar>(R.id.search_progress)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
         // Отключаем анимации, чтобы избежать дергания при обновлениях
         recyclerView.itemAnimator = null
@@ -182,8 +178,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         }
         excelRepository = com.example.vkbookandroid.ExcelRepository(requireContext(), fileProvider)
         searchView = view.findViewById(R.id.search_view)
-        // Сохраняем дефолтный hint для последующего восстановления
-        defaultSearchHint = try { searchView.queryHint } catch (_: Throwable) { null }
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
         scrollToTopButton = view.findViewById(R.id.scroll_to_top_button)
         scrollToBottomButton = view.findViewById(R.id.scroll_to_bottom_button)
@@ -361,17 +355,6 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                 queryFlow.value = newQuery
                 (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged(newQuery)
                 lastRawQuery = newQuery
-                // Leading-edge: мгновенно пытаемся показать быстрые результаты по префиксу
-                try {
-                    val q = newQuery.trim()
-                    if (q.isNotEmpty() && ::searchManager.isInitialized && isDataReadyForSearch()) {
-                        val selectedColumn = if (adapter.hasSelectedColumn()) adapter.getSelectedColumnName() else null
-                        val quick = searchManager.tryQuickPrefixResults(q, adapter.headers, selectedColumn)
-                        if (quick != null) {
-                            adapter.updateSearchResults(quick, q)
-                        }
-                    }
-                } catch (_: Throwable) {}
                 return true
             }
         })
@@ -410,7 +393,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         lifecycleScope.launch {
             queryFlow
                 .map { it.trim() }
-                .debounce(150)
+                .debounce(300)
                 .distinctUntilChanged()
                 .flatMapLatest { normalized ->
                     flow {
@@ -441,8 +424,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                         // Дожидаемся готовности данных/индекса, затем выполняем поиск
                         try {
                             if (::searchManager.isInitialized) {
-                                // Ищем сразу; индексация выполняется в фоне (prewarm) или внутри performSearch на IO
-                                performEnhancedSearch(normalized, requestIdForThisQuery)
+                                if (searchManager.isIndexReady.value != true) {
+                                    waitForIndexAndSearch(normalized, requestIdForThisQuery)
+                                } else {
+                                    performEnhancedSearch(normalized, requestIdForThisQuery)
+                                }
                             }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) {
@@ -581,47 +567,26 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                 }
 
                 val initialColumnWidths = sessionForInitial.getColumnWidths()
-                
+
                 // БАЗА: ширины по умолчанию = 3.5 см до тех пор, пока пользователь их не изменит
                 val savedColumnWidths = com.example.vkbookandroid.utils.ColumnWidthManager.loadBschuColumnWidths(requireContext())
                 currentColumnWidths = mutableMapOf()
-                
-                // Для сопоставления используем актуальные заголовки (если доступны), иначе — ключи initialColumnWidths
-                val headersForDefaults = try { (cachedSession ?: pagingSession ?: sessionForInitial).getHeaders() } catch (_: Throwable) { initialColumnWidths.keys.toList() }
-                
-                // Нормализуем сохранённые ширины под актуальные заголовки (без учёта регистра)
-                if (savedColumnWidths.isNotEmpty() && headersForDefaults.isNotEmpty()) {
-                    val normalized = mutableMapOf<String, Int>()
-                    headersForDefaults.forEach { currentHeader ->
-                        val matched = savedColumnWidths.entries.firstOrNull { it.key.equals(currentHeader, ignoreCase = true) }?.value
-                        if (matched != null && matched > 0) {
-                            normalized[currentHeader] = matched
-                        }
-                    }
-                    if (normalized.isNotEmpty()) {
-                        currentColumnWidths.putAll(normalized)
-                        Log.d("DataFragment", "Загружены сохраненные размеры колонок (нормализовано): ${normalized.size} из ${savedColumnWidths.size}")
-                    } else {
-                        Log.w("DataFragment", "Сохраненные размеры не сопоставлены с текущими заголовками, используем значения по умолчанию для недостающих")
-                    }
-                }
-                
-                // Дозаполняем недостающие ширины значениями по умолчанию, не перезаписывая сохранённые
-                if (headersForDefaults.isNotEmpty()) {
+                if (savedColumnWidths.isNotEmpty()) {
+                    currentColumnWidths.putAll(savedColumnWidths)
+                } else {
+                    val headersForDefaults = initialColumnWidths.keys.toList()
                     val xdpi = resources.displayMetrics.xdpi
                     val px3cm = ((3f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px4cm = ((4f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     val px5cm = ((5f * xdpi) / 2.54f).toInt().coerceAtLeast(1)
                     headersForDefaults.forEach { header ->
-                        if (!currentColumnWidths.containsKey(header)) {
-                            val h = header?.lowercase() ?: ""
-                            val w = when {
-                                h.contains("место установки ключа") -> px4cm
-                                h.contains("название позиции") || h.startsWith("бел") -> px5cm
-                                else -> px3cm
-                            }
-                            currentColumnWidths[header] = w
+                        val h = header?.lowercase() ?: ""
+                        val w = when {
+                            h.contains("место установки ключа") -> px4cm
+                            h.contains("название позиции") || h.startsWith("бел") -> px5cm
+                            else -> px3cm
                         }
+                        currentColumnWidths[header] = w
                     }
                 }
 
@@ -988,28 +953,11 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         // Наблюдаем за состоянием поиска
         searchManager.isSearching.observe(viewLifecycleOwner, Observer { isSearching ->
             if (isSearching) {
+                // Показываем индикатор загрузки
                 Log.d("DataFragment", "Search started")
-                // Показываем пользователю понятный индикатор прямо в поле поиска
-                try {
-                    if (::searchView.isInitialized && currentSearchQuery.isNotBlank()) {
-                        searchView.queryHint = "Идёт поиск…"
-                    }
-                } catch (_: Throwable) {}
-                searchProgress.visibility = View.VISIBLE
-                // На время долгого поиска убираем "Нет результатов"
-                emptyView?.text = "Идёт поиск…"
-                emptyView?.visibility = View.VISIBLE
             } else {
+                // Скрываем индикатор загрузки
                 Log.d("DataFragment", "Search completed")
-                // Возвращаем обычный hint
-                try {
-                    if (::searchView.isInitialized) {
-                        searchView.queryHint = defaultSearchHint ?: "Поиск"
-                    }
-                } catch (_: Throwable) {}
-                searchProgress.visibility = View.GONE
-                // После завершения возвращаем дефолтный текст; видимость управляет handleSearchResults
-                emptyView?.text = "Нет результатов"
             }
         })
         
@@ -1054,7 +1002,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
             } else {
                 // Пустой результат: показываем пустой вид и скрываем таблицу
                 // Не возвращаем полную таблицу, чтобы не создавать ложное ощущение «как будто поиск пустой»
-                try { adapter.updateSearchResults(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
+                try { adapter.updateFilteredDataPreserveOrder(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
                 recyclerView.post {
                     try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
                             recyclerView.tag = null
