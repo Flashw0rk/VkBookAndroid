@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
+import java.util.Locale;
 
 /**
  * Менеджер данных Excel.
@@ -68,9 +69,9 @@ public class ExcelDataManager {
             if (searchText == null || searchText.isEmpty()) {
                 return true;
             }
-            String lowerCaseSearch = searchText.toLowerCase();
+            String lowerCaseSearch = searchText.toLowerCase(Locale.ROOT);
             return rowData.getAllProperties().stream()
-                    .anyMatch(value -> value != null && value.toLowerCase().contains(lowerCaseSearch));
+                    .anyMatch(value -> value != null && value.toLowerCase(Locale.ROOT).contains(lowerCaseSearch));
         };
     }
 }

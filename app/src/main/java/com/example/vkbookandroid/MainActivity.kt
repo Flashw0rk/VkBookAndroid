@@ -82,6 +82,12 @@ class MainActivity : AppCompatActivity() {
     private var periodicWakeupJob: Job? = null
     private val PERIODIC_WAKEUP_INTERVAL_MS = 10 * 60 * 1000L // 10 минут
     
+    // Подпись файла "График проверок.xlsx" (lastModified:length:path) для дедупликации событий
+    private var checksScheduleFileSignature: String? = null
+    // Debounce и коалесcинг обновлений для ChecksSchedule
+    private var checksRefreshJob: Job? = null
+    
+    
     private val settingsLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         android.util.Log.d("MainActivity", "=== settingsLauncher получил результат ===")
         android.util.Log.d("MainActivity", "resultCode=${result.resultCode}, RESULT_OK=$RESULT_OK")
@@ -263,10 +269,14 @@ class MainActivity : AppCompatActivity() {
 
         // Добавляем пункт "О приложении" в меню (через уже существующую иконку меню)
 
-        // Инициализация аналитики (безопасно, работает без Firebase)
-        com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
-        com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
-        com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
+        // Инициализация аналитики после первого кадра, чтобы не задерживать появление UI
+        window?.decorView?.post {
+            try {
+                com.example.vkbookandroid.analytics.AnalyticsManager.initialize(this)
+                com.example.vkbookandroid.analytics.CrashlyticsManager.initialize()
+                com.example.vkbookandroid.analytics.RemoteConfigManager.initialize(this)
+            } catch (_: Throwable) { }
+        }
     }
     
     override fun onPause() {
@@ -335,6 +345,11 @@ class MainActivity : AppCompatActivity() {
                 applySharedSearchToCurrentTab(viewPager.currentItem)
             }
         }
+        
+        // Восстанавливаем состояние кнопки синхронизации (IDLE/WAITING/SYNCING), чтобы надпись не сбрасывалась
+        try {
+            applySyncButtonMode(syncMode)
+        } catch (_: Throwable) {}
     }
 
     /**
@@ -634,9 +649,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 val serverReady = waitForServerWakeup()
                 if (!serverReady) {
-                    updateSyncStatus("Сервер недоступен, попробуйте позже", 0)
+                    updateSyncStatus("Нет соединения", 0)
                     hideSyncProgress()
-                    Toast.makeText(this@MainActivity, "Сервер недоступен, попробуйте позже", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Нет соединения", Toast.LENGTH_SHORT).show()
                 } else {
                     applySyncButtonMode(SyncMode.SYNCING)
                     showSyncProgress()
@@ -668,7 +683,9 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         refreshFragmentsData()
-                        diagnoseFilesAfterSync()
+                        if (BuildConfig.DEBUG) {
+                            diagnoseFilesAfterSync()
+                        }
                         com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
                     }
                     result.serverConnected -> {
@@ -682,9 +699,9 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
                     }
                     else -> {
-                        updateSyncStatus("Сервер недоступен", 0)
+                        updateSyncStatus("Нет соединения", 0)
                         hideSyncProgress()
-                        Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "Нет соединения", Toast.LENGTH_SHORT).show()
                     }
                     }
                 }
@@ -766,6 +783,8 @@ class MainActivity : AppCompatActivity() {
         
         try {
             updateSyncStatus("Отправлен запрос на пробуждение сервера...")
+            // Держим статус 3 секунды перед началом цикла попыток
+            delay(3000)
             val readyImmediately = withContext(Dispatchers.IO) {
                 runCatching { syncService.checkServerConnectionForWakeup() }
                     .onFailure { e ->
@@ -1474,21 +1493,163 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Настраиваем отслеживание для ChecksScheduleFragment (График проверок .xlsx - с пробелом!)
-        val checksFilePath = filesDir.resolve("data").resolve("График проверок .xlsx").absolutePath
-        dataRefreshManager.startWatching(checksFilePath) {
-            Log.d("MainActivity", "График проверок.xlsx changed, refreshing ChecksScheduleFragment")
-                uiScope.launch {
-                    try {
-                        val checksFragment = getFragmentByGlobalPosition(5) as? ChecksScheduleFragment
-                    checksFragment?.let { (it as RefreshableFragment).refreshData() }
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Error refreshing ChecksScheduleFragment", e)
-                }
-            }
-        }
+        // Настраиваем отслеживание для ChecksScheduleFragment (устойчиво к вариантам пробелов в имени)
+        setupChecksScheduleWatchers()
         
         Log.d("MainActivity", "File watching setup completed")
+    }
+    
+    /**
+     * Устойчивое слежение за файлом "График проверок.xlsx" с учётом вариантов пробелов.
+     * Алгоритм:
+     * 1) Сначала используем заданный (канонический) путь без лишних пробелов, если файл существует.
+     * 2) Если канонического файла нет — пробуем «наследный» путь с пробелом перед расширением, если он существует.
+     * 3) Если оба не найдены — сканируем папку data и добавляем все существующие варианты,
+     *    у которых имя после схлопывания пробелов равно "График проверок.xlsx".
+     */
+    private fun setupChecksScheduleWatchers() {
+        try {
+            val dataDir = filesDir.resolve("data")
+            val canonicalName = "График проверок.xlsx"
+            val legacyName = "График проверок .xlsx"
+            val canonicalFile = dataDir.resolve(canonicalName)
+            val legacyFile = dataDir.resolve(legacyName)
+            val candidates = LinkedHashSet<String>()
+            
+            // 1) Канонический файл, если существует
+            if (canonicalFile.exists()) {
+                candidates.add(canonicalFile.absolutePath)
+                checksScheduleFileSignature = computeFileSignature(canonicalFile)
+            }
+            // 2) Наследный вариант, если существует
+            if (legacyFile.exists()) {
+                candidates.add(legacyFile.absolutePath)
+                if (checksScheduleFileSignature == null) {
+                    checksScheduleFileSignature = computeFileSignature(legacyFile)
+                }
+            }
+            // 3) Если обоих нет — сканируем существующие файлы в data
+            if (candidates.isEmpty() && dataDir.exists()) {
+                val normalizedTarget = normalizeSpaces(canonicalName).lowercase()
+                dataDir.listFiles()?.forEach { f ->
+                    val name = f.name
+                    val normalized = normalizeSpaces(name).lowercase()
+                    if (normalized == normalizedTarget) {
+                        candidates.add(f.absolutePath)
+                        if (checksScheduleFileSignature == null) {
+                            checksScheduleFileSignature = computeFileSignature(f)
+                        }
+                    }
+                }
+            }
+            
+            // Если ничего не нашли — выходим тихо (файл появится после синхронизации)
+            if (candidates.isEmpty()) {
+                Log.w("MainActivity", "ChecksSchedule watcher: no matching files found yet in ${dataDir.absolutePath}")
+                return
+            }
+            
+            // Регистрируем watchers для всех найденных вариантов
+            candidates.forEach { path ->
+                dataRefreshManager.startWatching(path) {
+                    Log.d("MainActivity", "ChecksSchedule file event: $path")
+                    startChecksRefreshDebounced()
+                }
+            }
+            
+            // Дополнительно вешаем watcher на каталог, чтобы ловить поздние появления/переименования
+            if (dataDir.exists()) {
+                dataRefreshManager.startWatching(dataDir.absolutePath) {
+                    Log.d("MainActivity", "ChecksSchedule directory event in ${dataDir.absolutePath}")
+                    startChecksRefreshDebounced()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error setting up ChecksSchedule watchers", e)
+        }
+    }
+    
+    private fun normalizeSpaces(name: String): String {
+        return name.replace(Regex("\\s+"), " ").trim()
+    }
+    
+    private fun computeFileSignature(file: java.io.File?): String? {
+        return file?.let { "${it.lastModified()}:${it.length()}:${it.absolutePath}" }
+    }
+    
+    private fun findChecksScheduleFile(): java.io.File? {
+        val dataDir = filesDir.resolve("data")
+        if (!dataDir.exists()) return null
+        val canonicalName = "График проверок.xlsx"
+        val legacyName = "График проверок .xlsx"
+        val canonical = dataDir.resolve(canonicalName)
+        if (canonical.exists()) return canonical
+        val legacy = dataDir.resolve(legacyName)
+        if (legacy.exists()) return legacy
+        val normalizedTarget = normalizeSpaces(canonicalName).lowercase()
+        dataDir.listFiles()?.forEach { f ->
+            if (normalizeSpaces(f.name).lowercase() == normalizedTarget) return f
+        }
+        return null
+    }
+    
+    private fun startChecksRefreshDebounced() {
+        try {
+            checksRefreshJob?.cancel()
+        } catch (_: Throwable) { }
+        checksRefreshJob = uiScope.launch {
+            try {
+                delay(CHECKS_EVENT_DEBOUNCE_MS)
+                val target = withContext(Dispatchers.IO) { findChecksScheduleFile() }
+                if (target == null) {
+                    Log.w("MainActivity", "ChecksSchedule refresh: target file not found")
+                    return@launch
+                }
+                val stable = withContext(Dispatchers.IO) { waitForFileStable(target, stableWindowMs = 300L, maxWaitMs = 2000L) }
+                if (!stable) {
+                    Log.w("MainActivity", "ChecksSchedule refresh: file not stabilized in time, skipping")
+                    return@launch
+                }
+                val newSig = withContext(Dispatchers.IO) { computeFileSignature(target) }
+                if (newSig != null && newSig != checksScheduleFileSignature) {
+                    checksScheduleFileSignature = newSig
+                    Log.d("MainActivity", "ChecksSchedule refresh triggered after debounce+stabilize")
+                    val checksFragment = getFragmentByGlobalPosition(5) as? ChecksScheduleFragment
+                    checksFragment?.let { (it as RefreshableFragment).refreshData() }
+                } else {
+                    Log.d("MainActivity", "ChecksSchedule refresh skipped (no signature change)")
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error in startChecksRefreshDebounced", e)
+            }
+        }
+    }
+    
+    private suspend fun waitForFileStable(
+        file: java.io.File,
+        stableWindowMs: Long = 300L,
+        maxWaitMs: Long = 2000L
+    ): Boolean {
+        return withContext(Dispatchers.IO) {
+            val start = System.currentTimeMillis()
+            var stableAccum = 0L
+            var lastLen = file.length()
+            var lastMtime = file.lastModified()
+            while (System.currentTimeMillis() - start < maxWaitMs) {
+                delay(100)
+                val len = file.length()
+                val mtime = file.lastModified()
+                if (len == lastLen && mtime == lastMtime) {
+                    stableAccum += 100
+                    if (stableAccum >= stableWindowMs) return@withContext true
+                } else {
+                    stableAccum = 0L
+                    lastLen = len
+                    lastMtime = mtime
+                }
+            }
+            false
+        }
     }
     
     /**
@@ -1544,8 +1705,10 @@ class MainActivity : AppCompatActivity() {
         // НЕ очищаем кэш - файлы уже обновлены синхронизацией
         // Просто обновляем данные в фрагментах
         try {
-            // Диагностика файлов перед обновлением
-            diagnoseFiles()
+            // Диагностика файлов перед обновлением (только debug)
+            if (BuildConfig.DEBUG) {
+                diagnoseFiles()
+            }
             
             val dataFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(0) as? org.example.pult.android.DataFragment
             val armatureFragment = (pagerAdapter as? MainPagerAdapter)?.getFragmentByGlobalPosition(1) as? com.example.vkbookandroid.ArmatureFragment
@@ -1729,6 +1892,7 @@ class MainActivity : AppCompatActivity() {
         private const val NAVIGATION_PREFS = "navigation_state"
         private const val KEY_LAST_TAB = "last_tab"
         private const val DEFAULT_TAB_GLOBAL = 1
+        private const val CHECKS_EVENT_DEBOUNCE_MS = 250L
     }
 
     private fun applySyncButtonMode(mode: SyncMode) {

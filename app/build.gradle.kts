@@ -63,9 +63,13 @@ android {
             isShrinkResources = false
             isDebuggable = false // Отключаем debug режим в release
 				signingConfig = signingConfigs.getByName("release")
+            // Запрещаем insecure TLS в релизе
+            buildConfigField("boolean", "ALLOW_INSECURE_TLS_FOR_UPDATES", "false")
         }
         debug {
             isDebuggable = true
+            // Разрешаем точечный insecure TLS для обновлений в debug (для эмуляторов/капризных устройств)
+            buildConfigField("boolean", "ALLOW_INSECURE_TLS_FOR_UPDATES", "true")
         }
     }
     
@@ -175,6 +179,9 @@ dependencies {
         implementation("com.google.firebase:firebase-analytics-ktx")
         implementation("com.google.firebase:firebase-config-ktx")
     }
+
+    // Ускорение холодного старта с помощью ProfileInstaller (без изменения логики)
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 }
 
 // ===== JaCoCo Configuration =====

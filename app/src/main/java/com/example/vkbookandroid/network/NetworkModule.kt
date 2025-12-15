@@ -10,6 +10,11 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.File
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import java.security.cert.X509Certificate
 
 /**
  * Модуль для настройки сетевых компонентов с поддержкой:
@@ -251,6 +256,8 @@ object NetworkModule {
         .build()
     
     private var armatureApiService: ArmatureApiService = retrofit.create(ArmatureApiService::class.java)
+    private var insecureRetrofit: Retrofit? = null
+    private var insecureApiService: ArmatureApiService? = null
     
     // Gson instance для использования в других местах
     val gson = com.google.gson.Gson()
@@ -284,6 +291,10 @@ object NetworkModule {
             .build()
         armatureApiService = retrofit.create(ArmatureApiService::class.java)
         android.util.Log.d("NetworkModule", "NetworkModule updated with new base URL: '$currentBaseUrl'")
+        
+        // Сбрасываем небезопасный retrofit при смене baseUrl
+        insecureRetrofit = null
+        insecureApiService = null
     }
     
     /**
@@ -345,6 +356,8 @@ object NetworkModule {
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .writeTimeout(10, TimeUnit.SECONDS)
+                .followRedirects(false)
+                .followSslRedirects(false)
                 // Используем HTTP/1.1 для тестирования соединения
                 .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                 .addInterceptor { chain ->
@@ -370,7 +383,9 @@ object NetworkModule {
                 .build()
             
             val response = testOkHttpClient.newCall(request).execute()
-            val isSuccessful = response.isSuccessful || response.code == 429
+            val code = response.code
+            // Готовность только при 2xx или 429 (rate limit). 3xx НЕ считаем готовностью.
+            val isSuccessful = response.isSuccessful || code == 429
             
             android.util.Log.d("NetworkModule", "Connection test result: ${response.code} - success: $isSuccessful")
             response.close()
@@ -387,5 +402,74 @@ object NetworkModule {
         return BuildConfig.FORCE_HTTPS &&
             url.startsWith("http://") &&
             (url.contains(RENDER_HOST) || url.contains("158.160.157.7"))
+    }
+
+    /**
+     * Клиент с "мягким" TLS (trust-all) ТОЛЬКО для обновлений и только при разрешённом флаге.
+     * Используется как точечный обход проблем в эмуляторе/устройствах (OCSP/цепочка).
+     */
+    private fun createInsecureClientForUpdates(): OkHttpClient {
+        // Trust-all менеджер
+        val trustAllCerts = arrayOf<TrustManager>(
+            object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+        )
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+        val trustManager = trustAllCerts[0] as X509TrustManager
+        
+        val builder = OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .hostnameVerifier { hostname, _ ->
+                // Разрешаем только наш production-домен и легаси-IP
+                hostname.equals(RENDER_HOST, ignoreCase = true) || hostname.contains("158.160.157.7")
+            }
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val original = chain.request()
+                val req = original.newBuilder()
+                    .addHeader("X-API-Key", BuildConfig.API_KEY)
+                    .addHeader("Accept", "application/json")
+                    .addHeader("User-Agent", "VkBookAndroid/${BuildConfig.VERSION_NAME}")
+                    .build()
+                chain.proceed(req)
+            }
+        
+        if (BuildConfig.DEBUG) {
+            builder.addInterceptor(HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BODY
+            })
+        }
+        
+        return builder.build()
+    }
+
+    /**
+     * Точечный API сервис с "мягким" TLS для обновлений (если разрешено).
+     * Если флаг выключен — возвращается обычный сервис.
+     */
+    fun getArmatureApiServiceInsecureForUpdates(): ArmatureApiService {
+        if (!BuildConfig.ALLOW_INSECURE_TLS_FOR_UPDATES) {
+            return getArmatureApiService()
+        }
+        val cached = insecureApiService
+        if (cached != null) return cached
+        
+        val client = createInsecureClientForUpdates()
+        val r = Retrofit.Builder()
+            .baseUrl(currentBaseUrl)
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+        val svc = r.create(ArmatureApiService::class.java)
+        insecureRetrofit = r
+        insecureApiService = svc
+        return svc
     }
 }

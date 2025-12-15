@@ -359,7 +359,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         val selectedDates = monthAdapter.getSelectedDates()
         
         if (selectedCells.isEmpty() || selectedDates.isEmpty()) {
-            // Выбор еще не установлен - повторяем через 150мс (увеличено)
+            // Выбор еще не установлен - повторяем через 150мс
+            // Адаптеры уже устанавливают дефолтный выбор при submit(resetSelection=true)
             if (retryCount < maxRetries) {
                 view?.postDelayed({
                     if (isAdded) {
@@ -367,11 +368,10 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
                     }
                 }, 150)
             } else {
-                // Если после всех попыток выбор не установлен - устанавливаем дефолтный
+                // Если после всех попыток выбор все еще не установлен - пересчитываем с текущим состоянием
                 if (BuildConfig.DEBUG) {
-                    Log.w("ChecksSchedule", "Выбор не установлен после $maxRetries попыток, устанавливаем дефолтный")
+                    Log.w("ChecksSchedule", "Выбор не установлен после $maxRetries попыток, пересчитываем с текущим состоянием")
                 }
-                // Пытаемся пересчитать с текущим состоянием
                 updateTasksActiveStatusAsync()
             }
             return

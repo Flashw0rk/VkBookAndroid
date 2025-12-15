@@ -424,14 +424,14 @@ class ConnectionSettingsFragment : Fragment() {
             val limitGB = limitMB / 1024.0
             val remainingGB = remainingMB / 1024.0
             if (limitGB >= 1.0) {
-                usedTextFinal = String.format("%.2f", usedGB)
-                limitTextFinal = String.format("%.2f", limitGB)
-                remainingTextFinal = calculatedRemaining?.let { String.format("%.2f", remainingGB) } ?: "?"
+                usedTextFinal = String.format(Locale.getDefault(), "%.2f", usedGB)
+                limitTextFinal = String.format(Locale.getDefault(), "%.2f", limitGB)
+                remainingTextFinal = calculatedRemaining?.let { String.format(Locale.getDefault(), "%.2f", remainingGB) } ?: "?"
                 unitFinal = "ГБ"
             } else {
-                usedTextFinal = String.format("%.0f", usedMB)
-                limitTextFinal = String.format("%.0f", limitMB)
-                remainingTextFinal = calculatedRemaining?.let { String.format("%.0f", remainingMB) } ?: "?"
+                usedTextFinal = String.format(Locale.getDefault(), "%.0f", usedMB)
+                limitTextFinal = String.format(Locale.getDefault(), "%.0f", limitMB)
+                remainingTextFinal = calculatedRemaining?.let { String.format(Locale.getDefault(), "%.0f", remainingMB) } ?: "?"
                 unitFinal = "МБ"
             }
         } else {

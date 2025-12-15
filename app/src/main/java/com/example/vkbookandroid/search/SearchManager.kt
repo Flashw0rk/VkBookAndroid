@@ -27,9 +27,15 @@ class SearchManager(private val context: Context) {
     
     // Компонент поиска: единый персистентный индекс (mmap), без FTS5 и без .so
     private val persistentEngine = PersistentSearchEngine(context)
+    // Увеличиваем кэш результатов для более агрессивного повторного использования
     private val searchCache = TimestampedCache<String, List<SearchResult>>(
-        maxSize = 50,
-        maxAge = 30_000L // 30 секунд
+        maxSize = 100,
+        maxAge = 60_000L // 60 секунд
+    )
+    // Новый кэш префиксных результатов (для мгновенной фильтрации при доборе)
+    private val prefixResultsCache = TimestampedCache<String, List<SearchResult>>(
+        maxSize = 100,
+        maxAge = 60_000L
     )
     private val searchMetrics = SearchMetrics()
     // Готовность индекса
@@ -250,6 +256,8 @@ class SearchManager(private val context: Context) {
             
             // Кэшируем результат
             searchCache.put(normalizedQuery, results, currentDataVersion)
+            // Сохраняем в кэше префиксов
+            prefixResultsCache.put(normalizedQuery, results, currentDataVersion)
             
             // Обновляем результаты
             _searchResults.value = SearchResults(
@@ -277,6 +285,62 @@ class SearchManager(private val context: Context) {
             _searchResults.value = SearchResults(emptyList(), 0, 0, fromCache = false, requestId = requestId, normalizedQuery = SearchNormalizer.normalizeSearchQuery(query))
         } finally {
             _isSearching.value = false
+        }
+    }
+
+    /**
+     * Попытка мгновенно получить «быстрые» результаты для добора префикса
+     * без пересборки данных и индекса (для leading-edge отклика).
+     * Возвращает null, если быстрого пути нет.
+     */
+    fun tryQuickPrefixResults(
+        query: String,
+        headers: List<String>,
+        selectedColumn: String? = null
+    ): List<SearchResult>? {
+        val normalizedQuery = com.example.vkbookandroid.utils.SearchNormalizer.normalizeSearchQuery(query)
+        if (normalizedQuery.isBlank()) return null
+        if (lastResultsDataVersion < 0) return null
+        // Ищем самый длинный сохранённый префикс для текущего запроса
+        var baseResults: List<SearchResult>? = null
+        var len = normalizedQuery.length - 1
+        while (len >= 1) {
+            val p = normalizedQuery.substring(0, len)
+            val cached = prefixResultsCache.get(p, lastResultsDataVersion)
+            if (cached != null && cached.isNotEmpty()) {
+                baseResults = cached
+                break
+            }
+            len--
+        }
+        // Если не нашли в кэше — пробуем последний контекст
+        if (baseResults == null &&
+            lastPrefixResults.isNotEmpty() &&
+            lastNormalizedQuery.isNotBlank() &&
+            normalizedQuery.length > lastNormalizedQuery.length &&
+            normalizedQuery.startsWith(lastNormalizedQuery) &&
+            lastResultsDataVersion >= 0
+        ) {
+            baseResults = lastPrefixResults
+        }
+        val source = baseResults ?: return null
+        // Быстрая фильтрация и пересчёт скоринга на основе уже найденных строк
+        return try {
+            source.mapNotNull { prev ->
+                val score = calculateMatchScore(prev.data, normalizedQuery, headers, selectedColumn)
+                if (score == 0) null else {
+                    val matchedColumn = findMatchedColumn(prev.data, normalizedQuery, headers, selectedColumn)
+                    val matchedValue = getMatchedValue(prev.data, normalizedQuery, headers, selectedColumn)
+                    SearchResult(
+                        data = prev.data,
+                        matchScore = score,
+                        matchedColumn = matchedColumn,
+                        matchedValue = matchedValue
+                    )
+                }
+            }.sortedByDescending { it.matchScore }
+        } catch (_: Throwable) {
+            null
         }
     }
     

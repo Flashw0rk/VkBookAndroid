@@ -152,9 +152,10 @@ object SearchNormalizer {
 
         // Буква-цифры / буква-дефис-цифры: с20/с-20, а0/а-0, с-
         // (уже в каноне: кириллица и дефисы унифицированы)
-        val letterNumber = Regex("^([а-яё])[- ]?(\\d+)$", RegexOption.IGNORE_CASE)
-        val letterDashOnly = Regex("^([а-яё])-$", RegexOption.IGNORE_CASE)
-        val letterDashDigit = Regex("^([а-яё])-(\\d+)$", RegexOption.IGNORE_CASE)
+        // Поддерживаем 1–3 буквы префикса перед числами (например: м95, аг270, сгт-150)
+        val letterNumber = Regex("^([а-яё]{1,3})[- ]?(\\d+)$", RegexOption.IGNORE_CASE)
+        val letterDashOnly = Regex("^([а-яё]{1,3})-$", RegexOption.IGNORE_CASE)
+        val letterDashDigit = Regex("^([а-яё]{1,3})-(\\d+)$", RegexOption.IGNORE_CASE)
 
         when {
             letterDashDigit.matches(normalized) -> {
@@ -251,7 +252,7 @@ object SearchNormalizer {
         }
         
         // 5.1. ДОПОЛНИТЕЛЬНАЯ обработка для поиска "А-0" (буква-цифра)
-        val letterDigitPattern = Regex("([а-яё])\\s*-\\s*(\\d)", RegexOption.IGNORE_CASE)
+        val letterDigitPattern = Regex("([а-яё]{1,3})\\s*-\\s*(\\d)", RegexOption.IGNORE_CASE)
         val letterDigitMatch = letterDigitPattern.find(normalized)
         
         if (letterDigitMatch != null) {
@@ -279,7 +280,7 @@ object SearchNormalizer {
         }
         
         // 6. ДОПОЛНИТЕЛЬНАЯ обработка для поиска только буквы с дефисом (например "с-")
-        val letterDashPattern = Regex("([а-яё])\\s*-\\s*$", RegexOption.IGNORE_CASE)
+        val letterDashPattern = Regex("([а-яё]{1,3})\\s*-\\s*$", RegexOption.IGNORE_CASE)
         val letterDashMatch = letterDashPattern.find(normalized)
         
         if (letterDashMatch != null) {
@@ -298,7 +299,7 @@ object SearchNormalizer {
         }
         
         // 6.1. КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Обработка для поиска "с-" (без пробелов)
-        val letterDashNoSpacesPattern = Regex("^([а-яё])\\s*-\\s*$", RegexOption.IGNORE_CASE)
+        val letterDashNoSpacesPattern = Regex("^([а-яё]{1,3})\\s*-\\s*$", RegexOption.IGNORE_CASE)
         val letterDashNoSpacesMatch = letterDashNoSpacesPattern.find(normalized)
         
         if (letterDashNoSpacesMatch != null) {
@@ -323,7 +324,7 @@ object SearchNormalizer {
         }
         
         // 7. ДОПОЛНИТЕЛЬНАЯ обработка для поиска только буквы (например "с")
-        val singleLetterPattern = Regex("^([а-яё])\\s*$", RegexOption.IGNORE_CASE)
+        val singleLetterPattern = Regex("^([а-яё]{1,3})\\s*$", RegexOption.IGNORE_CASE)
         val singleLetterMatch = singleLetterPattern.find(normalized)
         
         if (singleLetterMatch != null) {

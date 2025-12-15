@@ -98,6 +98,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     private var scrollToTopOnNextResults: Boolean = false
     private var nextRequestId: Int = 0
     private var activeRequestId: Int = -1
+    private var defaultSearchHint: CharSequence? = null
     
     // Флаг для предотвращения множественных загрузок фона
     private var isLoadingBackground: Boolean = false
@@ -286,6 +287,8 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         excelRepository = ExcelRepository(requireContext(), fileProvider)
         armatureRepository = com.example.vkbookandroid.repository.ArmatureRepository(requireContext(), com.example.vkbookandroid.network.NetworkModule.getArmatureApiService())
         searchView = view.findViewById(R.id.search_view)
+        // Сохраняем дефолтный hint для последующего восстановления
+        defaultSearchHint = try { searchView.queryHint } catch (_: Throwable) { null }
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
         scrollToTopButton = view.findViewById(R.id.scroll_to_top_button)
         scrollToBottomButton = view.findViewById(R.id.scroll_to_bottom_button)
@@ -692,6 +695,17 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 scrollToTopOnNextResults = true
                 queryFlow.value = newText.orEmpty()
                 (activity as? MainActivity)?.onFragmentSearchQueryChanged(newText.orEmpty())
+                // Leading-edge: мгновенно пытаемся показать быстрые результаты по префиксу
+                try {
+                    val q = newText.orEmpty().trim()
+                    if (q.isNotEmpty() && ::searchManager.isInitialized && isDataReadyForSearch()) {
+                        val selectedColumn = if (adapter.hasSelectedColumn()) adapter.getSelectedColumnName() else null
+                        val quick = searchManager.tryQuickPrefixResults(q, adapter.headers, selectedColumn)
+                        if (quick != null) {
+                            adapter.updateSearchResults(quick, q)
+                        }
+                    }
+                } catch (_: Throwable) {}
                 return true
             }
         })
@@ -1205,12 +1219,13 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 
                 val serverData = armatureRepository.loadArmatureCoordsFromServer()
                 if (serverData != null && serverData.isNotEmpty()) {
-                    val allMarkers = armatureRepository.convertServerFormatToList(serverData)
+                    // Подсчитываем общее количество маркеров
+                    val totalMarkers = serverData.values.sumOf { it.size }
                     
                     withContext(Dispatchers.Main) {
                         // Показываем Toast с информацией о загруженных маркерах
-                        Toast.makeText(requireContext(), "Загружено ${allMarkers.size} маркеров с сервера", Toast.LENGTH_SHORT).show()
-                        Log.d("ArmatureFragment", "Loaded ${allMarkers.size} markers from server")
+                        Toast.makeText(requireContext(), "Загружено $totalMarkers маркеров с сервера", Toast.LENGTH_SHORT).show()
+                        Log.d("ArmatureFragment", "Loaded $totalMarkers markers from server")
                     }
                 }
             } catch (e: Exception) {
@@ -1267,11 +1282,21 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         // Наблюдаем за состоянием поиска
         searchManager.isSearching.observe(viewLifecycleOwner, Observer { isSearching ->
             if (isSearching) {
-                // Показываем индикатор загрузки
                 Log.d("ArmatureFragment", "Search started")
+                // Показываем пользователю понятный индикатор прямо в поле поиска
+                try {
+                    if (::searchView.isInitialized && currentSearchQuery.isNotBlank()) {
+                        searchView.queryHint = "Идёт поиск…"
+                    }
+                } catch (_: Throwable) {}
             } else {
-                // Скрываем индикатор загрузки
                 Log.d("ArmatureFragment", "Search completed")
+                // Возвращаем обычный hint
+                try {
+                    if (::searchView.isInitialized) {
+                        searchView.queryHint = defaultSearchHint ?: "Поиск"
+                    }
+                } catch (_: Throwable) {}
             }
         })
         

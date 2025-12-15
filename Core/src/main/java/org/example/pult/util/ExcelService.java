@@ -8,15 +8,11 @@ import org.example.pult.RowDataDynamic;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Сервис для чтения данных из Excel файлов.
@@ -25,7 +21,6 @@ import java.util.stream.Collectors;
  * Логика чтения теперь работает с InputStream, что делает ее независимой от платформы.
  */
 public class ExcelService implements ExcelDataManager.ExcelDataService {
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("dd.MM.yyyy");
 
     // Удалён конструктор с filePath. Теперь методы принимают InputStream.
 

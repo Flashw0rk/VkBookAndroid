@@ -9,6 +9,7 @@ import org.example.pult.RowDataDynamic
 import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
+import java.util.Locale
 import java.util.ArrayList
 import java.util.LinkedHashMap
 import kotlin.collections.List
@@ -21,7 +22,7 @@ import android.util.Log
  */
 class AndroidExcelService(private val context: Context) : ExcelDataManager.ExcelDataService {
 
-    private val DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy")
+    private val DATE_FORMAT = SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
 
     override fun readHeaders(inputStream: InputStream, sheetName: String): List<String> {
         // 🔧 ИСПРАВЛЕНИЕ: НЕ закрываем InputStream преждевременно!

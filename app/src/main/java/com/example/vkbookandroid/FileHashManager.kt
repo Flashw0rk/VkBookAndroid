@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
 import kotlin.LazyThreadSafetyMode
+import java.util.Locale
 
 /**
  * Менеджер для работы с хешами файлов
@@ -225,7 +226,7 @@ class FileHashManager(private val context: Context) {
     private fun bytesToHex(bytes: ByteArray): String {
         val result = StringBuilder()
         for (byte in bytes) {
-            result.append(String.format("%02x", byte))
+            result.append(String.format(Locale.ROOT, "%02x", byte))
         }
         return result.toString()
     }

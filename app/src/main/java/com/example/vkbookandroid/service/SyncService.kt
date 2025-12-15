@@ -110,6 +110,8 @@ class SyncService(private val context: Context) {
                     .connectTimeout(wakeupTimeouts.connectSeconds, TimeUnit.SECONDS)
                     .readTimeout(wakeupTimeouts.readSeconds, TimeUnit.SECONDS)
                     .writeTimeout(wakeupTimeouts.writeSeconds, TimeUnit.SECONDS)
+                    .followRedirects(false)
+                    .followSslRedirects(false)
                     .cache(null) // Отключаем кэш полностью для wakeup ping
                     .protocols(listOf(okhttp3.Protocol.HTTP_1_1)) // Принудительно используем HTTP/1.1
                     .addInterceptor { chain ->
@@ -128,6 +130,9 @@ class SyncService(private val context: Context) {
                 val trimmedUrl = baseUrl.trimEnd('/')
                 // Используем рабочий endpoint вместо /actuator/health
                 val healthUrl = "$trimmedUrl/api/updates/check"
+                val healthUrlHttp = if (!com.example.vkbookandroid.BuildConfig.FORCE_HTTPS && healthUrl.startsWith("https://")) {
+                    healthUrl.replaceFirst("https://", "http://")
+                } else healthUrl
                 
                 Log.d(tag, "Wakeup ping URL: $healthUrl")
                 Log.d(tag, "API Key length: ${com.example.vkbookandroid.BuildConfig.API_KEY.length}")
@@ -146,6 +151,23 @@ class SyncService(private val context: Context) {
                     override fun onFailure(call: Call, e: IOException) {
                         // Логируем ошибку для диагностики
                         Log.w(tag, "Wakeup ping failed: ${e.message}", e)
+                        // Фолбэк на HTTP при SSL ошибке и разрешённом HTTP
+                        val isSslError = e is javax.net.ssl.SSLHandshakeException || e is javax.net.ssl.SSLException || (e.message?.contains("SSL", true) == true)
+                        if (isSslError && healthUrlHttp != healthUrl) {
+                            try {
+                                Log.w(tag, "Retrying wakeup ping over HTTP fallback: $healthUrlHttp")
+                                val reqHttp = request.newBuilder().url(healthUrlHttp).build()
+                                pingClient.newCall(reqHttp).enqueue(object : Callback {
+                                    override fun onFailure(call2: Call, e2: IOException) {
+                                        Log.w(tag, "HTTP fallback wakeup ping failed: ${e2.message}")
+                                    }
+                                    override fun onResponse(call2: Call, response2: Response) {
+                                        Log.d(tag, "HTTP fallback wakeup ping sent (code: ${response2.code})")
+                                        response2.close()
+                                    }
+                                })
+                            } catch (_: Throwable) { }
+                        }
                         Log.d(tag, "Wakeup ping request sent (server may be sleeping, that's OK)")
                     }
                     
@@ -287,9 +309,10 @@ class SyncService(private val context: Context) {
                     
                     // Сохраняем в filesDir (постоянное хранилище)
                     val jsonFile = File(context.filesDir, "data/armature_coords.json")
+                    // Данные уже в старом формате ArmatureCoords, сохраняем напрямую
                     val json = com.google.gson.Gson().toJson(serverData)
-                    Log.d(tag, "Serialized JSON: $json")
-                    jsonFile.writeText(json)
+                    Log.d(tag, "Serialized JSON (old format): $json")
+                    jsonFile.writeText(json, Charsets.UTF_8)
                     
                     // Проверяем целостность JSON файла и сохраняем хэш
                     val jsonHashVerified = FileDownloadSecurity.verifyAndPersistFileHash(

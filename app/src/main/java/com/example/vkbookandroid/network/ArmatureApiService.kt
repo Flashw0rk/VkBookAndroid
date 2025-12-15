@@ -164,7 +164,7 @@ interface ArmatureApiService {
      * Скачать PDF файл
      */
     @GET("api/files/pdf/{filename}")
-    suspend fun downloadPdf(@Path("filename") filename: String): Response<ResponseBody>
+    suspend fun downloadPdf(@Path(value = "filename", encoded = true) filename: String): Response<ResponseBody>
     
     /**
      * Загрузить PDF файл

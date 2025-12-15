@@ -143,6 +143,7 @@ class PdfViewerActivity : AppCompatActivity() {
         return uiScope.launch {
             try {
                 Log.d("PdfViewerActivity", "=== LOADING MARKERS ===")
+
                 // Загружаем только из filesDir (без автоматической синхронизации с сервером)
                 markers = armatureRepository.loadMarkersFromFilesDir()
                 Log.d("PdfViewerActivity", "Loaded markers from filesDir: ${markers.size} PDF files")
@@ -965,7 +966,7 @@ class PdfViewerActivity : AppCompatActivity() {
             val ivZoom = imageView as? ZoomableImageView
             val designation = intent.getStringExtra("designation")
             if (designation != null && ivZoom != null) {
-                val coords = markers[currentPdfName]?.get(designation)
+                val coords = currentPdfName?.let { name -> markers[name]?.get(designation) }
                 if (coords != null) {
                     val overlay = findViewById<MarkerOverlayView>(R.id.markerOverlay)
                     overlay?.setMarkerInPdfUnits(
@@ -1034,6 +1035,11 @@ class PdfViewerActivity : AppCompatActivity() {
             val iv = imageView as ZoomableImageView
             iv.post { iv.applyScale(factor) }
         }
+    }
+
+    private fun findAnyNewFormatMarkerByDesignation(designation: String): ArmatureMarker? {
+        val matches = newFormatMarkers.filter { it.id == designation }
+        return if (matches.size == 1) matches.first() else null
     }
     
     private fun buildMarkersInfo(designation: String?): String {

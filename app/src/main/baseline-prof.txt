@@ -1,0 +1,13 @@
+# Baseline profile (minimal, безопасно для релиза)
+# Формат: классы/методы для предварительной компиляции (ускорение старта)
+
+Lcom/example/vkbookandroid/MainActivity;
+Lcom/example/vkbookandroid/ArmatureFragment;
+Lorg/example/pult/android/DataFragment;
+Lcom/example/vkbookandroid/search/SearchManager;
+Lcom/example/vkbookandroid/search/PersistentSearchEngine;
+Lcom/example/vkbookandroid/ExcelRepository;
+Lcom/example/vkbookandroid/ExcelPagingSession;
+Lcom/example/vkbookandroid/SignalsAdapter;
+Lcom/example/vkbookandroid/network/NetworkModule;
+

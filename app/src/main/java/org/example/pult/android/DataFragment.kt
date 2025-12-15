@@ -86,6 +86,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
     private var nextRequestId: Int = 0
     private var activeRequestId: Int = -1
     private var lastRawQuery: String = ""
+    private var defaultSearchHint: CharSequence? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -178,6 +179,8 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         }
         excelRepository = com.example.vkbookandroid.ExcelRepository(requireContext(), fileProvider)
         searchView = view.findViewById(R.id.search_view)
+        // Сохраняем дефолтный hint для последующего восстановления
+        defaultSearchHint = try { searchView.queryHint } catch (_: Throwable) { null }
         toggleResizeModeButton = view.findViewById(R.id.toggle_resize_mode_button)
         scrollToTopButton = view.findViewById(R.id.scroll_to_top_button)
         scrollToBottomButton = view.findViewById(R.id.scroll_to_bottom_button)
@@ -355,6 +358,17 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                 queryFlow.value = newQuery
                 (activity as? com.example.vkbookandroid.MainActivity)?.onFragmentSearchQueryChanged(newQuery)
                 lastRawQuery = newQuery
+                // Leading-edge: мгновенно пытаемся показать быстрые результаты по префиксу
+                try {
+                    val q = newQuery.trim()
+                    if (q.isNotEmpty() && ::searchManager.isInitialized && isDataReadyForSearch()) {
+                        val selectedColumn = if (adapter.hasSelectedColumn()) adapter.getSelectedColumnName() else null
+                        val quick = searchManager.tryQuickPrefixResults(q, adapter.headers, selectedColumn)
+                        if (quick != null) {
+                            adapter.updateSearchResults(quick, q)
+                        }
+                    }
+                } catch (_: Throwable) {}
                 return true
             }
         })
@@ -971,11 +985,21 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         // Наблюдаем за состоянием поиска
         searchManager.isSearching.observe(viewLifecycleOwner, Observer { isSearching ->
             if (isSearching) {
-                // Показываем индикатор загрузки
                 Log.d("DataFragment", "Search started")
+                // Показываем пользователю понятный индикатор прямо в поле поиска
+                try {
+                    if (::searchView.isInitialized && currentSearchQuery.isNotBlank()) {
+                        searchView.queryHint = "Идёт поиск…"
+                    }
+                } catch (_: Throwable) {}
             } else {
-                // Скрываем индикатор загрузки
                 Log.d("DataFragment", "Search completed")
+                // Возвращаем обычный hint
+                try {
+                    if (::searchView.isInitialized) {
+                        searchView.queryHint = defaultSearchHint ?: "Поиск"
+                    }
+                } catch (_: Throwable) {}
             }
         })
         

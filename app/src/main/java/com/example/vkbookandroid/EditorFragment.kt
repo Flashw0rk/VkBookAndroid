@@ -1406,25 +1406,25 @@ class EditorFragment : Fragment() {
         comment: String?
     ) {
         val list = editorOverlay.getMarkers().toMutableList()
-        pushUndo()
-        if (existing == null) {
-            list.add(EditorMarkerOverlayView.EditorMarkerItem(id, page, xPdf, yPdf, size, size, color, id, comment))
-        } else {
-            val idx = list.indexOfFirst { it.id == existing.id }
-            if (idx >= 0) {
-                list[idx] = list[idx].copy(
-                    id = id,
-                    xPdf = xPdf,
-                    yPdf = yPdf,
-                    wPdf = size,
-                    hPdf = size,
-                    color = color,
-                    label = id,
-                    comment = comment
-                )
+            pushUndo()
+            if (existing == null) {
+                list.add(EditorMarkerOverlayView.EditorMarkerItem(id, page, xPdf, yPdf, size, size, color, id, comment))
+            } else {
+                val idx = list.indexOfFirst { it.id == existing.id }
+                if (idx >= 0) {
+                    list[idx] = list[idx].copy(
+                        id = id,
+                        xPdf = xPdf,
+                        yPdf = yPdf,
+                        wPdf = size,
+                        hPdf = size,
+                        color = color,
+                        label = id,
+                        comment = comment
+                    )
+                }
             }
-        }
-        editorOverlay.setMarkers(list)
+            editorOverlay.setMarkers(list)
     }
 
     private fun parseColorFromMarkerType(markerType: String?): Int {

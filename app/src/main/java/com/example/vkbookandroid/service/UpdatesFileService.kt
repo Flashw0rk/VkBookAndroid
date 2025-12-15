@@ -169,7 +169,15 @@ class UpdatesFileService(private val context: Context) {
             val normalizedFilename = filename.replace("\\", "/")
             
             // Пробуем прямой вызов через Retrofit (он сам кодирует query параметры)
-            val direct = apiService.downloadUpdatesFile(normalizedFilename)
+            val direct = try {
+                apiService.downloadUpdatesFile(normalizedFilename)
+            } catch (e: Exception) {
+                if (e is javax.net.ssl.SSLException && com.example.vkbookandroid.BuildConfig.ALLOW_INSECURE_TLS_FOR_UPDATES) {
+                    NetworkModule.getArmatureApiServiceInsecureForUpdates().downloadUpdatesFile(normalizedFilename)
+                } else {
+                    throw e
+                }
+            }
             if (direct.isSuccessful) {
                 Log.d(tag, "✅ Downloaded via /api/updates/download query parameter")
                 return direct.body()
@@ -180,16 +188,23 @@ class UpdatesFileService(private val context: Context) {
             val base = NetworkModule.getCurrentBaseUrl().trimEnd('/')
             val baseUrl = base.toHttpUrlOrNull()
             if (baseUrl != null) {
-                // Используем URLEncoder UTF-8 как указано в техзадании
-                val encodedFilename = java.net.URLEncoder.encode(normalizedFilename, Charsets.UTF_8.name())
                 val built = baseUrl.newBuilder()
                     .addPathSegment("api")
                     .addPathSegment("updates")
                     .addPathSegment("download")
-                    .addQueryParameter("filename", encodedFilename)
+                    // Передаём сырое имя — HttpUrl сам корректно закодирует
+                    .addQueryParameter("filename", normalizedFilename)
                     .build()
                     .toString()
-                val fallback = apiService.downloadByUrl(built)
+                val fallback = try {
+                    apiService.downloadByUrl(built)
+                } catch (e: Exception) {
+                    if (e is javax.net.ssl.SSLException && com.example.vkbookandroid.BuildConfig.ALLOW_INSECURE_TLS_FOR_UPDATES) {
+                        NetworkModule.getArmatureApiServiceInsecureForUpdates().downloadByUrl(built)
+                    } else {
+                        throw e
+                    }
+                }
                 if (fallback.isSuccessful) {
                     Log.d(tag, "✅ Downloaded via absolute URL builder with explicit encoding: $built")
                     return fallback.body()

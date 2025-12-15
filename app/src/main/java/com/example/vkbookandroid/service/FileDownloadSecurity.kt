@@ -31,6 +31,19 @@ object FileDownloadSecurity {
         }
         
         val expectedHash = metadata?.hash?.takeIf { it.isNotBlank() }?.let { normalizeHash(it) }
+        // Если сервер не прислал hash, но прислал размер — проверяем размер
+        metadata?.size?.let { expectedSize ->
+            if (expectedHash == null && expectedSize > 0 && file.length() != expectedSize) {
+                Log.e(TAG, "Size mismatch for $filename. Expected: $expectedSize, actual: ${file.length()}")
+                errorCollector?.add("Файл $filename имеет неверный размер (ожидалось $expectedSize байт)")
+                hashManager.removeFileHash(filename)
+                if (deleteCorruptedFile) {
+                    val deleted = file.delete()
+                    Log.w(TAG, "Corrupted (size mismatch) file $filename removed: $deleted")
+                }
+                return false
+            }
+        }
         val normalizedCalculatedHash = normalizeHash(calculatedHash)
         if (expectedHash != null && !normalizedCalculatedHash.equals(expectedHash, ignoreCase = true)) {
             Log.e(TAG, "Hash mismatch for $filename. Expected: ${expectedHash.take(16)}..., actual: ${normalizedCalculatedHash.take(16)}...")

@@ -13,6 +13,7 @@ import java.io.File
 import java.time.Instant
 import java.time.OffsetDateTime
 import kotlin.math.abs
+import javax.net.ssl.SSLException
 
 object MetadataConstants {
     const val UPDATES_PREFIX = "vkbook-server/updates/"
@@ -34,7 +35,16 @@ object UpdatesMetadataProvider {
 
     private suspend fun fetchMetadata(): List<UpdateFileMetadata> = withContext(Dispatchers.IO) {
         runCatching {
-            val response = NetworkModule.getArmatureApiService().checkUpdates()
+            val response = try {
+                NetworkModule.getArmatureApiService().checkUpdates()
+            } catch (e: Exception) {
+                // Точечный обход TLS‑ошибок на эмуляторах: повторяем через insecure‑клиент, если разрешено
+                if (e is SSLException && com.example.vkbookandroid.BuildConfig.ALLOW_INSECURE_TLS_FOR_UPDATES) {
+                    NetworkModule.getArmatureApiServiceInsecureForUpdates().checkUpdates()
+                } else {
+                    throw e
+                }
+            }
             if (!response.isSuccessful) {
                 Log.e("UpdatesMetadataProvider", "checkUpdates failed: HTTP ${response.code()}")
                 return@runCatching emptyList()
@@ -115,7 +125,18 @@ object UpdateFileDiffer {
             return true
         }
         
-        if (metadata == null) return true
+        if (metadata == null) {
+            // Нет метаданных — пытаемся опереться на локальный хэш
+            val localHash = hashManager.calculateFileHash(targetFile)
+            val savedHash = hashManager.getSavedFileHash(filename)
+            val normalizedLocal = normalizeHash(localHash ?: "")
+            val normalizedSaved = normalizeHash(savedHash ?: "")
+            if (normalizedLocal.isNotBlank() && normalizedLocal.equals(normalizedSaved, ignoreCase = true)) {
+                Log.d("UpdateFileDiffer", "No metadata, but local hash matches saved hash for $filename, skip download")
+                return false
+            }
+            return true
+        }
 
         // Если файл существует и сервер говорит что обновлений нет - проверяем хэш
         if (metadata.hasUpdates == false) {
