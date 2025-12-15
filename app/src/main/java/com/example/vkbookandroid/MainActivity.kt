@@ -348,7 +348,19 @@ class MainActivity : AppCompatActivity() {
         
         // Восстанавливаем состояние кнопки синхронизации (IDLE/WAITING/SYNCING), чтобы надпись не сбрасывалась
         try {
-            applySyncButtonMode(syncMode)
+            // КРИТИЧНО: Если синхронизация активна, принудительно восстанавливаем режим WAITING_SERVER или SYNCING
+            // Это предотвращает сброс кнопки в IDLE при сворачивании/разворачивании приложения
+            if (syncJob?.isActive == true) {
+                // Определяем режим по текущему статусу
+                val currentMode = when {
+                    syncMode == SyncMode.SYNCING -> SyncMode.SYNCING
+                    else -> SyncMode.WAITING_SERVER // По умолчанию WAITING_SERVER для активных заданий
+                }
+                applySyncButtonMode(currentMode)
+                Log.d("MainActivity", "onResume: восстановлен активный режим синхронизации $currentMode")
+            } else {
+                applySyncButtonMode(syncMode)
+            }
         } catch (_: Throwable) {}
     }
 
@@ -774,7 +786,9 @@ class MainActivity : AppCompatActivity() {
         
         // КРИТИЧНО: Отправляем запрос на пробуждение сервера ПЕРЕД началом проверок
         Log.d("MainActivity", "Sending wakeup ping to server...")
-        syncService.wakeupServerPing(force = true) // force = true пропускает проверку сети и кэширование
+        withContext(Dispatchers.IO) {
+            syncService.wakeupServerPing(force = true) // force = true пропускает проверку сети и кэширование
+        }
         
         // Регистрируем NetworkCallback для отслеживания изменений сети
         isWaitingForServer = true
@@ -856,8 +870,10 @@ class MainActivity : AppCompatActivity() {
                 // КРИТИЧНО: Отправляем запрос на пробуждение перед каждой проверкой соединения
                 // Это гарантирует, что сервер получает запросы и "просыпается"
                 Log.d("MainActivity", "Sending wakeup ping before attempt ${attempt + 1}")
-                syncService.wakeupServerPing(force = true)
-                
+                withContext(Dispatchers.IO) {
+                    syncService.wakeupServerPing(force = true)
+                }
+
                 // Небольшая задержка после отправки ping, чтобы запрос успел отправиться
                 delay(500)
                 
