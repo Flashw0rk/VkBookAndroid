@@ -652,10 +652,17 @@ class MainActivity : AppCompatActivity() {
      */
     private fun startSync() {
         if (syncJob?.isActive == true) return
-        
-        // НЕ проверяем сеть здесь - пусть попытки продолжаются даже без сети
-        // Это позволяет "разбудить" сервер даже при временных проблемах с сетью
-        
+
+        // КРИТИЧНО: Проверяем наличие сети ПЕРЕД запуском синхронизации
+        // Если сети совсем нет - сразу завершаем с сообщением "Нет сети"
+        if (!com.example.vkbookandroid.network.NetworkUtils.isNetworkAvailable(this)) {
+            updateSyncStatus("Нет сети", 0)
+            Toast.makeText(this, "Нет сети", Toast.LENGTH_SHORT).show()
+            applySyncButtonMode(SyncMode.IDLE)
+            Log.d("MainActivity", "No network available - sync cancelled")
+            return
+        }
+
         syncJob = uiScope.launch {
             applySyncButtonMode(SyncMode.WAITING_SERVER)
             try {
