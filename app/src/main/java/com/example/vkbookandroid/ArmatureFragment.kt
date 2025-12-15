@@ -9,6 +9,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultLauncher
@@ -63,6 +64,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     private var currentColumnWidths: MutableMap<String, Int> = mutableMapOf()
     private var currentColumnOrder: MutableList<String> = mutableListOf()
     private lateinit var searchView: SearchView
+    private lateinit var searchProgress: ProgressBar
     private lateinit var toggleResizeModeButton: Button
     private lateinit var scrollToTopButton: android.widget.ImageButton
     private lateinit var scrollToBottomButton: android.widget.ImageButton
@@ -120,6 +122,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         recyclerView = view.findViewById(R.id.recyclerView)
         emptyView = view.findViewById(R.id.empty_view)
         val hscroll: android.widget.HorizontalScrollView? = view.findViewById(R.id.hscroll)
+        searchProgress = view.findViewById<ProgressBar>(R.id.search_progress)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
         // Отключаем анимации, чтобы избежать дергания при обновлениях
         recyclerView.itemAnimator = null
@@ -1289,6 +1292,11 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                         searchView.queryHint = "Идёт поиск…"
                     }
                 } catch (_: Throwable) {}
+                searchProgress.visibility = View.VISIBLE
+                // На время долгого поиска не показываем "Нет результатов"
+                emptyView?.text = "Идёт поиск…"
+                emptyView?.visibility = View.VISIBLE
+                // Оставляем список видимым, чтобы не мигал; пустое сообщение поверх достаточно
             } else {
                 Log.d("ArmatureFragment", "Search completed")
                 // Возвращаем обычный hint
@@ -1297,6 +1305,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                         searchView.queryHint = defaultSearchHint ?: "Поиск"
                     }
                 } catch (_: Throwable) {}
+                searchProgress.visibility = View.GONE
+                // После завершения поиска возвращаем текст по умолчанию
+                emptyView?.text = "Нет результатов"
+                // Дальнейшая видимость будет выставлена в handleSearchResults
             }
         })
         
@@ -1350,7 +1362,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             } else {
                 // Пустой результат: показываем пустой вид и скрываем таблицу
                 // Не возвращаем полную таблицу при отсутствии совпадений
-                try { adapter.updateFilteredDataPreserveOrder(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
+                try { adapter.updateSearchResults(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
                 recyclerView.post {
                     try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
                     scrollToTopOnNextResults = false

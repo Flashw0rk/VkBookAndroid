@@ -23,6 +23,7 @@ import android.widget.Button
 import android.view.MotionEvent
 import android.widget.LinearLayout
 import android.widget.Toast
+import android.widget.ProgressBar
 import androidx.lifecycle.Observer
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -87,6 +88,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
     private var activeRequestId: Int = -1
     private var lastRawQuery: String = ""
     private var defaultSearchHint: CharSequence? = null
+    private lateinit var searchProgress: ProgressBar
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -97,6 +99,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
         recyclerView = view.findViewById(R.id.recyclerView)
         val hscroll: android.widget.HorizontalScrollView? = view.findViewById(R.id.hscroll)
         emptyView = view.findViewById(R.id.empty_view)
+        searchProgress = view.findViewById<ProgressBar>(R.id.search_progress)
         recyclerView.layoutManager = LinearLayoutManager(context, LinearLayoutManager.VERTICAL, false)
         // Отключаем анимации, чтобы избежать дергания при обновлениях
         recyclerView.itemAnimator = null
@@ -992,6 +995,10 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                         searchView.queryHint = "Идёт поиск…"
                     }
                 } catch (_: Throwable) {}
+                searchProgress.visibility = View.VISIBLE
+                // На время долгого поиска убираем "Нет результатов"
+                emptyView?.text = "Идёт поиск…"
+                emptyView?.visibility = View.VISIBLE
             } else {
                 Log.d("DataFragment", "Search completed")
                 // Возвращаем обычный hint
@@ -1000,6 +1007,9 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                         searchView.queryHint = defaultSearchHint ?: "Поиск"
                     }
                 } catch (_: Throwable) {}
+                searchProgress.visibility = View.GONE
+                // После завершения возвращаем дефолтный текст; видимость управляет handleSearchResults
+                emptyView?.text = "Нет результатов"
             }
         })
         
@@ -1044,7 +1054,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
             } else {
                 // Пустой результат: показываем пустой вид и скрываем таблицу
                 // Не возвращаем полную таблицу, чтобы не создавать ложное ощущение «как будто поиск пустой»
-                try { adapter.updateFilteredDataPreserveOrder(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
+                try { adapter.updateSearchResults(emptyList(), currentSearchQuery) } catch (_: Throwable) {}
                 recyclerView.post {
                     try { (recyclerView.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(0, 0) } catch (_: Throwable) {}
                             recyclerView.tag = null

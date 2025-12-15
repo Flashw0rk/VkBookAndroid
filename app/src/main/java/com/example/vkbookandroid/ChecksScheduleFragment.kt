@@ -64,6 +64,13 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
     
     // ОПТИМИЗАЦИЯ: Кэш для расчета активности задач
     private var lastActiveStatusCache: Pair<List<HourCell>, Set<LocalDate>>? = null
+    // LRU-кэш результатов выделения задач: ключ = версия данных + выбор часов/дат
+    private val tasksSelectionCache = object : LinkedHashMap<String, List<Boolean>>(64, 0.75f, true) {
+        private val maxEntries = 50 // лимит ~ до 5 МБ с запасом
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Boolean>>?): Boolean {
+            return size > maxEntries
+        }
+    }
     
     // ОПТИМИЗАЦИЯ: Кэшированный контекст и время для уменьшения создания объектов
     private var cachedContext: Context? = null
@@ -289,10 +296,25 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         // Тяжелые расчеты выполняем в фоне
         lifecycleScope.launch(Dispatchers.Default) {
             try {
+                // Пытаемся отдать из кэша, если данные и выбор совпадают
+                val tasksVersion = tasksAdapter.getDataVersion()
+                val key = buildSelectionKey(tasksVersion, selectedCells, selectedDates)
+                tasksSelectionCache[key]?.let { cachedFlags ->
+                    withContext(Dispatchers.Main) {
+                        if (isAdded) {
+                            tasksAdapter.applyActiveFlags(cachedFlags)
+                        }
+                    }
+                    return@launch
+                }
+
                 // Выполняем расчеты в фоне - вызываем метод адаптера, который уже оптимизирован
                 withContext(Dispatchers.Main) {
                     if (isAdded) {
                         tasksAdapter.updateActiveStatus(selectedCells, selectedDates)
+                        // Сохраняем результат в кэш
+                        val flags = tasksAdapter.getActiveFlagsSnapshot()
+                        tasksSelectionCache[key] = flags
                         
                         // КРИТИЧНО: Принудительное обновление через RecyclerView после расчета
                         // Гарантируем что все ViewHolder'ы получат правильное выделение
@@ -381,6 +403,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
         if (BuildConfig.DEBUG) {
             Log.d("ChecksSchedule", "Пересчет выделения: выбрано ${selectedCells.size} часов, ${selectedDates.size} дат, ${tasksAdapter.itemCount} задач")
         }
+        // Сбрасываем кэш при новом пересчете, чтобы не держать мусор
+        tasksSelectionCache.clear()
         updateTasksActiveStatusAsync()
     }
 
@@ -451,6 +475,16 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
             recyclerCalendar.layoutParams.height = heightPx
         }
         recyclerCalendar.requestLayout()
+    }
+
+    private fun buildSelectionKey(
+        tasksVersion: Long,
+        selectedCells: List<HourCell>,
+        selectedDates: Set<LocalDate>
+    ): String {
+        val hoursPart = selectedCells.joinToString(separator = ",") { "${it.hour}:${it.dayOffset}" }
+        val datesPart = selectedDates.sorted().joinToString(separator = ",") { it.toString() }
+        return "$tasksVersion|h=$hoursPart|d=$datesPart"
     }
 
     /**
@@ -570,6 +604,8 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
                     
                     // Показываем задачи
                     tasksAdapter.submit(items)
+                    // Сбрасываем кэш выбора, чтобы пересчет выделения выполнился заново
+                    lastActiveStatusCache = null
                     isDataLoadedFlag = true
                     
                     // КРИТИЧНО: Гарантируем что адаптеры готовы перед расчетом
@@ -702,7 +738,18 @@ class ChecksScheduleFragment : Fragment(), RefreshableFragment, com.example.vkbo
                     
                     // ЭТАП 1: Показываем задачи сразу (без выделения)
                     tasksAdapter.submit(items)
+                    // Сбрасываем кэши выделения, чтобы первый расчет всегда выполнялся
+                    lastActiveStatusCache = null
+                    tasksSelectionCache.clear()
                     isDataLoadedFlag = true
+                    
+                    // ЭТАП 2: Принудительно пересчитать выделение сразу после загрузки задач
+                    // recalculateActiveStatusWithChecks сам подождет готовности календаря/часов
+                    view?.post {
+                        if (isAdded) {
+                            recalculateActiveStatusWithChecks(maxRetries = 8)
+                        }
+                    }
                     
                     // ЭТАП 2: Выделение будет добавлено после инициализации адаптеров часов и календаря
                     // recalculateActiveStatusWithChecks вызывается после hoursAdapter.submit() в цепочке post
@@ -1726,6 +1773,7 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     private var editMode: Boolean = false
     private var contextForDialog: android.content.Context? = null
     private val columnWidths = mutableMapOf<Int, Int>()
+    private var dataVersion: Long = 0L
     lateinit var theme: ThemeStrategy // Стратегия темы (поздняя инициализация)
     private val headers = listOf("Операция", "Повторения")
     var onSaveRequested: ((List<CheckItem>) -> Unit)? = null // Коллбек для сохранения личных задач
@@ -1759,7 +1807,20 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             contextForDialog?.let { saveReminderRules(it) }
         }
         
+        dataVersion = computeItemsVersion(items)
         notifyDataSetChanged()
+    }
+
+    fun getDataVersion(): Long = dataVersion
+
+    fun getActiveFlagsSnapshot(): List<Boolean> = items.map { it.isActive }
+
+    fun applyActiveFlags(flags: List<Boolean>) {
+        if (flags.size != items.size) return
+        flags.forEachIndexed { index, flag ->
+            items.getOrNull(index)?.isActive = flag
+        }
+        applyChanges()
     }
     
     fun updateActiveStatus(selectedCells: List<HourCell> = emptyList(), selectedDates: Set<LocalDate> = emptySet()) {
@@ -2568,6 +2629,17 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 }
             }
             return null
+        }
+    }
+
+    private fun computeItemsVersion(list: List<CheckItem>): Long {
+        // Лёгкий хэш: учитываем ключевые поля и правила, чтобы обнаруживать изменения данных
+        return list.fold(0L) { acc, item ->
+            val base = item.operation.hashCode() * 31 +
+                    item.time.hashCode() * 17 +
+                    item.rule.hashCode() * 13 +
+                    item.reminderRules.joinToString("|") { it.serialize() }.hashCode()
+            acc xor base.toLong()
         }
     }
 }
