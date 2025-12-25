@@ -27,7 +27,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import android.util.Log
@@ -791,23 +790,25 @@ class MainActivity : AppCompatActivity() {
             repeat(maxAttempts) { attempt ->
                 if (!currentCoroutineContext().isActive) return false
 
-                // Показываем прогресс с временем до следующей попытки
-                val delaySeconds = (delayMs / 1000).toInt()
-                val progressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95) // До 95%, остальное после успеха
-                updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (следующая через ${delaySeconds} сек)", progressPercent)
+                // Вычисляем progressPercent для текущей попытки
+                val currentProgressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95)
 
-                // Показываем обратный отсчет каждую секунду
-                val totalSeconds = (delayMs / 1000).toInt()
-                for (second in totalSeconds downTo 1) {
-                    if (!currentCoroutineContext().isActive) return false
-                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts (через ${second} сек)", progressPercent)
-                    delay(1000)
+                // Показываем номер текущей попытки с информацией о задержке
+                val delaySeconds = (delayMs / 1000).toInt()
+                updateSyncStatus("Попытка подключения ${attempt + 1}/$maxAttempts (следующая через ${delaySeconds} сек)", currentProgressPercent)
+                Log.d("MainActivity", "=== Попытка подключения ${attempt + 1}/$maxAttempts (задержка: ${delaySeconds} сек) ===")
+
+                // Показываем обратный отсчет до начала попытки (если задержка > 0)
+                if (delayMs > 0 && attempt > 0) {
+                    val totalSeconds = (delayMs / 1000).toInt()
+                    for (second in totalSeconds downTo 1) {
+                        if (!currentCoroutineContext().isActive) return false
+                        updateSyncStatus("Попытка подключения ${attempt + 1}/$maxAttempts (через ${second} сек)", currentProgressPercent)
+                        delay(1000)
+                    }
                 }
 
                 if (!currentCoroutineContext().isActive) return false
-
-                // Вычисляем progressPercent для текущей попытки
-                val currentProgressPercent = ((attempt + 1) * 100 / maxAttempts).coerceAtMost(95)
 
                 // КРИТИЧНО: Отправляем запрос на пробуждение перед каждой проверкой соединения
                 // Это гарантирует, что сервер получает запросы и "просыпается"
@@ -819,23 +820,27 @@ class MainActivity : AppCompatActivity() {
                 // Небольшая задержка после отправки ping, чтобы запрос успел отправиться
                 delay(500)
 
-                // Проверка соединения в фоне (параллельный поток, БЕЗ проверки сети)
+                // Проверка соединения в фоне с таймаутом (чтобы не зависать)
                 val isReady = withContext(Dispatchers.IO) {
-                    runCatching { syncService.checkServerConnectionForWakeup() }
+                    runCatching {
+                        // Добавляем таймаут для проверки соединения (максимум 10 секунд на попытку)
+                        kotlinx.coroutines.withTimeout(10000L) {
+                            syncService.checkServerConnectionForWakeup()
+                        }
+                    }
                         .onFailure { e ->
-                            val errorMessage = e.message ?: "Неизвестная ошибка"
-                            Log.w("MainActivity", "Server wake check failed on attempt ${attempt + 1}: ${e.message}")
+                            val errorMessage = when {
+                                e is kotlinx.coroutines.TimeoutCancellationException -> "Таймаут соединения"
+                                isRateLimitRelatedException(e) -> "Достигнут лимит запросов"
+                                else -> e.message ?: "Неизвестная ошибка"
+                            }
+                            Log.w("MainActivity", "Server wake check failed on attempt ${attempt + 1}: $errorMessage")
                             if (isRateLimitRelatedException(e)) {
                                 Log.w("MainActivity", "Rate limit detected during wakeup check")
                                 withContext(Dispatchers.Main) {
                                     updateSyncStatus("Достигнут лимит запросов. Прекращаем попытки пробуждения.")
                                 }
                                 return@withContext false
-                            } else {
-                                // Показываем конкретную ошибку
-                                withContext(Dispatchers.Main) {
-                                    updateSyncStatus("Попытка ${attempt + 1}/$maxAttempts: $errorMessage", currentProgressPercent)
-                                }
                             }
                         }
                         .getOrDefault(false)
@@ -843,11 +848,29 @@ class MainActivity : AppCompatActivity() {
 
                 if (isReady) {
                     updateSyncStatus("Сервер активен, начинаем обновление…", 100)
+                    Log.d("MainActivity", "✅ Сервер доступен после ${attempt + 1} попытки!")
                     return true
                 }
 
-                // Увеличиваем задержку для следующей попытки (exponential backoff)
-                delayMs = minOf(delayMs * 2, maxDelayMs)
+                // ИСПРАВЛЕНИЕ: После каждой неудачной попытки показываем "Сервер недоступен" на 3 секунды
+                // Это дает пользователю понять, что попытка завершилась неудачей
+                if (attempt < maxAttempts - 1) { // Не показываем после последней попытки
+                    updateSyncStatus("Сервер недоступен. Повторная попытка через 3 сек...", currentProgressPercent)
+                    Log.d("MainActivity", "❌ Попытка ${attempt + 1} неудачна. Ждем 3 секунды перед следующей попыткой")
+                    
+                    // Показываем обратный отсчет 3 секунды перед следующей попыткой
+                    for (second in 3 downTo 1) {
+                        if (!currentCoroutineContext().isActive) return false
+                        updateSyncStatus("Сервер недоступен. Повторная попытка через ${second} сек...", currentProgressPercent)
+                        delay(1000)
+                    }
+                    
+                    // Увеличиваем задержку для следующей попытки (exponential backoff)
+                    delayMs = minOf(delayMs * 2, maxDelayMs)
+                } else {
+                    // После последней попытки сразу переходим к завершению
+                    Log.d("MainActivity", "❌ Все $maxAttempts попыток неудачны. Сервер недоступен.")
+                }
             }
 
             // После 10 неудачных попыток
@@ -1572,19 +1595,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadThemeConfiguration() {
-        runBlocking {
-            withContext(Dispatchers.IO) {
-                com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
-            }
-        }
+        // loadTheme() просто читает SharedPreferences - быстро и не блокирует UI
+        // НЕ используем runBlocking, чтобы не блокировать главный поток при запуске
+        com.example.vkbookandroid.theme.AppTheme.loadTheme(this@MainActivity)
     }
 
     private fun readServerUrlFromPreferences(): String {
-        return runBlocking {
-            withContext(Dispatchers.IO) {
-                ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
-            }
-        }
+        // getCurrentServerUrl() просто читает SharedPreferences - быстро и не блокирует UI
+        // НЕ используем runBlocking, чтобы не блокировать главный поток при запуске
+        return ServerSettingsActivity.getCurrentServerUrl(this@MainActivity)
     }
 
     companion object {
