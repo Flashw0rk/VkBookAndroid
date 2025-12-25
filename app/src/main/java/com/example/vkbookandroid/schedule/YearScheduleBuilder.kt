@@ -255,12 +255,45 @@ class YearScheduleBuilder(
                 Log.e(TAG, "❌ ${row.monthName}: ожидалось $expectedDays дней, получено $actualDays")
                 hasErrors = true
             }
+            
+            // ИСПРАВЛЕНИЕ: Проверяем правильность дней недели для первого дня месяца
+            val firstDayIndex = row.days.indexOfFirst { it.isNotEmpty() }
+            if (firstDayIndex >= 0) {
+                val firstDayNumber = row.days[firstDayIndex].toIntOrNull()
+                if (firstDayNumber == 1) {
+                    // Вычисляем реальный день недели первого дня месяца
+                    val calendar = java.util.Calendar.getInstance()
+                    calendar.set(year, monthIndex, 1)
+                    val realDayOfWeek = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+                    // Calendar.DAY_OF_WEEK: 1=воскресенье, 2=понедельник, ..., 7=суббота
+                    
+                    // Вычисляем ожидаемый день недели на основе позиции в календаре
+                    // Позиция в календаре: 0 = понедельник, 1 = вторник, ..., 6 = воскресенье
+                    // Calendar: понедельник=2, вторник=3, ..., воскресенье=1
+                    val expectedDayOfWeek = when (firstDayIndex % 7) {
+                        0 -> 2 // Понедельник
+                        1 -> 3 // Вторник
+                        2 -> 4 // Среда
+                        3 -> 5 // Четверг
+                        4 -> 6 // Пятница
+                        5 -> 7 // Суббота
+                        6 -> 1 // Воскресенье
+                        else -> -1
+                    }
+                    
+                    if (realDayOfWeek != expectedDayOfWeek) {
+                        val dayNames = arrayOf("", "воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота")
+                        Log.e(TAG, "❌ ${row.monthName} $year: Неправильный день недели первого дня! Ожидалось ${dayNames[expectedDayOfWeek]} ($expectedDayOfWeek), получено ${dayNames[realDayOfWeek]} ($realDayOfWeek), позиция=$firstDayIndex")
+                        hasErrors = true
+                    }
+                }
+            }
         }
         
         if (!hasErrors) {
-            Log.d(TAG, "✅ Все месяцы валидны!")
+            Log.d(TAG, "✅ Все месяцы валидны! Дни недели проверены для года $year")
         } else {
-            Log.e(TAG, "❌ ОБНАРУЖЕНЫ ОШИБКИ В КАЛЕНДАРЕ!")
+            Log.e(TAG, "❌ ОБНАРУЖЕНЫ ОШИБКИ В КАЛЕНДАРЕ для года $year!")
         }
     }
 }

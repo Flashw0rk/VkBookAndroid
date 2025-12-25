@@ -182,6 +182,8 @@ class MainActivity : AppCompatActivity() {
         // Инициализация синхронизации
         btnSync = findViewById(R.id.btnSync)
         syncButtonDefaultText = btnSync.text.toString()
+        // КРИТИЧНО: Кнопка всегда должна быть активной с самого начала
+        btnSync.isEnabled = true
         btnSettings = findViewById(R.id.btnSettings)
         tvSyncStatus = findViewById(R.id.tvSyncStatus)
         progressSync = findViewById(R.id.progressSync)
@@ -259,6 +261,16 @@ class MainActivity : AppCompatActivity() {
         dataRefreshManager.resumeAllWatchers()
         
         android.util.Log.d("MainActivity", "=== onResume() вызван ===")
+        
+        // КРИТИЧНО: Восстанавливаем состояние кнопки синхронизации, если операция была активна
+        // Кнопка всегда должна быть активной и показывать правильный текст
+        if (syncJob?.isActive == true || isWaitingServerWake) {
+            btnSync.isEnabled = true
+            btnSync.text = "Отменить обновление"
+        } else {
+            btnSync.isEnabled = true
+            btnSync.text = syncButtonDefaultText
+        }
         
         val adminChanged = updateAdminModeState()
         
@@ -488,10 +500,13 @@ class MainActivity : AppCompatActivity() {
         // Добавляем диагностику по двойному тапу
         var lastTapTime = 0L
         btnSync.setOnClickListener {
-            if (isWaitingServerWake) {
+            // КРИТИЧНО: Кнопка всегда активна и может либо запустить, либо отменить операцию
+            // Если операция уже идет (ожидание сервера или синхронизация) - отменяем
+            if (isWaitingServerWake || syncJob?.isActive == true) {
                 cancelPendingSync()
                 return@setOnClickListener
             }
+            // Двойной клик для диагностики
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastTapTime < 500) {
                 diagnoseFiles()
@@ -532,18 +547,21 @@ class MainActivity : AppCompatActivity() {
     
     private fun checkConnectionOnStartup() {
         // Проверяем соединение при запуске
+        // КРИТИЧНО: Кнопка всегда должна быть активной, даже при проверке соединения
         uiScope.launch {
             updateSyncStatus("Проверка соединения...")
+            // КРИТИЧНО: Кнопка остается активной во время проверки
+            btnSync.isEnabled = true
             val isConnected = withContext(Dispatchers.IO) {
                 syncService.checkServerConnection()
             }
             if (isConnected) {
                 updateSyncStatus("Готов к обновлению")
-                btnSync.isEnabled = true
             } else {
                 updateSyncStatus("Сервер недоступен")
-                btnSync.isEnabled = false
             }
+            // КРИТИЧНО: Кнопка всегда активна, независимо от результата проверки
+            btnSync.isEnabled = true
         }
     }
     
@@ -552,9 +570,14 @@ class MainActivity : AppCompatActivity() {
     /**
      * Запуск РУЧНОЙ синхронизации (автообновления отключены)
      * Пользователь может обновить данные только нажав кнопку "Синхронизация"
+     * КРИТИЧНО: При повторном нажатии отменяет текущую операцию
      */
     private fun startSync() {
-        if (syncJob?.isActive == true) return
+        // КРИТИЧНО: Если операция уже активна - отменяем её при повторном нажатии
+        if (syncJob?.isActive == true) {
+            cancelPendingSync()
+            return
+        }
 
         // КРИТИЧНО: Проверяем наличие сети ПЕРЕД запуском синхронизации
         // Если сети совсем нет - сразу завершаем с сообщением "Нет сети"
@@ -562,6 +585,8 @@ class MainActivity : AppCompatActivity() {
             updateSyncStatus("Нет сети", 0)
             Toast.makeText(this, "Нет сети", Toast.LENGTH_SHORT).show()
             Log.d("MainActivity", "No network available - sync cancelled")
+            // КРИТИЧНО: Кнопка остается активной даже при отсутствии сети
+            btnSync.isEnabled = true
             return
         }
 
@@ -569,14 +594,22 @@ class MainActivity : AppCompatActivity() {
             try {
                 val serverReady = waitForServerWakeup()
                 if (!serverReady) {
+                    // ИСПРАВЛЕНИЕ: После всех 10 попыток показываем "Сервер недоступен"
+                    // но кнопка должна оставаться активной для повторной попытки
                     updateSyncStatus("Сервер недоступен", 0)
                     hideSyncProgress()
-                    resetSyncButtonState()
+                    // КРИТИЧНО: Кнопка должна оставаться активной и показывать "Обновить базы"
+                    // чтобы пользователь мог повторить попытку
+                    btnSync.isEnabled = true
+                    btnSync.text = syncButtonDefaultText
+                    exitServerWarmupState()
                     return@launch
                 }
                 
-                btnSync.isEnabled = false
-                btnSync.text = syncButtonDefaultText
+                // ИСПРАВЛЕНИЕ: Кнопка остается активной во время синхронизации
+                // но текст меняется на "Отменить обновление" для возможности отмены
+                btnSync.isEnabled = true
+                btnSync.text = "Отменить обновление"
                 showSyncProgress()
                 updateSyncStatus("Подключение к серверу...", 0)
                 
@@ -593,6 +626,10 @@ class MainActivity : AppCompatActivity() {
                         updateSyncStatus("Лимит запросов достигнут", 100)
                         hideSyncProgress()
                         Toast.makeText(this@MainActivity, "Достигнут лимит запросов к серверу", Toast.LENGTH_LONG).show()
+                        // ИСПРАВЛЕНИЕ: Кнопка остается активной
+                        btnSync.isEnabled = true
+                        btnSync.text = syncButtonDefaultText
+                        exitServerWarmupState()
                     }
                     result.overallSuccess -> {
                         updateSyncStatus("Обновление завершено", 100)
@@ -608,6 +645,10 @@ class MainActivity : AppCompatActivity() {
                         refreshFragmentsData()
                         diagnoseFilesAfterSync()
                         com.example.vkbookandroid.analytics.AnalyticsManager.logSyncCompleted(result.updatedFiles.size, true)
+                        // ИСПРАВЛЕНИЕ: Кнопка остается активной
+                        btnSync.isEnabled = true
+                        btnSync.text = syncButtonDefaultText
+                        exitServerWarmupState()
                     }
                     result.serverConnected -> {
                         updateSyncStatus("Ошибка обновления", 100)
@@ -618,23 +659,45 @@ class MainActivity : AppCompatActivity() {
                             "Ошибка при обновлении данных"
                         }
                         Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
+                        // ИСПРАВЛЕНИЕ: Кнопка остается активной
+                        btnSync.isEnabled = true
+                        btnSync.text = syncButtonDefaultText
+                        exitServerWarmupState()
                     }
                     else -> {
                         updateSyncStatus("Сервер недоступен", 0)
                         hideSyncProgress()
                         Toast.makeText(this@MainActivity, "Сервер недоступен", Toast.LENGTH_SHORT).show()
+                        // ИСПРАВЛЕНИЕ: Кнопка остается активной
+                        btnSync.isEnabled = true
+                        btnSync.text = syncButtonDefaultText
+                        exitServerWarmupState()
                     }
                 }
             } catch (ce: CancellationException) {
                 updateSyncStatus("Обновление отменено", 0)
                 hideSyncProgress()
+                // ИСПРАВЛЕНИЕ: Кнопка остается активной при отмене
+                btnSync.isEnabled = true
+                btnSync.text = syncButtonDefaultText
+                exitServerWarmupState()
             } catch (e: Exception) {
                 updateSyncStatus("Ошибка соединения", 0)
                 hideSyncProgress()
                 Toast.makeText(this@MainActivity, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+                // ИСПРАВЛЕНИЕ: Кнопка остается активной при ошибке
+                btnSync.isEnabled = true
+                btnSync.text = syncButtonDefaultText
+                exitServerWarmupState()
             } finally {
+                // КРИТИЧНО: Кнопка всегда должна быть активна в finally блоке
+                // Если операция завершилась, кнопка должна быть готова к следующему нажатию
+                btnSync.isEnabled = true
                 if (!isWaitingServerWake) {
                     resetSyncButtonState()
+                } else {
+                    // Если операция еще идет, кнопка показывает "Отменить обновление"
+                    btnSync.text = "Отменить обновление"
                 }
                 syncJob = null
             }
@@ -699,6 +762,8 @@ class MainActivity : AppCompatActivity() {
         if (!isWaitingServerWake) return
         isWaitingServerWake = false
         btnSync.text = syncButtonDefaultText
+        // КРИТИЧНО: Кнопка всегда остается активной
+        btnSync.isEnabled = true
     }
 
     private suspend fun waitForServerWakeup(): Boolean {

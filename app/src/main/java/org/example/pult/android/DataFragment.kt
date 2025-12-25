@@ -61,6 +61,7 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
     private lateinit var excelDataManager: AppExcelDataManager
     private lateinit var excelRepository: com.example.vkbookandroid.ExcelRepository
     private var currentColumnWidths: MutableMap<String, Int> = mutableMapOf()
+    private var currentColumnOrder: MutableList<String> = mutableListOf()
     private lateinit var searchView: SearchView
     private lateinit var toggleResizeModeButton: Button
     private lateinit var scrollToTopButton: android.widget.ImageButton
@@ -613,10 +614,15 @@ class DataFragment : Fragment(), com.example.vkbookandroid.RefreshableFragment, 
                     }
                     
                     lastHeaders = headers
+                    // ИСПРАВЛЕНИЕ: Загружаем сохранённый порядок колонок ДО обновления данных
+                    val savedColumnOrder = com.example.vkbookandroid.utils.ColumnOrderManager.loadBschuColumnOrder(requireContext())
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
-                    // Применяем сохранённый порядок колонок (без изменения ширин по умолчанию)
-                    com.example.vkbookandroid.utils.ColumnOrderManager.loadBschuColumnOrder(requireContext()).takeIf { it.isNotEmpty() }?.let {
-                        adapter.applyColumnOrder(it)
+                    // ИСПРАВЛЕНИЕ: Применяем сохранённый порядок колонок СРАЗУ после обновления данных
+                    // Это гарантирует, что пользовательский порядок не сбросится на порядок из Excel
+                    if (savedColumnOrder.isNotEmpty()) {
+                        adapter.applyColumnOrder(savedColumnOrder)
+                        // Сохраняем текущий порядок в переменную для последующего использования
+                        currentColumnOrder = savedColumnOrder.toMutableList()
                     }
                     isDataLoaded = true
                     attachPaging()

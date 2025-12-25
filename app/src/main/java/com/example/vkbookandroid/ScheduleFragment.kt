@@ -1723,8 +1723,10 @@ class ScheduleCalendarAdapter(
                 
                 // Подсветка выходных
                 if (day.isNotEmpty() && day.toIntOrNull() != null) {
+                    // ИСПРАВЛЕНИЕ: Используем год строки (row.year) вместо текущего года
+                    // Это критично для правильного отображения дней недели при переходе между годами
                     val calendar = Calendar.getInstance()
-                    calendar.set(Calendar.getInstance().get(Calendar.YEAR), row.monthIndex, day.toInt())
+                    calendar.set(row.year, row.monthIndex, day.toInt())
                     val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
                     
                     // КРИТИЧНО: Для классической темы - исходные цвета выходных!
