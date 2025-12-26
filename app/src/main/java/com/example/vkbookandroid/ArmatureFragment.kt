@@ -271,6 +271,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             val original = adapter.getOriginalData()
             if (adapter.itemCount <= 1 && original.isNotEmpty() && lastHeaders.isNotEmpty()) {
                 adapter.updateData(original, lastHeaders, currentColumnWidths, isResizingMode, updateOriginal = false)
+                applySavedColumnOrderIfNeeded()
             }
             recyclerView.visibility = View.VISIBLE
             emptyView?.visibility = View.GONE
@@ -323,6 +324,7 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             val original = adapter.getOriginalData()
             if (adapter.itemCount <= 1 && original.isNotEmpty() && lastHeaders.isNotEmpty()) {
                 adapter.updateData(original, lastHeaders, currentColumnWidths, isResizingMode, updateOriginal = false)
+                applySavedColumnOrderIfNeeded()
             }
             recyclerView.visibility = View.VISIBLE
             emptyView?.visibility = View.GONE
@@ -333,6 +335,39 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         // ИСПРАВЛЕНИЕ: Для применения темы достаточно наличия view
         // Адаптер и кнопки могут быть не инициализированы
         return view != null && isAdded
+    }
+    
+    /**
+     * Универсальный метод для применения сохраненного порядка колонок
+     * Вызывается после каждого обновления данных для гарантированного сохранения пользовательского порядка
+     */
+    private fun applySavedColumnOrderIfNeeded() {
+        if (!::adapter.isInitialized || !isAdded) return
+        
+        try {
+            val savedColumnOrder = com.example.vkbookandroid.utils.ColumnOrderManager.loadArmatureColumnOrder(requireContext())
+            if (savedColumnOrder.isNotEmpty()) {
+                adapter.applyColumnOrder(savedColumnOrder)
+                currentColumnOrder = savedColumnOrder.toMutableList()
+                Log.d("ArmatureFragment", "Applied saved column order: $savedColumnOrder")
+                
+                // ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: Применяем порядок еще раз с небольшой задержкой
+                // Это гарантирует, что порядок не сбросится даже если что-то еще его изменит
+                recyclerView.postDelayed({
+                    if (isAdded && ::adapter.isInitialized) {
+                        val currentOrder = adapter.headers.toList()
+                        val savedOrder = com.example.vkbookandroid.utils.ColumnOrderManager.loadArmatureColumnOrder(requireContext())
+                        if (savedOrder.isNotEmpty() && currentOrder != savedOrder) {
+                            adapter.applyColumnOrder(savedOrder)
+                            currentColumnOrder = savedOrder.toMutableList()
+                            Log.d("ArmatureFragment", "Re-applied saved column order after delay (was reset)")
+                        }
+                    }
+                }, 300) // 300ms задержка для гарантированного применения
+            }
+        } catch (e: Exception) {
+            Log.e("ArmatureFragment", "Error applying saved column order", e)
+        }
     }
     
     private fun loadArmatureData() {
@@ -408,16 +443,9 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                     }
                     
                     lastHeaders = headers
-                    // ИСПРАВЛЕНИЕ: Загружаем сохранённый порядок колонок ДО обновления данных
-                    val savedColumnOrder = com.example.vkbookandroid.utils.ColumnOrderManager.loadArmatureColumnOrder(requireContext())
                     adapter.updateData(firstPage, headers, currentColumnWidths, isResizingMode, updateOriginal = true)
-                    // ИСПРАВЛЕНИЕ: Применяем сохранённый порядок колонок СРАЗУ после обновления данных
-                    // Это гарантирует, что пользовательский порядок не сбросится на порядок из Excel
-                    if (savedColumnOrder.isNotEmpty()) {
-                        adapter.applyColumnOrder(savedColumnOrder)
-                        // Сохраняем текущий порядок в переменную для последующего использования
-                        currentColumnOrder = savedColumnOrder.toMutableList()
-                    }
+                    // УНИВЕРСАЛЬНОЕ ПРИМЕНЕНИЕ: Используем метод для гарантированного сохранения порядка
+                    applySavedColumnOrderIfNeeded()
                     isDataLoaded = true
                     attachPaging()
                     
@@ -467,8 +495,13 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                             val newFirstPage = newCached.readRange(0, newDataSize)
                             nextStartRow = newFirstPage.size
                             withContext(Dispatchers.Main) {
+                                if (!isAdded) return@withContext
+                                
                                 lastHeaders = newHeaders
                                 adapter.updateData(newFirstPage, newHeaders, currentColumnWidths, isResizingMode, updateOriginal = true)
+                                
+                                // УНИВЕРСАЛЬНОЕ ПРИМЕНЕНИЕ: Используем метод для гарантированного сохранения порядка
+                                applySavedColumnOrderIfNeeded()
                                 
                                 // ИСПРАВЛЕНИЕ: Проверка готовности данных после фонового обновления
                                 val originalDataCount = adapter.getOriginalData().size
