@@ -36,6 +36,12 @@ class SettingsTabsActivity : AppCompatActivity() {
     private var connectionFragment: ConnectionSettingsFragment? = null
     private var appFragment: AppSettingsFragment? = null
     private var themeChanged: Boolean = false
+    
+    // Счетчик тапов для Easter egg
+    private var programTabTapCount: Int = 0
+    private var lastTapTime: Long = 0
+    private val TAP_TIMEOUT_MS = 2000L // 2 секунды между тапами
+    private val REQUIRED_TAPS = 8
 
     private val fragmentLifecycleCallbacks = object : FragmentManager.FragmentLifecycleCallbacks() {
         override fun onFragmentViewCreated(
@@ -106,6 +112,9 @@ class SettingsTabsActivity : AppCompatActivity() {
             }
         }.attach()
         
+        // Обработчик тапов на вкладку "Программа" для Easter egg
+        setupProgramTabEasterEgg()
+        
         // ПО УМОЛЧАНИЮ открываем вкладку "Программа" (теперь индекс 0)
         viewPager.setCurrentItem(0, false)
     }
@@ -128,6 +137,62 @@ class SettingsTabsActivity : AppCompatActivity() {
     fun openTabSettings() {
         connectionFragment?.openTabSettings()
             ?: android.widget.Toast.makeText(this, "Настройки вкладок недоступны", android.widget.Toast.LENGTH_SHORT).show()
+    }
+    
+    /**
+     * Настройка Easter egg: 8 тапов по вкладке "Программа" для показа информации об авторе
+     * 
+     * ВАЖНО: Используем OnTabReselected для обработки повторных тапов на уже выбранную вкладку,
+     * чтобы не конфликтовать с TabLayoutMediator и не блокировать стандартное переключение вкладок.
+     */
+    private fun setupProgramTabEasterEgg() {
+        // Обрабатываем тапы через OnTabReselected - это срабатывает при тапе на уже выбранную вкладку
+        // и НЕ конфликтует с TabLayoutMediator, который обрабатывает переключение через ViewPager2
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
+                // Сбрасываем счетчик при переключении на другую вкладку
+                if (tab?.position != 0) {
+                    programTabTapCount = 0
+                }
+            }
+            
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {}
+            
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab?) {
+                // Обрабатываем повторный тап на вкладку "Программа" (индекс 0)
+                if (tab?.position == 0) {
+                    val currentTime = System.currentTimeMillis()
+                    
+                    // Сбрасываем счетчик если прошло больше 2 секунд с последнего тапа
+                    if (currentTime - lastTapTime > TAP_TIMEOUT_MS) {
+                        programTabTapCount = 0
+                    }
+                    
+                    lastTapTime = currentTime
+                    programTabTapCount++
+                    
+                    // Если достигли 8 тапов, показываем диалог
+                    if (programTabTapCount >= REQUIRED_TAPS) {
+                        programTabTapCount = 0 // Сбрасываем счетчик
+                        showAuthorInfoDialog()
+                    }
+                }
+            }
+        })
+    }
+    
+    /**
+     * Показать диалог с информацией об авторе
+     */
+    private fun showAuthorInfoDialog() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("О разработчике")
+            .setMessage("Идея и разработка: Плющик Станислав Викторович")
+            .setPositiveButton("OK") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .setCancelable(true)
+            .show()
     }
     
     /**
