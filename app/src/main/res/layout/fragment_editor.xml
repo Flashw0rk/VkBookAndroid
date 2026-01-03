@@ -45,6 +45,15 @@
             android:layout_marginStart="8dp"
             android:text="Отправить"
             android:textSize="12sp"/>
+
+        <Button
+            android:id="@+id/btnDeleteFiles"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:text="Удалить"
+            android:textSize="12sp"/>
     </LinearLayout>
 
     <LinearLayout

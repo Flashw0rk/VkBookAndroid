@@ -52,6 +52,7 @@ class EditorFragment : Fragment() {
     private lateinit var btnSave: Button
     private lateinit var btnSaveChanges: Button // legacy field, no longer used, but keep if referenced
     private lateinit var btnUpload: Button
+    private lateinit var btnDeleteFiles: Button
     private lateinit var pdfZoomView: ZoomableImageView
     private lateinit var editorOverlay: EditorMarkerOverlayView
     private lateinit var jsonEditor: EditText
@@ -88,6 +89,11 @@ class EditorFragment : Fragment() {
     private var excelColumnWidths: MutableMap<String, Int> = mutableMapOf()
     private var excelHeaders: List<String> = emptyList()
     private var excelData: MutableList<org.example.pult.RowDataDynamic> = mutableListOf()
+    
+    // Кэш результатов поиска для оптимизации
+    private val searchCache = mutableMapOf<String, List<org.example.pult.RowDataDynamic>>()
+    // Предварительно подготовленные строки для быстрого поиска
+    private var excelDataPrepared: List<Pair<org.example.pult.RowDataDynamic, List<String>>> = emptyList()
 
     private var lastOpenedJson: String = ""
     private var lastOpenedJsonUri: Uri? = null
@@ -153,6 +159,7 @@ class EditorFragment : Fragment() {
         // keep by id to avoid NPE if referenced somewhere
         btnSaveChanges = Button(requireContext())
         btnUpload = v.findViewById(R.id.btnUpload)
+        btnDeleteFiles = v.findViewById(R.id.btnDeleteFiles)
         pdfZoomView = v.findViewById(R.id.pdfZoomView)
         editorOverlay = v.findViewById(R.id.editorOverlay)
         // Оверлей не кликабелен по умолчанию (жесты идут в ZoomableImageView, пока режим редактирования выключен)
@@ -231,6 +238,7 @@ class EditorFragment : Fragment() {
             true
         }
         btnUpload.setOnClickListener { confirmAndUploadArmatureCoords() }
+        btnDeleteFiles.setOnClickListener { showDeleteFilesMenu() }
         tvStatus.text = "Подсказка: двумя пальцами зум, одним пальцем панорамирование (режим выкл)."
 
         // Явно выставляем текст/цвет и выключаем font padding для идеального центрирования
@@ -482,6 +490,8 @@ class EditorFragment : Fragment() {
         val prev = excelUndo.removeLast()
         excelRedo.addLast(current)
         excelData.clear(); excelData.addAll(prev)
+        prepareDataForSearch()
+        searchCache.clear()
         excelAdapter?.updateData(excelData, excelHeaders, excelColumnWidths, excelIsResizingMode)
     }
 
@@ -492,6 +502,8 @@ class EditorFragment : Fragment() {
         val next = excelRedo.removeLast()
         excelUndo.addLast(current)
         excelData.clear(); excelData.addAll(next)
+        prepareDataForSearch()
+        searchCache.clear()
         excelAdapter?.updateData(excelData, excelHeaders, excelColumnWidths, excelIsResizingMode)
     }
 
@@ -794,18 +806,39 @@ class EditorFragment : Fragment() {
                     val repo = com.example.vkbookandroid.ExcelRepository(requireContext(), provider)
                     // Определяем, какой файл открыт, чтобы выбрать правильный лист
                     val isArmatures = file.name.equals("Armatures.xlsx", ignoreCase = true)
-                    val session = if (isArmatures) repo.openPagingSessionArmatures() else repo.openPagingSessionBschu()
+                    
+                    // ОПТИМИЗАЦИЯ: Используем кэшированную сессию для быстрой загрузки
+                    val pageSize = 4000
+                    val cachedSession = if (isArmatures) {
+                        repo.openCachedSessionArmatures(pageSize)
+                    } else {
+                        repo.openCachedSessionBschu(pageSize)
+                    }
+                    
+                    val session = cachedSession ?: run {
+                        // Если кэша нет, открываем обычную сессию
+                        if (isArmatures) repo.openPagingSessionArmatures() else repo.openPagingSessionBschu()
+                    }
 
                     val headersLocal = session.getHeaders()
                     val widthsLocal = session.getColumnWidths().toMutableMap()
-                    val dataLocal = session.readRange(0, 2000) // читаем побольше, но разумно
-                    session.close()
+                    val dataLocal = session.readRange(0, pageSize) // читаем побольше, но разумно
+                    
+                    // Закрываем только если это не кэшированная сессия
+                    if (cachedSession == null) {
+                        (session as? com.example.vkbookandroid.ExcelPagingSession)?.close()
+                    }
 
                     withContext(Dispatchers.Main) {
                         excelHeaders = headersLocal
                         excelColumnWidths = widthsLocal
                         excelData.clear()
                         excelData.addAll(dataLocal)
+                        
+                        // ОПТИМИЗАЦИЯ: Подготавливаем данные для быстрого поиска
+                        prepareDataForSearch()
+                        // Очищаем кэш поиска при загрузке новых данных
+                        searchCache.clear()
 
                         if (excelAdapter == null) {
                             excelAdapter = SignalsAdapter(
@@ -871,6 +904,15 @@ class EditorFragment : Fragment() {
     }
 
     private var excelSearchJob: kotlinx.coroutines.Job? = null
+    
+    private fun prepareDataForSearch() {
+        excelDataPrepared = excelData.map { row ->
+            val vals = row.getAllProperties()
+            val prepared = vals.map { it?.toString()?.lowercase() ?: "" }
+            Pair(row, prepared)
+        }
+    }
+    
     private fun applyExcelSearch(query: String) {
         // ИСПРАВЛЕНО: Проверяем состояние фрагмента перед запуском корутины
         if (!isAdded || view == null) {
@@ -878,48 +920,68 @@ class EditorFragment : Fragment() {
             return
         }
         
-        val normalized = query.trim()
+        val normalized = query.trim().lowercase()
         excelSearchJob?.cancel()
         
         try {
-        excelSearchJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
+            excelSearchJob = viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
                 try {
-            // Небольшая задержка для дебаунса
-            kotlinx.coroutines.delay(220)
+                    // Небольшая задержка для дебаунса
+                    kotlinx.coroutines.delay(220)
                     
                     // Проверяем что фрагмент еще жив после задержки
                     if (!isAdded) return@launch
                     
-            if (normalized.isEmpty()) {
+                    if (normalized.isEmpty()) {
                         withContext(Dispatchers.Main) { 
                             if (isAdded) excelAdapter?.clearSearchResults() 
                         }
-                return@launch
-            }
-                    
-            // Фильтр на фоне с учётом поиска по конкретной колонке
-            val selectedHeader = try { excelAdapter?.getSelectedColumnName() } catch (_: Throwable) { null }
-            val filtered = if (!selectedHeader.isNullOrBlank()) {
-                val colIndex = excelHeaders.indexOfFirst { it.equals(selectedHeader, ignoreCase = true) }
-                if (colIndex >= 0) {
-                    excelData.filter { row ->
-                        val vals = row.getAllProperties()
-                        vals.getOrNull(colIndex)?.toString()?.contains(normalized, ignoreCase = true) == true
+                        return@launch
                     }
-                } else {
-                    excelData.filter { row ->
-                        val vals = row.getAllProperties()
-                        vals.any { it?.toString()?.contains(normalized, ignoreCase = true) == true }
-                    }
-                }
-            } else {
-                excelData.filter { row ->
-                    val vals = row.getAllProperties()
-                    vals.any { it?.toString()?.contains(normalized, ignoreCase = true) == true }
-                }
-            }
                     
-            withContext(Dispatchers.Main) {
+                    // ОПТИМИЗАЦИЯ: Проверяем кэш результатов поиска
+                    val cacheKey = "${normalized}_${excelAdapter?.getSelectedColumnName() ?: "all"}"
+                    val cachedResult = searchCache[cacheKey]
+                    if (cachedResult != null) {
+                        Log.d("EditorFragment", "Using cached search result for: $normalized")
+                        withContext(Dispatchers.Main) {
+                            if (isAdded) excelAdapter?.setSearchResults(cachedResult, normalized)
+                        }
+                        return@launch
+                    }
+                    
+                    // Подготавливаем данные для поиска, если еще не подготовлены
+                    if (excelDataPrepared.isEmpty() || excelDataPrepared.size != excelData.size) {
+                        prepareDataForSearch()
+                    }
+                    
+                    // ОПТИМИЗИРОВАННЫЙ поиск с использованием предварительно подготовленных данных
+                    val selectedHeader = try { excelAdapter?.getSelectedColumnName() } catch (_: Throwable) { null }
+                    val filtered = if (!selectedHeader.isNullOrBlank()) {
+                        val colIndex = excelHeaders.indexOfFirst { it.equals(selectedHeader, ignoreCase = true) }
+                        if (colIndex >= 0) {
+                            excelDataPrepared.filter { (_, prepared) ->
+                                prepared.getOrNull(colIndex)?.contains(normalized) == true
+                            }.map { it.first }
+                        } else {
+                            excelDataPrepared.filter { (_, prepared) ->
+                                prepared.any { it.contains(normalized) }
+                            }.map { it.first }
+                        }
+                    } else {
+                        excelDataPrepared.filter { (_, prepared) ->
+                            prepared.any { it.contains(normalized) }
+                        }.map { it.first }
+                    }
+                    
+                    // Кэшируем результат (ограничиваем размер кэша)
+                    if (searchCache.size > 50) {
+                        val firstKey = searchCache.keys.first()
+                        searchCache.remove(firstKey)
+                    }
+                    searchCache[cacheKey] = filtered
+                    
+                    withContext(Dispatchers.Main) {
                         if (isAdded) excelAdapter?.setSearchResults(filtered, normalized)
                     }
                 } catch (e: Exception) {
@@ -977,6 +1039,8 @@ class EditorFragment : Fragment() {
                 headers.forEachIndexed { i, h -> newMap[h] = (map.getOrNull(i)?.toString() ?: "") }
                 val newRow = org.example.pult.RowDataDynamic(newMap)
                 excelData[realRowIndex] = newRow
+                prepareDataForSearch()
+                searchCache.clear()
                 excelAdapter?.updateData(excelData, headers, excelColumnWidths, excelIsResizingMode)
             }
         } catch (e: Exception) {
@@ -1074,6 +1138,183 @@ class EditorFragment : Fragment() {
                 Log.e("EditorFragment", "persistExcelChanges error", e)
                 withContext(Dispatchers.Main) {
                     tvStatus.text = "Ошибка сохранения Excel: ${e.message}"
+                }
+            }
+        }
+    }
+
+    /**
+     * Показать меню с загруженными файлами для удаления
+     */
+    private fun showDeleteFilesMenu() {
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val allFiles = mutableListOf<Pair<java.io.File, String>>()
+                
+                // Получаем файлы из папки "Оригиналы"
+                val originalsDir = originalsDir()
+                if (originalsDir.exists()) {
+                    originalsDir.listFiles()?.forEach { file ->
+                        if (file.isFile && (file.name.endsWith(".xlsx", ignoreCase = true) || 
+                            file.name.endsWith(".pdf", ignoreCase = true) || 
+                            file.name.endsWith(".json", ignoreCase = true))) {
+                            allFiles.add(Pair(file, "Оригиналы: ${file.name}"))
+                        }
+                    }
+                }
+                
+                // Получаем файлы из папки "Редактируемые"
+                val editedDir = editedDir()
+                if (editedDir.exists()) {
+                    editedDir.listFiles()?.forEach { file ->
+                        if (file.isFile && (file.name.endsWith(".xlsx", ignoreCase = true) || 
+                            file.name.endsWith(".pdf", ignoreCase = true) || 
+                            file.name.endsWith(".json", ignoreCase = true))) {
+                            allFiles.add(Pair(file, "Редактируемые: ${file.name}"))
+                        }
+                    }
+                }
+                
+                if (allFiles.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        AlertDialog.Builder(requireContext())
+                            .setTitle("Удаление файлов")
+                            .setMessage("Нет загруженных файлов для удаления")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    }
+                    return@launch
+                }
+                
+                // Сортируем по имени файла
+                allFiles.sortBy { it.first.name }
+                
+                val fileNames = allFiles.map { it.second }.toTypedArray()
+                
+                withContext(Dispatchers.Main) {
+                    AlertDialog.Builder(requireContext())
+                        .setTitle("Выберите файл для удаления")
+                        .setItems(fileNames) { _, which ->
+                            val selectedFile = allFiles[which].first
+                            confirmAndDeleteFile(selectedFile)
+                        }
+                        .setNegativeButton("Отмена", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Log.e("EditorFragment", "Error showing delete files menu", e)
+                withContext(Dispatchers.Main) {
+                    tvStatus.text = "Ошибка: ${e.message}"
+                }
+            }
+        }
+    }
+    
+    /**
+     * Подтвердить и удалить выбранный файл
+     */
+    private fun confirmAndDeleteFile(file: java.io.File) {
+        val fileName = file.name
+        val fileType = when {
+            fileName.endsWith(".xlsx", ignoreCase = true) -> "Excel"
+            fileName.endsWith(".pdf", ignoreCase = true) -> "PDF"
+            fileName.endsWith(".json", ignoreCase = true) -> "JSON"
+            else -> "файл"
+        }
+        
+        AlertDialog.Builder(requireContext())
+            .setTitle("🗑️ Удаление файла")
+            .setMessage("Вы уверены, что хотите удалить $fileType файл:\n\n$fileName\n\n" +
+                    "Файл будет удален с устройства. После удаления вы сможете загрузить новый файл с сервера.")
+            .setNegativeButton("Отмена", null)
+            .setPositiveButton("Удалить") { _, _ ->
+                deleteFile(file)
+            }
+            .show()
+    }
+    
+    /**
+     * Удалить файл с устройства
+     */
+    private fun deleteFile(file: java.io.File) {
+        viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val fileName = file.name
+                var deletedCount = 0
+                var errorMessages = mutableListOf<String>()
+                
+                // Удаляем файл из папки "Оригиналы"
+                val originalFile = java.io.File(originalsDir(), fileName)
+                if (originalFile.exists()) {
+                    val deleted = originalFile.delete()
+                    if (deleted) {
+                        deletedCount++
+                        Log.d("EditorFragment", "Deleted original file: ${originalFile.absolutePath}")
+                    } else {
+                        errorMessages.add("Не удалось удалить файл из Оригиналов")
+                        Log.e("EditorFragment", "Failed to delete original file: ${originalFile.absolutePath}")
+                    }
+                }
+                
+                // Удаляем файл из папки "Редактируемые"
+                val editedFile = java.io.File(editedDir(), fileName)
+                if (editedFile.exists()) {
+                    val deleted = editedFile.delete()
+                    if (deleted) {
+                        deletedCount++
+                        Log.d("EditorFragment", "Deleted edited file: ${editedFile.absolutePath}")
+                    } else {
+                        errorMessages.add("Не удалось удалить файл из Редактируемых")
+                        Log.e("EditorFragment", "Failed to delete edited file: ${editedFile.absolutePath}")
+                    }
+                }
+                
+                // Очищаем кэш Excel, если это Excel файл
+                if (fileName.endsWith(".xlsx", ignoreCase = true)) {
+                    try {
+                        val sheetName = when {
+                            fileName.equals("Armatures.xlsx", ignoreCase = true) -> "Арматура"
+                            fileName.equals("Oborudovanie_BSCHU.xlsx", ignoreCase = true) -> "Сигналы БЩУ"
+                            else -> null
+                        }
+                        
+                        if (sheetName != null) {
+                            val cacheManager = ExcelCacheManager(requireContext())
+                            val cacheDir = cacheManager.datasetDir(fileName, sheetName)
+                            if (cacheDir.exists()) {
+                                val cacheDeleted = cacheDir.deleteRecursively()
+                                if (cacheDeleted) {
+                                    deletedCount++
+                                    Log.d("EditorFragment", "Cleared Excel cache for: $fileName")
+                                } else {
+                                    errorMessages.add("Не удалось очистить кэш Excel")
+                                    Log.e("EditorFragment", "Failed to clear Excel cache for: $fileName")
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        errorMessages.add("Ошибка при очистке кэша: ${e.message}")
+                        Log.e("EditorFragment", "Error clearing Excel cache", e)
+                    }
+                }
+                
+                withContext(Dispatchers.Main) {
+                    if (errorMessages.isEmpty() && deletedCount > 0) {
+                        tvStatus.text = "✅ Файл удален: $fileName ($deletedCount операций)"
+                        Toast.makeText(requireContext(), "Файл удален. Загрузите новый файл с сервера.", Toast.LENGTH_LONG).show()
+                    } else if (errorMessages.isNotEmpty()) {
+                        tvStatus.text = "⚠️ Удалено частично: ${errorMessages.joinToString("; ")}"
+                        Toast.makeText(requireContext(), "Файл удален, но были ошибки: ${errorMessages.joinToString("; ")}", Toast.LENGTH_LONG).show()
+                    } else {
+                        tvStatus.text = "⚠️ Файл не найден: $fileName"
+                        Toast.makeText(requireContext(), "Файл не найден для удаления", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("EditorFragment", "deleteFile error", e)
+                withContext(Dispatchers.Main) {
+                    tvStatus.text = "Ошибка удаления: ${e.message}"
+                    Toast.makeText(requireContext(), "Ошибка при удалении файла: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
