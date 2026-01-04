@@ -215,6 +215,16 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                     selectedDayInMonth = todayDay
                     selectedMonthIndex = todayMonth
                     scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
+                    
+                    // ИСПРАВЛЕНИЕ: Устанавливаем selectedColumnIndex на сегодняшнюю дату
+                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                    if (isLeapYear(currentYear)) {
+                        daysInMonths[1] = 29
+                    }
+                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
+                    val todayColumnIndex = adjustedShift + (todayDay - 1)
+                    scheduleAdapter.setSelectedColumn(todayColumnIndex)
+                    
                     scheduleAdapter.notifyDataSetChanged()
                     view?.post { scrollToToday() }
                 }
@@ -657,8 +667,18 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                     selectedDayInMonth = todayDay
                     selectedMonthIndex = todayMonth
                     scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
+                    
+                    // ИСПРАВЛЕНИЕ: Устанавливаем selectedColumnIndex на сегодняшнюю дату
+                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                    if (isLeapYear(currentYear)) {
+                        daysInMonths[1] = 29
+                    }
+                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
+                    val todayColumnIndex = adjustedShift + (todayDay - 1)
+                    scheduleAdapter.setSelectedColumn(todayColumnIndex)
                 } else {
                     scheduleAdapter.setSelectedDay(-1, -1)
+                    scheduleAdapter.setSelectedColumn(-1)
                 }
                 scheduleAdapter.notifyDataSetChanged()
             }
@@ -1404,7 +1424,20 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     private fun onDayClick(day: String, month: String, year: Int, monthIndex: Int) {
         selectedDayInMonth = day.toIntOrNull() ?: -1
         selectedMonthIndex = monthIndex
-        // selectedColumnIndex устанавливается внутри адаптера при клике по ячейке
+        
+        // ИСПРАВЛЕНИЕ: Вычисляем selectedColumnIndex для выбранной даты
+        if (selectedDayInMonth > 0 && selectedMonthIndex >= 0) {
+            val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+            if (isLeapYear(year)) {
+                daysInMonths[1] = 29
+            }
+            val adjustedShift = getAdjustedShiftForDisplay(year, selectedMonthIndex, daysInMonths[selectedMonthIndex])
+            val targetColumnIndex = adjustedShift + (selectedDayInMonth - 1)
+            scheduleAdapter.setSelectedColumn(targetColumnIndex)
+        } else {
+            scheduleAdapter.setSelectedColumn(-1)
+        }
+        
         scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
         scheduleAdapter.notifyDataSetChanged()
     }
@@ -1569,6 +1602,7 @@ class ScheduleCalendarAdapter(
         private val daysContainer: LinearLayout = itemView.findViewById(R.id.daysContainer)
         private var calculateMonthShiftFunc: ((Int, Int) -> Int)? = null
         private var getAdjustedShiftFunc: ((Int, Int, Int) -> Int)? = null
+        private var currentOnDayClick: ((String, String, Int, Int) -> Unit)? = null
         
         fun bind(
             row: ScheduleFragment.ScheduleRow,
@@ -1580,6 +1614,7 @@ class ScheduleCalendarAdapter(
         ) {
             this.calculateMonthShiftFunc = calculateMonthShiftFuncParam
             this.getAdjustedShiftFunc = getAdjustedShiftFuncParam
+            this.currentOnDayClick = onDayClick
             
             rowNameTextView.text = row.name
             // Масштабируем подписи месяцев/смен
@@ -1858,6 +1893,40 @@ class ScheduleCalendarAdapter(
                                 dayView.setTextColor(com.example.vkbookandroid.theme.AppTheme.getTextPrimaryColor())
                             }
                         }
+                    }
+                }
+                
+                // ИСПРАВЛЕНИЕ: Добавляем обработчик клика на график (строки смен)
+                dayView.setOnClickListener {
+                    // При клике на график устанавливаем selectedColumnIndex
+                    setSelectedColumn(dayIndex)
+                    notifyDataSetChanged()
+                    
+                    // Вычисляем дату по позиции столбца для обновления selectedDayInMonth и selectedMonthIndex
+                    // Ищем месяц, в который попадает эта позиция
+                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                    if (row.year % 4 == 0 && (row.year % 100 != 0 || row.year % 400 == 0)) {
+                        daysInMonths[1] = 29
+                    }
+                    
+                    // Ищем месяц, который содержит эту позицию
+                    var foundMonth = -1
+                    var foundDay = -1
+                    for (monthIndex in 0 until 12) {
+                        val adjustedShift = getAdjustedShiftFunc?.invoke(row.year, monthIndex, daysInMonths[monthIndex]) ?: 0
+                        val monthStart = adjustedShift
+                        val monthEnd = adjustedShift + daysInMonths[monthIndex] - 1
+                        if (dayIndex >= monthStart && dayIndex <= monthEnd) {
+                            foundMonth = monthIndex
+                            foundDay = dayIndex - monthStart + 1
+                            break
+                        }
+                    }
+                    
+                    if (foundMonth >= 0 && foundDay > 0) {
+                        val monthNames = arrayOf("Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь")
+                        // Вызываем onDayClick для обновления состояния в основном фрагменте
+                        currentOnDayClick?.invoke(foundDay.toString(), monthNames[foundMonth], row.year, foundMonth)
                     }
                 }
             }
