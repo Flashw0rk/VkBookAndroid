@@ -108,7 +108,7 @@ android {
             excludes += "META-INF/DEPENDENCIES"
         }
     }
-
+    
 }
 
 // Assets больше не используются, все файлы создаются программно

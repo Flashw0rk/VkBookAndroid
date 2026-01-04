@@ -44,6 +44,7 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
     
     private var currentYear: Int = Calendar.getInstance().get(Calendar.YEAR)
     private lateinit var scheduleAdapter: ScheduleCalendarAdapter
+    private var currentMonthRows = mutableListOf<ScheduleFragment.ScheduleRow>()  // Сохраняем месяцы для доступа к actualShift
     
     // ООП-компоненты (оставляем для совместимости, не используем фоновые индексации здесь)
     
@@ -211,18 +212,30 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             lifecycleScope.launch(Dispatchers.Default) {
                 generateScheduleData()
                 withContext(Dispatchers.Main) {
+                    // ИСПРАВЛЕНИЕ: Получаем сегодняшнюю дату динамически
+                    val today = Calendar.getInstance()
+                    val currentTodayYear = today.get(Calendar.YEAR)
+                    val currentTodayMonth = today.get(Calendar.MONTH)
+                    val currentTodayDay = today.get(Calendar.DAY_OF_MONTH)
+                    
                     // Выделяем сегодняшний столбец
-                    selectedDayInMonth = todayDay
-                    selectedMonthIndex = todayMonth
+                    selectedDayInMonth = currentTodayDay
+                    selectedMonthIndex = currentTodayMonth
                     scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
                     
-                    // ИСПРАВЛЕНИЕ: Устанавливаем selectedColumnIndex на сегодняшнюю дату
-                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-                    if (isLeapYear(currentYear)) {
-                        daysInMonths[1] = 29
+                    // ИСПРАВЛЕНИЕ: Используем actualShift из currentMonthRows вместо getAdjustedShiftForDisplay
+                    val todayMonthRow = currentMonthRows.find { it.monthIndex == currentTodayMonth && it.year == currentYear }
+                    val todayColumnIndex = if (todayMonthRow != null) {
+                        todayMonthRow.actualShift + (currentTodayDay - 1)
+                    } else {
+                        // Fallback на старый метод, если не нашли месяц
+                        val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                        if (isLeapYear(currentYear)) {
+                            daysInMonths[1] = 29
+                        }
+                        val adjustedShift = getAdjustedShiftForDisplay(currentYear, currentTodayMonth, daysInMonths[currentTodayMonth])
+                        adjustedShift + (currentTodayDay - 1)
                     }
-                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
-                    val todayColumnIndex = adjustedShift + (todayDay - 1)
                     scheduleAdapter.setSelectedColumn(todayColumnIndex)
                     
                     scheduleAdapter.notifyDataSetChanged()
@@ -607,7 +620,13 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             // Обрезаем до 36 ячеек если больше
             val finalDays = displayDays.take(36)
             
-            scheduleData.add(ScheduleRow(monthName, finalDays, isMonthRow = true, monthIndex = monthIndex, year = currentYear))
+            // ЗАЩИТА: Гарантируем, что actualShift всегда в диапазоне 0-35 для всех годов
+            val finalActualShift = safeAdjustedShift.coerceIn(0, 35)
+            if (finalActualShift != safeAdjustedShift) {
+                Log.w(TAG, "⚠️ Корректировка actualShift для $monthName: $safeAdjustedShift → $finalActualShift")
+            }
+            
+            scheduleData.add(ScheduleRow(monthName, finalDays, isMonthRow = true, monthIndex = monthIndex, year = currentYear, actualShift = finalActualShift))
         }
         
         // ПРОВЕРКА ЦЕЛОСТНОСТИ: все месяцы должны иметь правильное количество дней
@@ -660,21 +679,36 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
             if (!isAdded || view == null) return@withContext
             view?.post {
                 if (!isAdded) return@post
+                // Сохраняем месяцы для доступа к actualShift
+                currentMonthRows.clear()
+                currentMonthRows.addAll(scheduleData.filter { it.isMonthRow })
                 scheduleAdapter.updateData(scheduleData)
                 
                 // Подсветка "сегодня" только в текущем году
-                if (currentYear == todayYear) {
-                    selectedDayInMonth = todayDay
-                    selectedMonthIndex = todayMonth
+                // ИСПРАВЛЕНИЕ: Получаем сегодняшнюю дату динамически
+                val today = Calendar.getInstance()
+                val currentTodayYear = today.get(Calendar.YEAR)
+                val currentTodayMonth = today.get(Calendar.MONTH)
+                val currentTodayDay = today.get(Calendar.DAY_OF_MONTH)
+                
+                if (currentYear == currentTodayYear) {
+                    selectedDayInMonth = currentTodayDay
+                    selectedMonthIndex = currentTodayMonth
                     scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
                     
-                    // ИСПРАВЛЕНИЕ: Устанавливаем selectedColumnIndex на сегодняшнюю дату
-                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-                    if (isLeapYear(currentYear)) {
-                        daysInMonths[1] = 29
+                    // ИСПРАВЛЕНИЕ: Используем actualShift из currentMonthRows вместо getAdjustedShiftForDisplay
+                    val todayMonthRow = currentMonthRows.find { it.monthIndex == currentTodayMonth && it.year == currentYear }
+                    val todayColumnIndex = if (todayMonthRow != null) {
+                        todayMonthRow.actualShift + (currentTodayDay - 1)
+                    } else {
+                        // Fallback на старый метод, если не нашли месяц
+                        val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                        if (isLeapYear(currentYear)) {
+                            daysInMonths[1] = 29
+                        }
+                        val adjustedShift = getAdjustedShiftForDisplay(currentYear, currentTodayMonth, daysInMonths[currentTodayMonth])
+                        adjustedShift + (currentTodayDay - 1)
                     }
-                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
-                    val todayColumnIndex = adjustedShift + (todayDay - 1)
                     scheduleAdapter.setSelectedColumn(todayColumnIndex)
                 } else {
                     scheduleAdapter.setSelectedDay(-1, -1)
@@ -1425,19 +1459,8 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
         selectedDayInMonth = day.toIntOrNull() ?: -1
         selectedMonthIndex = monthIndex
         
-        // ИСПРАВЛЕНИЕ: Вычисляем selectedColumnIndex для выбранной даты
-        if (selectedDayInMonth > 0 && selectedMonthIndex >= 0) {
-            val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-            if (isLeapYear(year)) {
-                daysInMonths[1] = 29
-            }
-            val adjustedShift = getAdjustedShiftForDisplay(year, selectedMonthIndex, daysInMonths[selectedMonthIndex])
-            val targetColumnIndex = adjustedShift + (selectedDayInMonth - 1)
-            scheduleAdapter.setSelectedColumn(targetColumnIndex)
-        } else {
-            scheduleAdapter.setSelectedColumn(-1)
-        }
-        
+        // ИСПРАВЛЕНИЕ: Позиция столбца уже установлена в обработчике клика через setSelectedColumn
+        // Здесь только обновляем selectedDayInMonth и selectedMonthIndex
         scheduleAdapter.setSelectedDay(selectedDayInMonth, selectedMonthIndex)
         scheduleAdapter.notifyDataSetChanged()
     }
@@ -1451,13 +1474,19 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                 val todayDay = today.get(Calendar.DAY_OF_MONTH)
                 val todayMonth = today.get(Calendar.MONTH)
         
-                // НОВАЯ ЛОГИКА: Используем скорректированный сдвиг
-                val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-                if (isLeapYear(currentYear)) {
-                    daysInMonths[1] = 29
+                // ИСПРАВЛЕНИЕ: Используем actualShift из currentMonthRows для точности на всех годах
+                val todayMonthRow = currentMonthRows.find { it.monthIndex == todayMonth && it.year == currentYear }
+                val todayPosition = if (todayMonthRow != null) {
+                    todayMonthRow.actualShift + (todayDay - 1)
+                } else {
+                    // Fallback на старый метод, если не нашли месяц
+                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                    if (isLeapYear(currentYear)) {
+                        daysInMonths[1] = 29
+                    }
+                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
+                    adjustedShift + (todayDay - 1)
                 }
-                val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
-                val todayPosition = adjustedShift + (todayDay - 1)
                 
                 val cellWidth = 50 * zoomFactor * resources.displayMetrics.density
                 val scrollX = (todayPosition * cellWidth - horizontalScrollView.width / 2).toInt()
@@ -1477,7 +1506,8 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
         val isMonthRow: Boolean,
         val shiftIndex: Int = -1,
         val monthIndex: Int = -1,
-        val year: Int = 2025
+        val year: Int = 2025,
+        val actualShift: Int = 0  // Реальная позиция начала месяца в календаре (0-35)
     )
 }
 
@@ -1560,6 +1590,7 @@ class ScheduleCalendarAdapter(
     }
     
     private var scheduleData = mutableListOf<ScheduleFragment.ScheduleRow>()
+    private var monthRows = mutableListOf<ScheduleFragment.ScheduleRow>()  // Список только месяцев для быстрого поиска
     private var zoomFactor: Float = 1.0f
     private var selectedDayInMonth: Int = -1
     private var selectedMonthIndex: Int = -1
@@ -1568,6 +1599,9 @@ class ScheduleCalendarAdapter(
     fun updateData(data: List<ScheduleFragment.ScheduleRow>) {
         scheduleData.clear()
         scheduleData.addAll(data)
+        // Сохраняем только месяцы для быстрого поиска
+        monthRows.clear()
+        monthRows.addAll(data.filter { it.isMonthRow })
         notifyDataSetChanged()
     }
 
@@ -1591,7 +1625,7 @@ class ScheduleCalendarAdapter(
     
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val row = scheduleData[position]
-        holder.bind(row, onDayClick, selectedDayInMonth, selectedMonthIndex, calculateMonthShiftFunction, getAdjustedShiftFunction)
+        holder.bind(row, onDayClick, selectedDayInMonth, selectedMonthIndex, selectedColumnIndex, calculateMonthShiftFunction, getAdjustedShiftFunction, monthRows)
     }
     
     override fun getItemCount(): Int = scheduleData.size
@@ -1609,8 +1643,10 @@ class ScheduleCalendarAdapter(
             onDayClick: (String, String, Int, Int) -> Unit,
             selectedDayInMonth: Int,
             selectedMonthIndex: Int,
+            selectedColumnIndex: Int,
             calculateMonthShiftFuncParam: (Int, Int) -> Int,
-            getAdjustedShiftFuncParam: (Int, Int, Int) -> Int
+            getAdjustedShiftFuncParam: (Int, Int, Int) -> Int,
+            monthRowsList: List<ScheduleFragment.ScheduleRow>
         ) {
             this.calculateMonthShiftFunc = calculateMonthShiftFuncParam
             this.getAdjustedShiftFunc = getAdjustedShiftFuncParam
@@ -1692,7 +1728,7 @@ class ScheduleCalendarAdapter(
             daysContainer.removeAllViews()
             row.days.forEachIndexed { dayIndex, day ->
                 val dayView = createDayView(
-                    day.toString(), row, onDayClick, dayIndex, selectedDayInMonth, selectedMonthIndex
+                    day.toString(), row, onDayClick, dayIndex, selectedDayInMonth, selectedMonthIndex, selectedColumnIndex, monthRowsList
                 )
                 daysContainer.addView(dayView)
             }
@@ -1704,7 +1740,9 @@ class ScheduleCalendarAdapter(
             onDayClick: (String, String, Int, Int) -> Unit,
             dayIndex: Int,
             selectedDayInMonth: Int,
-            selectedMonthIndex: Int
+            selectedMonthIndex: Int,
+            selectedColumnIndex: Int,
+            monthRowsList: List<ScheduleFragment.ScheduleRow>
         ): View {
             val dayView = TextView(itemView.context)
             val isThemeApplied = com.example.vkbookandroid.theme.AppTheme.shouldApplyTheme()
@@ -1739,17 +1777,8 @@ class ScheduleCalendarAdapter(
             }
             dayView.setTextColor(defaultTextColor)
             
-            val isSelectedColumn = when {
-                selectedColumnIndex >= 0 -> dayIndex == selectedColumnIndex
-                selectedDayInMonth > 0 && selectedMonthIndex >= 0 && getAdjustedShiftFunc != null -> {
-                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-                    if (row.year % 4 == 0 && (row.year % 100 != 0 || row.year % 400 == 0)) { daysInMonths[1] = 29 }
-                    val adjustedShift = getAdjustedShiftFunc!!(row.year, selectedMonthIndex, daysInMonths[selectedMonthIndex])
-                    val targetColumn = adjustedShift + (selectedDayInMonth - 1)
-                    dayIndex == targetColumn
-                }
-                else -> false
-            }
+            // ИСПРАВЛЕНИЕ: Используем selectedColumnIndex напрямую, если он установлен
+            val isSelectedColumn = selectedColumnIndex >= 0 && dayIndex == selectedColumnIndex
             
             var isTodayCell = false
             
@@ -1845,8 +1874,10 @@ class ScheduleCalendarAdapter(
                 }
                 dayView.setOnClickListener {
                     if (day.isNotEmpty() && day.toIntOrNull() != null) {
-                        // Фикс: подсветка столбца по абсолютной колонке для всех строк
-                        setSelectedColumn(dayIndex)
+                        val dayNumber = day.toInt()
+                        // ИСПРАВЛЕНИЕ: Используем actualShift из row, который точно соответствует отображаемой позиции
+                        val targetColumnIndex = row.actualShift + (dayNumber - 1)
+                        setSelectedColumn(targetColumnIndex)
                         notifyDataSetChanged()
                         onDayClick(day, row.name, row.year, row.monthIndex)
                     }
@@ -1909,17 +1940,24 @@ class ScheduleCalendarAdapter(
                         daysInMonths[1] = 29
                     }
                     
-                    // Ищем месяц, который содержит эту позицию
+                    // ИСПРАВЛЕНИЕ: Ищем месяц, который содержит эту позицию, используя actualShift из monthRowsList
                     var foundMonth = -1
                     var foundDay = -1
-                    for (monthIndex in 0 until 12) {
-                        val adjustedShift = getAdjustedShiftFunc?.invoke(row.year, monthIndex, daysInMonths[monthIndex]) ?: 0
-                        val monthStart = adjustedShift
-                        val monthEnd = adjustedShift + daysInMonths[monthIndex] - 1
-                        if (dayIndex >= monthStart && dayIndex <= monthEnd) {
-                            foundMonth = monthIndex
-                            foundDay = dayIndex - monthStart + 1
-                            break
+                    for (monthRow in monthRowsList) {
+                        if (monthRow.year == row.year && monthRow.actualShift >= 0 && monthRow.monthIndex >= 0) {
+                            val monthStart = monthRow.actualShift
+                            // Используем правильное количество дней для каждого месяца, учитывая високосный год
+                            val daysInMonth = if (monthRow.monthIndex == 1 && isLeapYear(row.year)) {
+                                29
+                            } else {
+                                daysInMonths[monthRow.monthIndex]
+                            }
+                            val monthEnd = monthStart + daysInMonth - 1
+                            if (dayIndex >= monthStart && dayIndex <= monthEnd) {
+                                foundMonth = monthRow.monthIndex
+                                foundDay = dayIndex - monthStart + 1
+                                break
+                            }
                         }
                     }
                     

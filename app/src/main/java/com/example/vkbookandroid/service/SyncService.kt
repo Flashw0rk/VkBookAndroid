@@ -213,12 +213,19 @@ class SyncService(private val context: Context) {
                 Log.d(tag, "Current server URL: ${NetworkModule.getCurrentBaseUrl()}")
                 Log.d(tag, "Attempting to check server health...")
                 
-                val isHealthy = getArmatureRepository().checkServerHealth()
+                // ИСПРАВЛЕНИЕ: Добавляем таймаут 10 секунд для проверки соединения
+                // Это гарантирует, что проверка не зависнет и цикл попыток будет продолжаться
+                val isHealthy = kotlinx.coroutines.withTimeout(10000L) {
+                    getArmatureRepository().checkServerHealth()
+                }
                 Log.d(tag, "Server health check result: $isHealthy")
                 
                 if (!isHealthy) {
                     Log.w(tag, "Server health check failed, trying direct connection test...")
-                    val directTest = NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
+                    // ИСПРАВЛЕНИЕ: Также добавляем таймаут для testConnection
+                    val directTest = kotlinx.coroutines.withTimeout(10000L) {
+                        NetworkModule.testConnection(NetworkModule.getCurrentBaseUrl())
+                    }
                     Log.d(tag, "Direct connection test result: $directTest")
                     
                     // ⚠️ ВАЖНО: Если testConnection вернул true при 429, это rate limit, не спящий сервер!
@@ -228,6 +235,10 @@ class SyncService(private val context: Context) {
                 
                 Log.d(tag, "=== SERVER CONNECTION CHECK COMPLETED ===")
                 isHealthy
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.w(tag, "Timeout during server connection check (10 seconds)")
+                // Таймаут - сервер не отвечает, считаем недоступным
+                return@withContext false
             } catch (e: com.example.vkbookandroid.repository.RateLimitException) {
                 Log.w(tag, "Rate limit reached during server connection check")
                 // ⚠️ ВАЖНО: При rate limit НЕ считаем сервер спящим!
