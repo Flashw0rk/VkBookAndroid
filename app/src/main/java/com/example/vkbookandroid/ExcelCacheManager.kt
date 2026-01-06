@@ -68,8 +68,7 @@ class ExcelCacheManager(private val context: Context) {
         val hasHeaders = headersFile(dir).exists()
         val hasWidths = widthsFile(dir).exists()
         val hasPages = File(dir, "pages").listFiles { f ->
-            (f.name.startsWith("page_") && f.name.endsWith(".json")) ||
-            (f.name.startsWith("page_") && f.name.endsWith(".json.gz"))
+            f.name.startsWith("page_") && f.name.endsWith(".json")
         }?.isNotEmpty() == true
         return hasHeaders && hasWidths && hasPages
     }
@@ -144,33 +143,16 @@ class ExcelCacheManager(private val context: Context) {
             return
         }
 
-        // Быстрая проверка по подписи удалённого файла (если она есть) — это дешевле SHA-256.
-        tryGetRemoteCachedFile(relativePath)?.let { remoteFile ->
-            val changedByRemoteStamp = !(current != null &&
-                    current.sourceSize == remoteFile.length() &&
-                    current.sourceLastModified == remoteFile.lastModified())
-            if (changedByRemoteStamp && isBuilding.compareAndSet(false, true)) {
-                buildCacheAsync(relativePath, sheetName, pageSize, openInputStream, onUpdated)
-            }
-            // Если подпись совпадает — кэш актуален, SHA-256 не считаем (экономим CPU/диск).
-            return
-        }
-
-        // Для assets подпись размера/mtime недоступна (обычно -1/-1). Если кэш уже собран — считаем его стабильным.
-        if (current != null &&
-            current.sourceSize == -1L &&
-            current.sourceLastModified == -1L &&
-            !current.sourceHash.isNullOrBlank()
-        ) {
-            return
-        }
-
-        // Проверим контент-хеш (работает и для assets/локальных файлов). Считаем в отдельном потоке.
+        // Проверим контент-хеш (работает и для assets). Считаем в отдельном потоке.
         Thread {
             try {
                 val newHash = computeSha256(openInputStream())
                 val changedByHash = (current?.sourceHash ?: "") != (newHash ?: "")
-                if (changedByHash && isBuilding.compareAndSet(false, true)) {
+                var changedByRemoteStamp = false
+                tryGetRemoteCachedFile(relativePath)?.let { remoteFile ->
+                    changedByRemoteStamp = !(current != null && current.sourceSize == remoteFile.length() && current.sourceLastModified == remoteFile.lastModified())
+                }
+                if ((changedByHash || changedByRemoteStamp) && isBuilding.compareAndSet(false, true)) {
                     buildCache(relativePath, sheetName, pageSize, openInputStream)
                     onUpdated?.invoke()
                 }
@@ -414,7 +396,6 @@ class ExcelCacheManager(private val context: Context) {
         return try {
             val md = java.security.MessageDigest.getInstance("SHA-256")
             input.use { ins ->
-                // ОПТИМИЗАЦИЯ: Используем буфер 64KB для эффективного чтения больших файлов
                 val buf = ByteArray(64 * 1024)
                 while (true) {
                     val n = ins.read(buf)
