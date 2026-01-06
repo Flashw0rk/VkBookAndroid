@@ -160,10 +160,32 @@ data class ReminderRule(
                 return false
             }
             
-            // Проверяем неделю месяца
-            val weekFields = WeekFields.of(Locale.getDefault())
-            val currentWeekOfMonth = dateTime.get(weekFields.weekOfMonth())
-            return currentWeekOfMonth == weekOfMonth
+            // ИСПРАВЛЕНИЕ: Правильно определяем N-й день недели в месяце
+            // независимо от того, с какого дня недели начинается месяц
+            val date = dateTime.toLocalDate()
+            val firstDayOfMonth = date.withDayOfMonth(1)
+            val yearMonth = java.time.YearMonth.from(date)
+            val daysInMonth = yearMonth.lengthOfMonth()
+            
+            // Находим все вхождения нужного дня недели в месяце
+            val occurrences = mutableListOf<java.time.LocalDate>()
+            for (day in 1..daysInMonth) {
+                val dayDate = firstDayOfMonth.withDayOfMonth(day)
+                if (dayDate.dayOfWeek == dayOfWeekInMonth) {
+                    occurrences.add(dayDate)
+                }
+            }
+            
+            // Проверяем что запрошенный номер недели существует в месяце
+            if (weekOfMonth < 1 || weekOfMonth > occurrences.size) {
+                return false
+            }
+            
+            // N-й нужный день недели (индекс weekOfMonth - 1, т.к. список начинается с 0)
+            val nthTargetDay = occurrences[weekOfMonth - 1]
+            
+            // Проверяем что текущая дата совпадает с N-м днем недели
+            return date == nthTargetDay
         }
         
         // Простой режим

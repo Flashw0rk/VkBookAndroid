@@ -1280,13 +1280,13 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         })
         
         // Загружаем сохраненные правила напоминаний ТОЛЬКО если их нет в элементе
-        contextForDialog?.let { loadReminderRules(it) }
-        
-        // Если были загружены правила из Excel, сохраняем их в SharedPrefs
-        val hasRulesFromExcel = items.any { it.reminderRules.isNotEmpty() }
-        if (hasRulesFromExcel) {
-            contextForDialog?.let { saveReminderRules(it) }
+        // И ТОЛЬКО для личных задач (если onSaveRequested != null)
+        if (onSaveRequested != null) {
+            contextForDialog?.let { loadReminderRules(it) }
         }
+        
+        // НЕ сохраняем правила из Excel в SharedPrefs для служебных задач
+        // Служебные задачи всегда загружаются из Excel/CSV и не должны сохраняться
         
         notifyDataSetChanged()
     }
@@ -1523,39 +1523,33 @@ private class TasksAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     }
     
     private fun saveItems(ctx: android.content.Context) {
-        // Если есть коллбек для сохранения личных задач - вызываем его
-        onSaveRequested?.invoke(items)
-        
-        // Сохраняем список операций (для служебных задач)
-        val prefs = ctx.getSharedPreferences("ChecksSchedulePrefs", android.content.Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        
-        val itemsJson = items.joinToString("|||") { item ->
-            "${item.operation};;${item.time};;${item.rule}"
+        // ИСПРАВЛЕНИЕ: Сохраняем ТОЛЬКО личные задачи
+        // Служебные задачи не должны сохраняться - они всегда загружаются из Excel/CSV
+        if (onSaveRequested != null) {
+            // Это личные задачи - сохраняем через коллбек
+            onSaveRequested?.invoke(items)
         }
-        
-        editor.putString("saved_operations", itemsJson)
-        editor.apply()
+        // Служебные задачи НЕ сохраняем в SharedPreferences
     }
     
     private fun saveReminderRules(ctx: android.content.Context) {
-        // Если есть коллбек для сохранения личных задач - вызываем его
-        onSaveRequested?.invoke(items)
-        
-        // Сохраняем правила напоминаний (для служебных задач)
-        val prefs = ctx.getSharedPreferences("ChecksSchedulePrefs", android.content.Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        
-        items.forEach { item ->
-            val key = "reminder_list_${item.operation}"
-            val serialized = item.reminderRules.joinToString("|||") { it.serialize() }
-            editor.putString(key, serialized)
+        // ИСПРАВЛЕНИЕ: Сохраняем ТОЛЬКО личные задачи
+        // Служебные задачи не должны сохраняться - они всегда загружаются из Excel/CSV
+        if (onSaveRequested != null) {
+            // Это личные задачи - сохраняем через коллбек
+            onSaveRequested?.invoke(items)
         }
-        
-        editor.apply()
+        // Служебные задачи НЕ сохраняем в SharedPreferences
     }
     
     private fun loadReminderRules(ctx: android.content.Context) {
+        // ИСПРАВЛЕНИЕ: Загружаем правила ТОЛЬКО для личных задач
+        // Служебные задачи всегда загружаются из Excel/CSV с их правилами
+        if (onSaveRequested == null) {
+            // Это служебные задачи - не загружаем из SharedPreferences
+            return
+        }
+        
         val prefs = ctx.getSharedPreferences("ChecksSchedulePrefs", android.content.Context.MODE_PRIVATE)
         
         items.forEach { item ->

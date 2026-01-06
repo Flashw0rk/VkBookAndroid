@@ -1480,11 +1480,11 @@ class ScheduleFragment : Fragment(), com.example.vkbookandroid.theme.ThemeManage
                     todayMonthRow.actualShift + (todayDay - 1)
                 } else {
                     // Fallback на старый метод, если не нашли месяц
-                    val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-                    if (isLeapYear(currentYear)) {
-                        daysInMonths[1] = 29
-                    }
-                    val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
+                val daysInMonths = intArrayOf(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+                if (isLeapYear(currentYear)) {
+                    daysInMonths[1] = 29
+                }
+                val adjustedShift = getAdjustedShiftForDisplay(currentYear, todayMonth, daysInMonths[todayMonth])
                     adjustedShift + (todayDay - 1)
                 }
                 

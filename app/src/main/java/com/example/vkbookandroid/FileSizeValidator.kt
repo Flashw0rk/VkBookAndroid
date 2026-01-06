@@ -13,7 +13,7 @@ object FileSizeValidator {
     private const val MAX_EXCEL_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
     private const val MAX_PDF_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
     private const val MAX_JSON_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-    private const val MAX_TOTAL_CACHE_SIZE = 500 * 1024 * 1024 // 500 MB
+    private const val MAX_TOTAL_CACHE_SIZE = 80 * 1024 * 1024 // 80 MB (ограничение размера кэша Excel)
     
     /**
      * Проверяет размер файла перед загрузкой

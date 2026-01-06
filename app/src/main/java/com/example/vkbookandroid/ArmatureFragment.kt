@@ -67,6 +67,9 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     private lateinit var searchProgress: ProgressBar
     private lateinit var toggleResizeModeButton: Button
     private lateinit var scrollToTopButton: android.widget.ImageButton
+    
+    // Флаг для отслеживания активного гибридного поиска (чтобы индикатор не скрывался преждевременно)
+    private var isHybridSearchActive = false
     private lateinit var scrollToBottomButton: android.widget.ImageButton
     private var isResizingMode: Boolean = false
     private var isDataLoaded: Boolean = false
@@ -82,6 +85,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
     private var lastMeasuredListWidth: Int = 0
     private var lastHeaders: List<String> = emptyList()
     private var armatureRepository: com.example.vkbookandroid.repository.ArmatureRepository? = null
+    
+    // Кэш подготовленных данных для поиска (обновляется только при изменении данных)
+    private var cachedSearchData: List<org.example.pult.RowDataDynamic>? = null
+    private var cachedSearchDataVersion: Long = 0
     
     // Новая система поиска
     private lateinit var searchManager: SearchManager
@@ -502,6 +509,13 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                                 
                                 // УНИВЕРСАЛЬНОЕ ПРИМЕНЕНИЕ: Используем метод для гарантированного сохранения порядка
                                 applySavedColumnOrderIfNeeded()
+                                
+                                // ИСПРАВЛЕНИЕ: Очищаем кэш поиска при обновлении данных
+                                cachedSearchData = null
+                                cachedSearchDataVersion = System.currentTimeMillis()
+                                if (::searchManager.isInitialized) {
+                                    searchManager.notifyDataChanged()
+                                }
                                 
                                 // ИСПРАВЛЕНИЕ: Проверка готовности данных после фонового обновления
                                 val originalDataCount = adapter.getOriginalData().size
@@ -1094,6 +1108,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         // Очищаем кэши поиска (новая функциональность)
         com.example.vkbookandroid.utils.SearchNormalizer.clearCaches()
         
+        // Очищаем кэш подготовленных данных для поиска
+        cachedSearchData = null
+        cachedSearchDataVersion = System.currentTimeMillis()
+        
         // Перезагружаем данные (оригинальная функциональность)
         isDataLoaded = false
         loadArmatureData()
@@ -1291,9 +1309,13 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 searchProgress.visibility = android.view.View.VISIBLE
                 Log.d("ArmatureFragment", "Search started")
             } else {
-                // Скрываем индикатор загрузки
-                searchProgress.visibility = android.view.View.GONE
-                Log.d("ArmatureFragment", "Search completed")
+                // Скрываем индикатор только если гибридный поиск не активен
+                if (!isHybridSearchActive) {
+                    searchProgress.visibility = android.view.View.GONE
+                    Log.d("ArmatureFragment", "Search completed")
+                } else {
+                    Log.d("ArmatureFragment", "Search in cache completed, hybrid search continues...")
+                }
             }
         })
         
@@ -1387,40 +1409,52 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
         }
         
         try {
-            val originalData = adapter.getOriginalData()
-            // НОВОЕ: Индексируем ВСЁ содержимое Excel (читаем постранично до конца)
-            val dataForSearch = withContext(Dispatchers.IO) {
-                try {
-                    val combined = mutableListOf<org.example.pult.RowDataDynamic>()
-                    combined.addAll(originalData)
+            // ИСПРАВЛЕНИЕ: Используем кэш подготовленных данных для поиска
+            val dataForSearch = cachedSearchData ?: run {
+                val originalData = adapter.getOriginalData()
+                // Индексируем ВСЁ содержимое Excel (читаем постранично до конца) только если кэш пуст
+                val prepared = withContext(Dispatchers.IO) {
+                    try {
+                        val combined = mutableListOf<org.example.pult.RowDataDynamic>()
+                        combined.addAll(originalData)
 
-                    // Используем доступную сессию для дозагрузки батчей, не меняя UI
-                    val session = cachedSession ?: pagingSession
-                    var cursor = originalData.size
-                    val step = pageSize
+                        // Используем доступную сессию для дозагрузки батчей, не меняя UI
+                        val session = cachedSession ?: pagingSession
+                        var cursor = originalData.size
+                        val step = pageSize
 
-                    while (session != null) {
-                        val toRead = step
-                        val next = try {
-                            session.readRange(cursor, toRead)
-                        } catch (e: Exception) {
-                            Log.w("ArmatureFragment", "ReadRange failed at $cursor+$toRead: ${e.message}")
-                            emptyList()
+                        while (session != null) {
+                            val toRead = step
+                            val next = try {
+                                session.readRange(cursor, toRead)
+                            } catch (e: Exception) {
+                                Log.w("ArmatureFragment", "ReadRange failed at $cursor+$toRead: ${e.message}")
+                                emptyList()
+                            }
+                            if (next.isEmpty()) break
+                            combined.addAll(next)
+                            cursor += next.size
                         }
-                        if (next.isEmpty()) break
-                        combined.addAll(next)
-                        cursor += next.size
-                    }
 
-                    Log.d(
-                        "ArmatureFragment",
-                        "Data for search prepared: original=${originalData.size}, total=${combined.size}"
-                    )
-                    combined.toList()
-                } catch (e: Exception) {
-                    Log.w("ArmatureFragment", "Failed to prepare extended data for search, fallback to original", e)
-                    originalData
+                        Log.d(
+                            "ArmatureFragment",
+                            "Data for search prepared: original=${originalData.size}, total=${combined.size}"
+                        )
+                        combined.toList()
+                    } catch (e: Exception) {
+                        Log.w("ArmatureFragment", "Failed to prepare extended data for search, fallback to original", e)
+                        originalData
+                    }
                 }
+                // Сохраняем в кэш для последующих поисков
+                cachedSearchData = prepared
+                Log.d("ArmatureFragment", "Search data cached: ${prepared.size} rows")
+                prepared
+            }
+            
+            // Если данные были взяты из кэша, логируем это
+            if (cachedSearchData != null && dataForSearch === cachedSearchData) {
+                Log.d("ArmatureFragment", "Using cached search data: ${dataForSearch.size} rows")
             }
             val headers = adapter.headers
             val selectedColumn = if (adapter.hasSelectedColumn()) {
@@ -1432,7 +1466,10 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
             Log.d("ArmatureFragment", "  - Headers: ${headers.size}")
             Log.d("ArmatureFragment", "  - Selected column: $selectedColumn")
             
-            // Используем SearchManager для поиска
+            // ГИБРИДНЫЙ ПОИСК: Сначала ищем в кэше, потом в исходном файле если нужно
+            val totalRowsInCache = dataForSearch.size
+            
+            // Запускаем поиск в кэше (быстро)
             searchManager.performSearch(
                 query = normalizedSearch,
                 data = dataForSearch,
@@ -1441,6 +1478,91 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                 forceRefresh = false,
                 requestId = requestId
             )
+            
+            // Параллельно проверяем нужно ли искать в исходном файле
+            // Ищем в файле если:
+            // 1. Результатов в кэше мало (меньше 5) - возможно данные после кэша
+            // 2. Кэш содержит меньше данных чем может быть в файле (на всякий случай)
+            val shouldSearchInFile = totalRowsInCache < 8000 // Если кэш меньше 8000 строк, возможно есть данные в файле
+            
+            if (shouldSearchInFile) {
+                Log.d("ArmatureFragment", "Starting hybrid search: also searching in original Excel file")
+                
+                // ИСПРАВЛЕНИЕ: Устанавливаем флаг гибридного поиска
+                isHybridSearchActive = true
+                
+                // Индикатор уже показывается через Observer от SearchManager
+                // Но на всякий случай убеждаемся что он видим
+                withContext(Dispatchers.Main) {
+                    searchProgress.visibility = android.view.View.VISIBLE
+                }
+                
+                // Поиск в исходном файле в фоне (не блокируем основной поиск)
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        val fileResults = excelRepository.searchInAllArmatures(normalizedSearch, selectedColumn)
+                        
+                        if (fileResults.isNotEmpty()) {
+                            Log.d("ArmatureFragment", "Found ${fileResults.size} additional results in file")
+                            
+                            // Получаем ключи строк из кэша для сравнения
+                            val cachedKeys = dataForSearch.map { row ->
+                                row.getAllProperties().joinToString("|")
+                            }.toSet()
+                            
+                            // Фильтруем результаты из файла - оставляем только те, которых нет в кэше
+                            val additionalResults = fileResults.filter { fileRow ->
+                                val fileKey = fileRow.getAllProperties().joinToString("|")
+                                !cachedKeys.contains(fileKey)
+                            }
+                            
+                            if (additionalResults.isNotEmpty()) {
+                                Log.d("ArmatureFragment", "Adding ${additionalResults.size} new results from file to search")
+                                
+                                // Объединяем данные для повторного поиска с новыми результатами
+                                val combinedData = dataForSearch + additionalResults
+                                
+                                // Обновляем поиск с объединенными данными
+                                // SearchManager автоматически покажет индикатор при новом поиске
+                                withContext(Dispatchers.Main) {
+                                    searchManager.performSearch(
+                                        query = normalizedSearch,
+                                        data = combinedData,
+                                        headers = headers,
+                                        selectedColumn = selectedColumn,
+                                        forceRefresh = true, // Принудительно обновляем
+                                        requestId = requestId
+                                    )
+                                    // Сбрасываем флаг после запуска второго поиска
+                                    // SearchManager сам будет управлять индикатором через isSearching
+                                    isHybridSearchActive = false
+                                }
+                            } else {
+                                // Если дополнительных результатов нет, завершаем гибридный поиск
+                                withContext(Dispatchers.Main) {
+                                    isHybridSearchActive = false
+                                    searchProgress.visibility = android.view.View.GONE
+                                }
+                            }
+                        } else {
+                            // Если результатов в файле нет, завершаем гибридный поиск
+                            withContext(Dispatchers.Main) {
+                                isHybridSearchActive = false
+                                searchProgress.visibility = android.view.View.GONE
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("ArmatureFragment", "Error in hybrid file search", e)
+                        // Завершаем гибридный поиск при ошибке
+                        withContext(Dispatchers.Main) {
+                            isHybridSearchActive = false
+                            searchProgress.visibility = android.view.View.GONE
+                        }
+                    }
+                }
+            } else {
+                Log.d("ArmatureFragment", "Using cached search only (cache contains $totalRowsInCache rows)")
+            }
             
         } catch (e: Exception) {
             Log.e("ArmatureFragment", "Error during enhanced search", e)

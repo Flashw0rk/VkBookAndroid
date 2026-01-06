@@ -37,6 +37,15 @@ class ExcelCacheManager(private val context: Context) {
     // Версия структуры кэша. Меняем при изменении формата.
     private val schemaVersion: Int = 2
     
+    companion object {
+        // Максимальное количество строк для кэширования на файл (ограничение размера кэша до 80 МБ)
+        // 50,000 строк × 400 байт ≈ 20 МБ на файл
+        private const val MAX_CACHED_ROWS_PER_FILE = 50_000
+        
+        // Максимальный общий размер кэша (80 МБ)
+        private const val MAX_TOTAL_CACHE_SIZE = 80 * 1024 * 1024L
+    }
+    
     // Мьютекс для синхронизации операций с кэшем
     private val cacheLock = ReentrantLock()
 
@@ -271,13 +280,20 @@ class ExcelCacheManager(private val context: Context) {
                 val evaluator = wb.creationHelper.createFormulaEvaluator()
                 val formatter = org.apache.poi.ss.usermodel.DataFormatter()
                 val totalRows = sheet.lastRowNum
-                Log.d("ExcelCacheManager", "Processing data rows from 1 to $totalRows (total: ${totalRows - 1 + 1} data rows)")
+                // ИСПРАВЛЕНИЕ: Ограничиваем количество кэшируемых строк для контроля размера кэша
+                val maxRowsToCache = min(totalRows, MAX_CACHED_ROWS_PER_FILE)
+                Log.d("ExcelCacheManager", "Processing data rows from 1 to $maxRowsToCache (total in file: ${totalRows + 1}, caching: ${maxRowsToCache + 1} rows)")
+                if (totalRows > MAX_CACHED_ROWS_PER_FILE) {
+                    Log.w("ExcelCacheManager", "File has ${totalRows + 1} rows, but caching only first ${MAX_CACHED_ROWS_PER_FILE + 1} rows to limit cache size")
+                }
                 var start = 1
                 var pageIndex = 0
-                while (start <= totalRows) {
+                var cachedRowsCount = 0
+                while (start <= maxRowsToCache && cachedRowsCount < MAX_CACHED_ROWS_PER_FILE) {
                     val rows = ArrayList<Map<String, String>>()
                     var taken = 0
-                    while (taken < pageSize && start + taken <= totalRows) {
+                    val remainingRows = MAX_CACHED_ROWS_PER_FILE - cachedRowsCount
+                    while (taken < pageSize && start + taken <= maxRowsToCache && taken < remainingRows) {
                         val rowIndex = start + taken
                         val row = sheet.getRow(rowIndex)
                         if (row != null) {
@@ -304,7 +320,14 @@ class ExcelCacheManager(private val context: Context) {
                     
                     pageFile.writeText(gson.toJson(rows))
                     pageIndex++
+                    cachedRowsCount += taken
                     start += taken
+                    
+                    // Дополнительная проверка на случай превышения лимита
+                    if (cachedRowsCount >= MAX_CACHED_ROWS_PER_FILE) {
+                        Log.d("ExcelCacheManager", "Reached cache limit: cached $cachedRowsCount rows, stopping")
+                        break
+                    }
                 }
 
                 wb.close()
@@ -337,6 +360,9 @@ class ExcelCacheManager(private val context: Context) {
         )
         writeManifest(tmpDir, manifest)
 
+        // Проверяем размер кэша перед заменой и очищаем старые кэши если нужно
+        ensureCacheSizeLimit()
+        
         // Атомарная замена
         try {
             if (dir.exists()) {
@@ -411,6 +437,63 @@ class ExcelCacheManager(private val context: Context) {
             Log.w("ExcelCacheManager", "SHA-256 compute failed", e)
             null
         }
+    }
+    
+    /**
+     * Проверяет размер кэша и удаляет старые файлы если превышен лимит
+     */
+    private fun ensureCacheSizeLimit() {
+        try {
+            val rootDir = rootDir()
+            if (!rootDir.exists()) return
+            
+            val totalSize = calculateDirectorySize(rootDir)
+            Log.d("ExcelCacheManager", "Current cache size: ${totalSize / 1024 / 1024} MB (limit: ${MAX_TOTAL_CACHE_SIZE / 1024 / 1024} MB)")
+            
+            if (totalSize > MAX_TOTAL_CACHE_SIZE) {
+                Log.w("ExcelCacheManager", "Cache size exceeded limit, cleaning up old files...")
+                
+                // Получаем все датасеты с информацией о размере и времени последнего изменения
+                val datasets = rootDir.listFiles()?.filter { it.isDirectory }?.map { dir ->
+                    Triple(dir, calculateDirectorySize(dir), dir.lastModified())
+                }?.sortedBy { it.third } // Сортируем по времени последнего изменения (старые первыми)
+                
+                if (datasets != null) {
+                    var currentSize = totalSize
+                    val targetSize = (MAX_TOTAL_CACHE_SIZE * 0.8).toLong() // Целевой размер: 80% от лимита
+                    
+                    for ((dir, size, _) in datasets) {
+                        if (currentSize <= targetSize) break
+                        
+                        Log.d("ExcelCacheManager", "Deleting old cache: ${dir.name} (${size / 1024 / 1024} MB)")
+                        val deleted = dir.deleteRecursively()
+                        if (deleted) {
+                            currentSize -= size
+                            Log.d("ExcelCacheManager", "Deleted cache: ${dir.name}, remaining size: ${currentSize / 1024 / 1024} MB")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("ExcelCacheManager", "Error ensuring cache size limit", e)
+        }
+    }
+    
+    /**
+     * Вычисляет размер директории рекурсивно
+     */
+    private fun calculateDirectorySize(directory: File): Long {
+        var size = 0L
+        if (directory.exists() && directory.isDirectory) {
+            directory.listFiles()?.forEach { file ->
+                size += if (file.isDirectory) {
+                    calculateDirectorySize(file)
+                } else {
+                    file.length()
+                }
+            }
+        }
+        return size
     }
 
     // Имя листа задаётся извне
