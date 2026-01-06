@@ -39,14 +39,17 @@ class PersistentSearchEngine(private val context: Context) {
     @Volatile private var mmap: MappedByteBuffer? = null
     private val ready = AtomicBoolean(false)
     private val buildLock = Any() // Синхронизация для buildIndex
+    @Volatile private var storedDataVersion: Long? = null
 
     fun isIndexReady(): Boolean = ready.get()
 
     fun getIndexStats(): String {
         val d = dict
         val sizeInts = postingsFile.takeIf { it.exists() }?.length()?.div(4) ?: 0L
-        return "dict=${d.size}, postingsInts=$sizeInts, ready=${ready.get()}"
+        return "dict=${d.size}, postingsInts=$sizeInts, ready=${ready.get()}, version=${storedDataVersion ?: "?"}"
     }
+
+    fun getStoredDataVersion(): Long? = storedDataVersion
 
     fun invalidateIndex() {
         try {
@@ -56,6 +59,7 @@ class PersistentSearchEngine(private val context: Context) {
             dictFile.delete()
             postingsFile.delete()
             metaFile.delete()
+            storedDataVersion = null
         } catch (e: Exception) {
             Log.w("PersistentSearchEngine", "Failed to invalidate index", e)
         }
@@ -208,8 +212,12 @@ class PersistentSearchEngine(private val context: Context) {
                 ready.set(false)
                 dict = emptyList()
                 mmap = null
+                storedDataVersion = null
                 return
             }
+            storedDataVersion = try {
+                metaFile.takeIf { it.exists() }?.readText(Charsets.UTF_8)?.trim()?.toLongOrNull()
+            } catch (_: Throwable) { null }
             // Загружаем словарь (в память только токен+смещения)
             val entries = ArrayList<DictEntry>(16_384)
             dictFile.bufferedReader(Charsets.UTF_8).useLines { lines ->
@@ -235,6 +243,121 @@ class PersistentSearchEngine(private val context: Context) {
             ready.set(false)
             dict = emptyList()
             mmap = null
+            storedDataVersion = null
+        }
+    }
+
+    /**
+     * Потоковая сборка индекса без удержания всей таблицы в памяти.
+     * Возвращает вычисленную версию данных (dataVersion), которая также сохраняется в meta.version.
+     */
+    fun buildIndexFromPages(
+        headers: List<String>,
+        pageSize: Int,
+        readPage: (startRow: Int, rowCount: Int) -> List<RowDataDynamic>
+    ): Long {
+        synchronized(buildLock) {
+            ready.set(false)
+            dict = emptyList()
+            mmap = null
+            storedDataVersion = null
+
+            val map = LinkedHashMap<String, MutableSet<Int>>(32_768)
+            val headersLower = headers.map { it.lowercase() }
+            val pdfColumnIndices = headersLower.mapIndexedNotNull { index, header ->
+                if (header.contains("pdf")) index else null
+            }.toSet()
+            val tokenSplitRegex = Regex("\\s+")
+            val numericRegex = Regex("\\d{2,6}")
+
+            var versionAcc = 0L
+            var cursor = 0
+            while (true) {
+                val page = try { readPage(cursor, pageSize) } catch (_: Throwable) { emptyList() }
+                if (page.isEmpty()) break
+                for (local in page.indices) {
+                    val rowIndex = cursor + local
+                    val row = page[local]
+
+                    // Версия данных без больших аллокаций
+                    val propsForHash = row.getAllProperties()
+                    var rowHash = 1
+                    for (v in propsForHash) rowHash = 31 * rowHash + (v?.hashCode() ?: 0)
+                    val h = rowHash.toLong()
+                    val shift = (rowIndex and 31)
+                    versionAcc = versionAcc xor ((h shl shift) or (h ushr (32 - shift)))
+
+                    val props = propsForHash
+                    for (colIndex in props.indices) {
+                        if (colIndex in pdfColumnIndices) continue
+                        val cell = props[colIndex]
+                        val norm = SearchNormalizer.normalizeCellValue(cell)
+                        if (norm.isEmpty()) continue
+                        norm.split(tokenSplitRegex).forEach { rawToken ->
+                            val token = rawToken.lowercase()
+                            if (token.isEmpty()) return@forEach
+                            map.getOrPut(token) { LinkedHashSet() }.add(rowIndex)
+                            if (token.any { it.isDigit() }) {
+                                var added = 0
+                                numericRegex.findAll(token).forEach { m ->
+                                    val num = m.value
+                                    if (num.isNotEmpty()) {
+                                        map.getOrPut(num) { LinkedHashSet() }.add(rowIndex)
+                                        added++
+                                        if (added >= 3) return@forEach
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                cursor += page.size
+            }
+
+            // Сортируем токены и пишем индекс атомарно (как в buildIndex)
+            val tokens = map.keys.toMutableList()
+            tokens.sort()
+
+            val tmpPost = File(indexDir, "postings.tmp")
+            val tmpDict = File(indexDir, "dict.tmp")
+            RandomAccessFile(tmpPost, "rw").use { raf ->
+                val ch = raf.channel
+                val buf = ByteBuffer.allocateDirect(4 * 4096).order(ByteOrder.LITTLE_ENDIAN)
+                var offsetInts = 0
+                tmpDict.bufferedWriter(Charsets.UTF_8).use { dw ->
+                    for (t in tokens) {
+                        val indices = map[t]!!.toMutableList().also { it.sort() }
+                        buf.clear()
+                        var written = 0
+                        for (idx in indices) {
+                            if (buf.remaining() < 4) {
+                                buf.flip(); ch.write(buf); buf.clear()
+                            }
+                            buf.putInt(idx)
+                            written++
+                        }
+                        if (buf.position() > 0) { buf.flip(); ch.write(buf); buf.clear() }
+                        dw.write("$t $offsetInts $written\n")
+                        offsetInts += written
+                    }
+                }
+            }
+
+            File(indexDir, "meta.tmp").writer(Charsets.UTF_8).use { it.write(versionAcc.toString()) }
+
+            // Удаляем существующие файлы (renameTo не перезаписывает)
+            if (postingsFile.exists()) postingsFile.delete()
+            if (dictFile.exists()) dictFile.delete()
+            if (metaFile.exists()) metaFile.delete()
+
+            if (!tmpPost.renameTo(postingsFile)) throw IllegalStateException("Failed to commit postings")
+            if (!tmpDict.renameTo(dictFile)) throw IllegalStateException("Failed to commit dict")
+            val metaTmp = File(indexDir, "meta.tmp")
+            if (!metaTmp.renameTo(metaFile)) throw IllegalStateException("Failed to commit meta")
+
+            loadIndexIfPresent()
+            storedDataVersion = versionAcc
+            return versionAcc
         }
     }
 

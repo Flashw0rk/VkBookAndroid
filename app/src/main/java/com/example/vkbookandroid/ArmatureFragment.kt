@@ -485,22 +485,15 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                     // loadArmatureCoordinates() - удалено для единообразного поведения
                 }
 
-                // Предпрогрев индекса на полном наборе данных после первичной загрузки (в фоне)
+                // Предпрогрев индекса после первичной загрузки (в фоне, потоково — без сборки всей таблицы в список)
                 lifecycleScope.launch(Dispatchers.IO) {
                     try {
-                        val combined = mutableListOf<org.example.pult.RowDataDynamic>()
-                        combined.addAll(firstPage)
-                        val session = cachedSession ?: pagingSession
-                        var cursor = firstPage.size
-                        val step = pageSize
-                        while (session != null) {
-                            val next = try { session.readRange(cursor, step) } catch (_: Exception) { emptyList() }
-                            if (next.isEmpty()) break
-                            combined.addAll(next)
-                            cursor += next.size
-                        }
                         if (::searchManager.isInitialized) {
-                            searchManager.prewarmIndex(combined, headers)
+                            searchManager.prewarmIndexFromSession(
+                                sessionProvider = { cachedSession ?: pagingSession },
+                                headers = headers,
+                                pageSize = pageSize
+                            )
                         }
                     } catch (_: Exception) {}
                 }
@@ -544,21 +537,15 @@ class ArmatureFragment : Fragment(), RefreshableFragment, com.example.vkbookandr
                             cachedSession = newCached
                             pagingSession?.close()
                             pagingSession = null
-                            // Предпрогрев индекса после фонового обновления кэша (в фоне)
+                            // Предпрогрев индекса после фонового обновления кэша (в фоне, потоково)
                             lifecycleScope.launch(Dispatchers.IO) {
                                 try {
-                                    val combined = mutableListOf<org.example.pult.RowDataDynamic>()
-                                    combined.addAll(newFirstPage)
-                                    var cursor = newFirstPage.size
-                                    val step = pageSize
-                                    while (true) {
-                                        val next = try { newCached.readRange(cursor, step) } catch (_: Exception) { emptyList() }
-                                        if (next.isEmpty()) break
-                                        combined.addAll(next)
-                                        cursor += next.size
-                                    }
                                     if (::searchManager.isInitialized) {
-                                        searchManager.prewarmIndex(combined, newHeaders)
+                                        searchManager.prewarmIndexFromSession(
+                                            sessionProvider = { newCached },
+                                            headers = newHeaders,
+                                            pageSize = pageSize
+                                        )
                                     }
                                 } catch (_: Exception) {}
                             }

@@ -6,8 +6,10 @@ import com.example.vkbookandroid.BuildConfig
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.LiveData
 import kotlinx.coroutines.*
+import com.example.vkbookandroid.PagingSession
 import org.example.pult.RowDataDynamic
 import com.example.vkbookandroid.utils.SearchNormalizer
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Централизованный менеджер поиска с версионированием данных,
@@ -50,6 +52,7 @@ class SearchManager(private val context: Context) {
     // Версионирование данных
     private var dataVersion: Long = 0
     private var lastIndexVersion: Long = -1
+    private val prewarmInProgress = AtomicBoolean(false)
     
     // Scope для корутин
     private val searchScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -59,11 +62,57 @@ class SearchManager(private val context: Context) {
         searchScope.launch(Dispatchers.IO) {
             try {
                 persistentEngine.loadIndexIfPresent()
-                _isIndexReady.postValue(persistentEngine.isIndexReady())
+                val ready = persistentEngine.isIndexReady()
+                val v = persistentEngine.getStoredDataVersion()
+                if (ready && v != null) {
+                    lastIndexVersion = v
+                    dataVersion = v
+                }
+                _isIndexReady.postValue(ready)
             } catch (e: Exception) {
                 Log.w("SearchManager", "Failed to load persistent index on init", e)
                 _isIndexReady.postValue(false)
             }
+        }
+    }
+
+    /**
+     * Предпрогрев индекса без удержания всей таблицы в памяти:
+     * читает данные постранично через PagingSession и строит персистентный индекс.
+     */
+    suspend fun prewarmIndexFromSession(
+        sessionProvider: () -> PagingSession?,
+        headers: List<String>,
+        pageSize: Int
+    ) {
+        // Если индекс уже готов и есть версия на диске — ничего не делаем
+        val stored = persistentEngine.getStoredDataVersion()
+        if (persistentEngine.isIndexReady() && stored != null) {
+            lastIndexVersion = stored
+            dataVersion = stored
+            _isIndexReady.postValue(true)
+            return
+        }
+        if (!prewarmInProgress.compareAndSet(false, true)) return
+        try {
+            val v = withContext(Dispatchers.IO) {
+                val session = sessionProvider() ?: return@withContext null
+                persistentEngine.buildIndexFromPages(
+                    headers = headers,
+                    pageSize = pageSize,
+                    readPage = { start, count -> session.readRange(start, count) }
+                )
+            }
+            if (v != null) {
+                lastIndexVersion = v
+                dataVersion = v
+                _isIndexReady.postValue(true)
+            }
+        } catch (e: Exception) {
+            Log.e("SearchManager", "Prewarm(session) error", e)
+            _isIndexReady.postValue(false)
+        } finally {
+            prewarmInProgress.set(false)
         }
     }
     
