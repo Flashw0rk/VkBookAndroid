@@ -38,6 +38,7 @@ class PersistentSearchEngine(private val context: Context) {
     @Volatile private var dict: List<DictEntry> = emptyList()
     @Volatile private var mmap: MappedByteBuffer? = null
     private val ready = AtomicBoolean(false)
+    private val buildLock = Any() // Синхронизация для buildIndex
 
     fun isIndexReady(): Boolean = ready.get()
 
@@ -68,6 +69,13 @@ class PersistentSearchEngine(private val context: Context) {
      * Полная перестройка индекса.
      */
     fun buildIndex(data: List<RowDataDynamic>, headers: List<String>, dataVersion: Long) {
+        // Синхронизация для предотвращения одновременных вызовов
+        synchronized(buildLock) {
+            buildIndexInternal(data, headers, dataVersion)
+        }
+    }
+    
+    private fun buildIndexInternal(data: List<RowDataDynamic>, headers: List<String>, dataVersion: Long) {
         // 1) Строим postings в памяти (token -> MutableSet<Int>)
         // ОПТИМИЗАЦИЯ: Увеличили начальную емкость для уменьшения rehashing
         val map = LinkedHashMap<String, MutableSet<Int>>(32_768)
@@ -154,11 +162,37 @@ class PersistentSearchEngine(private val context: Context) {
         // 4) Пишем meta.version
         File(indexDir, "meta.tmp").writer(Charsets.UTF_8).use { it.write(dataVersion.toString()) }
 
-        // 5) Атомарный своп
-        if (!tmpPost.renameTo(postingsFile)) throw IllegalStateException("Failed to commit postings")
-        if (!tmpDict.renameTo(dictFile)) throw IllegalStateException("Failed to commit dict")
+        // 5) Атомарный своп (удаляем существующие файлы перед переименованием)
+        ready.set(false) // Помечаем индекс как неготовый перед заменой файлов
+        
+        // Удаляем существующие файлы, если они есть
+        if (postingsFile.exists() && !postingsFile.delete()) {
+            Log.w("PersistentSearchEngine", "Failed to delete existing postings file, will try to overwrite")
+        }
+        if (dictFile.exists() && !dictFile.delete()) {
+            Log.w("PersistentSearchEngine", "Failed to delete existing dict file, will try to overwrite")
+        }
+        if (metaFile.exists() && !metaFile.delete()) {
+            Log.w("PersistentSearchEngine", "Failed to delete existing meta file, will try to overwrite")
+        }
+        
+        // Переименовываем временные файлы
+        if (!tmpPost.renameTo(postingsFile)) {
+            val error = "Failed to commit postings: tmpPost.exists=${tmpPost.exists()}, postingsFile.exists=${postingsFile.exists()}, canWrite=${postingsFile.parentFile?.canWrite()}"
+            Log.e("PersistentSearchEngine", error)
+            throw IllegalStateException(error)
+        }
+        if (!tmpDict.renameTo(dictFile)) {
+            val error = "Failed to commit dict: tmpDict.exists=${tmpDict.exists()}, dictFile.exists=${dictFile.exists()}, canWrite=${dictFile.parentFile?.canWrite()}"
+            Log.e("PersistentSearchEngine", error)
+            throw IllegalStateException(error)
+        }
         val metaTmp = File(indexDir, "meta.tmp")
-        if (!metaTmp.renameTo(metaFile)) throw IllegalStateException("Failed to commit meta")
+        if (!metaTmp.renameTo(metaFile)) {
+            val error = "Failed to commit meta: metaTmp.exists=${metaTmp.exists()}, metaFile.exists=${metaFile.exists()}, canWrite=${metaFile.parentFile?.canWrite()}"
+            Log.e("PersistentSearchEngine", error)
+            throw IllegalStateException(error)
+        }
 
         // 6) Подготавливаем mmap и загружаем словарь в память
         loadIndexIfPresent()

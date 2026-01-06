@@ -373,11 +373,21 @@ class SearchManager(private val context: Context) {
      * Вычисление версии данных на основе содержимого
      */
     private fun calculateDataVersion(data: List<RowDataDynamic>): Long {
-        return data.foldIndexed(0L) { index, acc, row ->
-            // Используем более надежное хэширование с учетом позиции
-            val rowHash = row.getAllProperties().joinToString("").hashCode()
-            acc xor ((rowHash.toLong() shl (index % 32)) or (rowHash.toLong() ushr (32 - (index % 32))))
+        // ОПТИМИЗАЦИЯ БЕЗ ПОТЕРИ КОРРЕКТНОСТИ:
+        // считаем версию данных по всем строкам, но без joinToString (избегаем больших аллокаций строк).
+        var acc = 0L
+        for (i in data.indices) {
+            val props = data[i].getAllProperties()
+            var rowHash = 1
+            for (v in props) {
+                // null-safe: v может быть null/пустым
+                rowHash = 31 * rowHash + (v?.hashCode() ?: 0)
+            }
+            val h = rowHash.toLong()
+            val shift = (i and 31)
+            acc = acc xor ((h shl shift) or (h ushr (32 - shift)))
         }
+        return acc
     }
     
     /**

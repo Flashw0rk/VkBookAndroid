@@ -141,6 +141,64 @@ class ExcelPagingSession private constructor(
     }
     
     /**
+     * Поиск в диапазоне строк Excel
+     * @param searchQuery Поисковый запрос
+     * @param columnName Имя колонки для поиска (null = все колонки)
+     * @param startRow Начальная строка (0 = первая строка данных)
+     * @param maxRows Максимальное количество строк для поиска
+     */
+    fun searchInDataRange(
+        searchQuery: String,
+        columnName: String? = null,
+        startRow: Int,
+        maxRows: Int
+    ): List<RowDataDynamic> {
+        val normalizedQuery = searchQuery.trim().lowercase()
+        if (normalizedQuery.isEmpty()) return emptyList()
+        
+        val results = mutableListOf<RowDataDynamic>()
+        val targetColumnIndex = if (columnName != null) {
+            headers.indexOfFirst { it.equals(columnName, ignoreCase = true) }
+        } else -1
+        
+        val firstDataRowIndex = 1 + startRow // Пропускаем заголовок + начальная строка
+        var rowIndex = firstDataRowIndex
+        var processedRows = 0
+        
+        while (processedRows < maxRows) {
+            val row = sheet.getRow(rowIndex) ?: break
+            
+            val rowMap = LinkedHashMap<String, String>()
+            var hasMatch = false
+            
+            for (i in headers.indices) {
+                val cell = row.getCell(i, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK)
+                val value = getMergedCellValue(cell)
+                rowMap[headers[i]] = value
+                
+                // Проверяем совпадение
+                if (!hasMatch && value.isNotEmpty()) {
+                    val cellValue = value.trim().lowercase()
+                    val shouldCheckThisCell = targetColumnIndex == -1 || i == targetColumnIndex
+                    
+                    if (shouldCheckThisCell && cellValue.contains(normalizedQuery)) {
+                        hasMatch = true
+                    }
+                }
+            }
+            
+            if (hasMatch) {
+                results.add(RowDataDynamic(rowMap))
+            }
+            
+            rowIndex++
+            processedRows++
+        }
+        
+        return results
+    }
+    
+    /**
      * Получает общее количество строк данных в таблице
      */
     fun getTotalDataRows(): Int {

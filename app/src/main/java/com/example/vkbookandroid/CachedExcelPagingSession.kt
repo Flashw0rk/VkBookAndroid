@@ -4,6 +4,8 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import org.example.pult.RowDataDynamic
 import java.io.File
+import java.util.zip.GZIPInputStream
+import java.io.FileInputStream
 
 /**
  * Сессия поверх файлового кэша Excel (вариант 2).
@@ -35,13 +37,33 @@ class CachedExcelPagingSession(private val datasetDir: File) : PagingSession {
     override fun readRange(startRow: Int, rowCount: Int): List<RowDataDynamic> {
         val pages = File(datasetDir, "pages")
         val result = ArrayList<RowDataDynamic>()
-        // Страницы именованы page_00000.json, page_00001.json, ...
-        val pageFiles = pages.listFiles { f -> f.name.startsWith("page_") && f.name.endsWith(".json") }?.sortedBy { it.name } ?: emptyList()
+        // Страницы именованы page_00000.json.gz или page_00000.json (для совместимости)
+        val pageFiles = pages.listFiles { f -> 
+            (f.name.startsWith("page_") && f.name.endsWith(".json.gz")) ||
+            (f.name.startsWith("page_") && f.name.endsWith(".json"))
+        }?.sortedBy { it.name } ?: emptyList()
         if (pageFiles.isEmpty()) return emptyList()
 
         var skipped = 0
         for (pf in pageFiles) {
-            val rows: List<Map<String, String>> = gson.fromJson(pf.readText(), object : TypeToken<List<Map<String, String>>>() {}.type)
+            val rows: List<Map<String, String>> = try {
+                // Пробуем прочитать как сжатый файл (.gz)
+                if (pf.name.endsWith(".gz")) {
+                    readCompressedPage(pf)
+                } else {
+                    // Старый формат без сжатия (для совместимости)
+                    gson.fromJson(pf.readText(), object : TypeToken<List<Map<String, String>>>() {}.type)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("CachedExcelPagingSession", "Error reading page ${pf.name}, trying uncompressed", e)
+                // Fallback: пробуем как несжатый файл
+                try {
+                    gson.fromJson(pf.readText(), object : TypeToken<List<Map<String, String>>>() {}.type)
+                } catch (e2: Exception) {
+                    android.util.Log.e("CachedExcelPagingSession", "Failed to read page ${pf.name}", e2)
+                    emptyList()
+                }
+            }
             val remainingSkip = startRow - skipped
             if (remainingSkip >= rows.size) {
                 skipped += rows.size
@@ -61,6 +83,18 @@ class CachedExcelPagingSession(private val datasetDir: File) : PagingSession {
 
     override fun close() {
         // Нечего закрывать
+    }
+    
+    /**
+     * Читает сжатую страницу из GZIP файла
+     */
+    private fun readCompressedPage(pageFile: File): List<Map<String, String>> {
+        FileInputStream(pageFile).use { fis ->
+            GZIPInputStream(fis).use { gzis ->
+                val json = gzis.readBytes().toString(Charsets.UTF_8)
+                return gson.fromJson(json, object : TypeToken<List<Map<String, String>>>() {}.type)
+            }
+        }
     }
 }
 

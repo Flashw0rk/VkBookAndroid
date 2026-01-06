@@ -111,6 +111,31 @@ class ExcelRepository(
             0
         }
     }
+    
+    /**
+     * Поиск в диапазоне строк Excel (для дополнения неполного кэша)
+     * @param searchQuery Поисковый запрос
+     * @param columnName Имя колонки для поиска (null = все колонки)
+     * @param startRow Начальная строка (0 = первая строка данных)
+     * @param maxRows Максимальное количество строк для поиска
+     */
+    fun searchInExcelRange(
+        searchQuery: String,
+        columnName: String? = null,
+        startRow: Int,
+        maxRows: Int = 10000
+    ): List<org.example.pult.RowDataDynamic> {
+        val input = fileProvider.open(PATH_ARMATURES)
+        return try {
+            val session = ExcelPagingSession.fromInputStream(input, SHEET_ARMATURES)
+            val results = session.searchInDataRange(searchQuery, columnName, startRow, maxRows)
+            session.close()
+            results
+        } catch (e: Exception) {
+            android.util.Log.e("ExcelRepository", "Error searching in Excel range", e)
+            emptyList()
+        }
+    }
 }
 
 

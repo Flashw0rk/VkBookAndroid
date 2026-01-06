@@ -71,7 +71,12 @@
                 android:layout_gravity="end|center_vertical"
                 android:layout_marginEnd="48dp"
                 android:visibility="gone"
-                android:indeterminateTint="?attr/colorPrimary" />
+                android:indeterminate="true"
+                android:indeterminateDrawable="@drawable/search_progress_indeterminate"
+                android:indeterminateTint="#808080"
+                android:elevation="8dp"
+                android:clickable="false"
+                android:focusable="false" />
 
         </FrameLayout>
 
